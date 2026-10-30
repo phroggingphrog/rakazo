@@ -380,7 +380,7 @@ export async function prepareToolRequest(
 }
 
 /** Settings that change what this bot runs on or how it speaks; only the owner's chat sets them. */
-const OWNER_SETTINGS = ["model", "thinkingLevel", "readAloud"];
+const OWNER_SETTINGS = ["model", "thinkingLevel", "voice", "readAloud"];
 
 /** Everything a bot may change on itself. Credentials, tools and access stay in Settings. */
 const OWN_FIELDS = new Set([
@@ -421,7 +421,8 @@ async function prepareOwnBotUpdate(
     return { error: `Only the owner can change ${settingsOnly.join(", ")}, in Settings.` };
   if (OWNER_SETTINGS.some((key) => argumentGiven(args[key])) && !ctx.source.ownerStartedRun)
     return {
-      error: "Only the owner can change your model, thinking or read-aloud, from their own chat.",
+      error:
+        "Only the owner can change your model, thinking, voice or read-aloud, from their own chat.",
     };
   if (!argumentGiven(args.instructions)) return undefined;
   if (isSubagentToolExecution(executionId)) return { error: "Helpers cannot set instructions." };
