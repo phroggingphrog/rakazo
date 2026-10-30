@@ -7,6 +7,10 @@ Implementation is in progress under the owner-approved bounded persona scope. TA
 - [x] Reproduce and correct the routine-backoff transaction assertions without weakening the routine lock checks (`6e4c3a5`, typed spy follow-up `15a2cd8`).
 - [x] Supply scoped bot/profile delegates and transaction clients in legacy executor fixtures (`86da6a8`). Both previously failing files pass all 155 tests.
 - [x] Run the broader relevant regression set: 995 tests pass in 40 files. Adapter, API and web TypeScript checks pass.
+- [x] Verify browser-stop regression fix `1527ebd`: 39 lifecycle tests pass; core and supervisor TypeScript checks pass.
+- [x] Verify the owner-authorized live browser fix: supervisor, API and worker run `1527ebd`; web remains on `109f7cf`. The temporary empty-profile stop smoke test completes in 481 ms. The profile-path checksum is unchanged. Authentication and profile reads return 200; an invalid profile returns 404. The 50 focused security tests pass.
+- [x] Record service-specific rollback and validated backup listings/checksums at `/home/phroggingphrog/backups/rakazo/browser-1527ebd/`. No database migration was needed. The database restore procedure has not been rehearsed.
+- [ ] Resolve application-level profile encryption separately under TASK-409. No credentials belong in profile JSON.
 - [ ] Complete the full design and integrated release gates below. The focused persona result does not complete extension, learning, initiative, routing or specialist requirements.
 
 The setup error handler logs the sanitized original error before it queries the failure streak. A second database failure in that query can replace the propagated exception. Missing fixture methods caused the observed failures. No production error-handling change forms part of this milestone.
