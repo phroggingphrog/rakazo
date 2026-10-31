@@ -735,7 +735,10 @@ export class McpConnector implements ConnectorProvider {
       const secrets = [...(material ? oauthMaterialSecrets(material) : []), ...launchSecrets];
       const redacted = redactConnectorPayload(result, secrets);
       const serialized = JSON.stringify(redacted);
-      if (serialized && Buffer.byteLength(serialized) > MCP_OUTPUT_LIMITS.previewBytes) {
+      const inline = context.inlineLargeOutput === true && serialized !== undefined;
+      if (inline && Buffer.byteLength(serialized) > MCP_OUTPUT_LIMITS.inlineWatchBytes)
+        throw new Error("MCP output is too large for a change check. Narrow the watch query.");
+      if (!inline && serialized && Buffer.byteLength(serialized) > MCP_OUTPUT_LIMITS.previewBytes) {
         if (!this.options.outputStore)
           throw new Error(
             "MCP output limit exceeded: retained result storage is not configured. Request a smaller page.",

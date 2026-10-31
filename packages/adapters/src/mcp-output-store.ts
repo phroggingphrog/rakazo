@@ -14,6 +14,8 @@ export const MCP_OUTPUT_LIMITS = {
   fullBytes: 2 * 1024 * 1024,
   pageBytes: 4 * 1024,
   previewBytes: 4 * 1024,
+  /** Largest result a change check may read inline. */
+  inlineWatchBytes: 2 * 1024 * 1024,
   runQuotaBytes: 8 * 1024 * 1024,
 } as const;
 
