@@ -120,6 +120,23 @@ export function McpServersOverlay({
   const [saving, setSaving] = useState(false);
   const [oauthPending, setOauthPending] = useState<string | null>(null);
   const [testingIds, setTestingIds] = useState<Set<string>>(() => new Set());
+  const [importHarness, setImportHarness] = useState<
+    "pi" | "cursor" | "claude" | "codex" | "dsh" | "opencode"
+  >("pi");
+  const [importConfiguration, setImportConfiguration] = useState("");
+  const [importPreview, setImportPreview] = useState<{
+    servers: Array<{
+      name: string;
+      transport: "stdio" | "streamable_http" | "sse";
+      enabled: boolean;
+      status: "ready" | "disabled" | "unsupported";
+      auth: "none" | "environment_reference" | "static_credential" | "oauth";
+      provenance: { harness: string; location: string };
+      unsupported: string[];
+    }>;
+    errors: string[];
+  } | null>(null);
+  const [importedNames, setImportedNames] = useState<string[]>([]);
   const queries = useSpaceQueries();
   const queryClient = useQueryClient();
   const serversOptions = queries.mcp.servers.list.queryOptions();
@@ -503,6 +520,138 @@ export function McpServersOverlay({
           </p>
         ) : null}
         <div className="rk-scroll grid min-h-0 grid-cols-1 gap-5 overflow-y-auto p-6 lg:grid-cols-2">
+          <Card className="self-start lg:col-span-2">
+            <CardHeader>
+              <CardTitle>
+                <Trans>Import MCP servers</Trans>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <select
+                  aria-label={t`Configuration source`}
+                  className="h-10 rounded-md border border-border bg-background px-3"
+                  value={importHarness}
+                  onChange={(event) => setImportHarness(event.target.value as typeof importHarness)}
+                >
+                  <option value="pi">Pi</option>
+                  <option value="cursor">Cursor</option>
+                  <option value="claude">Claude Code</option>
+                  <option value="codex">Codex</option>
+                  <option value="dsh">DSH</option>
+                  <option value="opencode">OpenCode</option>
+                </select>
+                <Input
+                  aria-label={t`Configuration file`}
+                  type="file"
+                  accept=".json,.toml"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void file.text().then(setImportConfiguration);
+                  }}
+                />
+                <Button
+                  variant="secondary"
+                  disabled={!importConfiguration}
+                  onClick={async () => {
+                    try {
+                      setImportPreview(
+                        await rpc.mcp.importPreview({
+                          harness: importHarness,
+                          configuration: importConfiguration,
+                        }),
+                      );
+                      setImportedNames([]);
+                    } catch (err) {
+                      setError(errorText(err, t`Could not preview import`));
+                    }
+                  }}
+                >
+                  <Trans>Preview</Trans>
+                </Button>
+              </div>
+              {importPreview ? (
+                <div className="space-y-3">
+                  {importPreview.errors.map((message) => (
+                    <p key={message} role="alert" className="text-sm text-destructive">
+                      {message}
+                    </p>
+                  ))}
+                  {importPreview.servers.map((server) => (
+                    <label
+                      key={server.name}
+                      className="flex items-start gap-3 rounded-lg border border-border p-3 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={
+                          server.status !== "ready" ||
+                          server.transport === "stdio" ||
+                          server.auth === "static_credential" ||
+                          server.auth === "oauth"
+                        }
+                        checked={importedNames.includes(server.name)}
+                        onChange={(event) =>
+                          setImportedNames((current) =>
+                            event.target.checked
+                              ? [...current, server.name]
+                              : current.filter((name) => name !== server.name),
+                          )
+                        }
+                      />
+                      <span className="min-w-0 flex-1">
+                        <strong>{server.name}</strong>
+                        <span className="ml-2 text-muted-foreground">
+                          {server.transport} · {server.status} · {server.auth}
+                        </span>
+                        {server.unsupported.length ? (
+                          <span className="block text-destructive">
+                            {server.unsupported.join("; ")}
+                          </span>
+                        ) : null}
+                        {server.transport === "stdio" ? (
+                          <span className="block text-muted-foreground">
+                            <Trans>Local servers need the private host bridge.</Trans>
+                          </span>
+                        ) : null}
+                        {server.auth === "static_credential" || server.auth === "oauth" ? (
+                          <span className="block text-muted-foreground">
+                            <Trans>Reconnect to add credentials securely.</Trans>
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                  ))}
+                  <Button
+                    disabled={!importedNames.length}
+                    onClick={async () => {
+                      try {
+                        const result = await rpc.mcp.importSelected({
+                          harness: importHarness,
+                          configuration: importConfiguration,
+                          names: importedNames,
+                        });
+                        setError(
+                          result.skipped.length
+                            ? result.skipped
+                                .map((item) => `${item.name}: ${item.reason}`)
+                                .join("; ")
+                            : null,
+                        );
+                        setImportPreview(null);
+                        setImportConfiguration("");
+                        await refresh();
+                      } catch (err) {
+                        setError(errorText(err, t`Could not import servers`));
+                      }
+                    }}
+                  >
+                    <Trans>Import selected</Trans>
+                  </Button>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
           <Card className="self-start">
             <CardHeader>
               <CardTitle>{editing ? editing.name : <Trans>Add server</Trans>}</CardTitle>

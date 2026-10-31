@@ -3,6 +3,12 @@ import { ORPCError } from "@orpc/server";
 import { runContinueJob } from "@rakazo/adapter-kit";
 import {
   createPluginMarketplace,
+  importClaudeMcpConfig,
+  importCodexMcpConfig,
+  importCursorMcpConfig,
+  importDshMcpConfig,
+  importOpenCodeMcpConfig,
+  importPiMcpConfig,
   isTransientFetchError,
   McpOAuthClientRequiredError,
   persistPreparedSecret,
@@ -374,6 +380,110 @@ export function mcpRoutes(ctx: RouterContext) {
       }),
     },
     mcp: {
+      importPreview: authed.mcp.importPreview.handler(async ({ input }) => {
+        const location = `${input.harness}:configuration`;
+        const result = (
+          {
+            pi: importPiMcpConfig,
+            cursor: importCursorMcpConfig,
+            claude: importClaudeMcpConfig,
+            codex: importCodexMcpConfig,
+            dsh: importDshMcpConfig,
+            opencode: importOpenCodeMcpConfig,
+          } as const
+        )[input.harness](input.configuration, location);
+        return {
+          servers: result.servers.map(
+            ({ name, transport, enabled, status, auth, provenance, unsupported }) => ({
+              name,
+              transport,
+              enabled,
+              status,
+              auth,
+              provenance: { harness: provenance.harness, location: provenance.location },
+              unsupported,
+            }),
+          ),
+          errors: result.errors,
+        };
+      }),
+      importSelected: authed.mcp.importSelected.handler(async ({ context, input }) => {
+        const location = `${input.harness}:configuration`;
+        const result = (
+          {
+            pi: importPiMcpConfig,
+            cursor: importCursorMcpConfig,
+            claude: importClaudeMcpConfig,
+            codex: importCodexMcpConfig,
+            dsh: importDshMcpConfig,
+            opencode: importOpenCodeMcpConfig,
+          } as const
+        )[input.harness](input.configuration, location);
+        const imported: string[] = [];
+        const skipped: Array<{ name: string; reason: string }> = [];
+        for (const name of input.names) {
+          const server = result.servers.find((item) => item.name === name);
+          if (!server) {
+            skipped.push({ name, reason: "Server is missing or invalid" });
+            continue;
+          }
+          if (
+            server.status !== "ready" ||
+            server.auth === "static_credential" ||
+            server.auth === "oauth"
+          ) {
+            skipped.push({
+              name,
+              reason:
+                server.auth === "static_credential" || server.auth === "oauth"
+                  ? "Credentials require secure reconnect"
+                  : server.unsupported.join("; ") || "Server is disabled",
+            });
+            continue;
+          }
+          if (server.transport === "stdio") {
+            skipped.push({
+              name,
+              reason: "Local stdio import requires a verified private host bridge",
+            });
+            continue;
+          }
+          const slug = `${server.name
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 54)}-${createHash("sha256")
+            .update(
+              `${server.provenance.harness}:${server.provenance.location}:${server.endpoint ?? ""}`,
+            )
+            .digest("hex")
+            .slice(0, 8)}`;
+          const inputConfig = {
+            slug,
+            name: server.name,
+            description: `Imported from ${server.provenance.harness}`,
+            enabled: server.enabled,
+            transport: server.transport,
+            endpoint: server.endpoint!,
+            headers: {},
+            secret: undefined,
+            oauthClient: null,
+          } as const;
+          try {
+            const stored = await prepareMcpServer(context.actor, inputConfig);
+            await deps.prisma.$transaction((tx) =>
+              insertMcpServer(tx, context.actor, inputConfig, stored),
+            );
+            imported.push(name);
+          } catch (error) {
+            skipped.push({
+              name,
+              reason: error instanceof Error ? error.message : "Import failed",
+            });
+          }
+        }
+        return { imported, skipped };
+      }),
       servers: {
         list: authed.mcp.servers.list.handler(async ({ context }) => {
           const rows = await deps.prisma.mcpServer.findMany({
