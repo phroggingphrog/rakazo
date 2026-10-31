@@ -606,6 +606,10 @@ msgstr ""
 msgid "Add skills"
 msgstr ""
 
+#: src/pages/McpServersOverlay.tsx
+msgid "Add the OAuth client ID in Advanced settings before you connect."
+msgstr ""
+
 #: src/components/teach/SkillDraftCard.tsx
 msgid "Add to routine"
 msgstr "रूटीन में जोड़ें"
@@ -925,6 +929,10 @@ msgstr "प्राधिकरण कोड"
 #: src/pages/McpServersOverlay.tsx
 msgid "Authorization parameters (optional)"
 msgstr "ऑथराइज़ेशन पैरामीटर (वैकल्पिक)"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Authorization required"
+msgstr ""
 
 #: src/pages/McpServersOverlay.tsx
 msgid "Authorization server"
@@ -1666,6 +1674,10 @@ msgstr "कनेक्ट हो रहा है…"
 #: src/pages/memory-providers/ConnectionModeFields.tsx
 msgid "Connection"
 msgstr "कनेक्शन"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Connection checked"
+msgstr ""
 
 #: src/lib/model-connection-preflight.ts
 msgid "Connection test failed."
@@ -2726,6 +2738,10 @@ msgstr "हर नाम का उपयोग केवल एक बार �
 msgid "Edit"
 msgstr "संपादित करें"
 
+#: src/pages/McpServersOverlay.tsx
+msgid "Edit Advanced OAuth client ID"
+msgstr ""
+
 #: src/components/AskCard.tsx
 msgid "Edit first"
 msgstr "पहले संपादित करें"
@@ -3649,6 +3665,7 @@ msgid "MCP server"
 msgstr ""
 
 #: src/pages/McpServersOverlay.tsx
+#: src/pages/SettingsOverlay.tsx
 #: src/pages/shell/agent-import.tsx
 msgid "MCP servers"
 msgstr "MCP सर्वर"
@@ -4022,6 +4039,10 @@ msgstr "अगला पृष्ठ"
 msgid "Next settings sections"
 msgstr ""
 
+#: src/pages/McpServersOverlay.tsx
+msgid "No agents are assigned to this server."
+msgstr ""
+
 #: src/pages/PluginsOverlay.tsx
 msgid "No apps match your search."
 msgstr "आपकी खोज से कोई ऐप मेल नहीं खाता।"
@@ -4210,7 +4231,6 @@ msgstr "OAuth कनेक्टेड"
 msgid "OAuth connection failed"
 msgstr "OAuth कनेक्शन विफल"
 
-#: src/pages/McpServersOverlay.tsx
 #: src/pages/PluginsOverlay.tsx
 msgid "OAuth expired"
 msgstr "OAuth की समय-सीमा समाप्त हो गई"
@@ -4659,6 +4679,10 @@ msgstr ""
 #: src/pages/McpServersOverlay.tsx
 msgid "Reconnect OAuth"
 msgstr "OAuth पुनः कनेक्ट करें"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Reconnect to authorize this server before its tools can be used."
+msgstr ""
 
 #: src/App.tsx
 #: src/components/ComputerUpdateProgress.tsx
@@ -5913,6 +5937,10 @@ msgstr "इसे पूर्ववत नहीं किया जा सक�
 msgid "This cannot be undone."
 msgstr "इसे पूर्ववत नहीं किया जा सकता।"
 
+#: src/pages/McpServersOverlay.tsx
+msgid "This command is not allowed by the deployment. Ask the deployment administrator to add it to the STDIO command allowlist."
+msgstr ""
+
 #: src/pages/HostComputerPrompt.tsx
 msgid "this computer"
 msgstr "यह कंप्यूटर"
@@ -6072,6 +6100,11 @@ msgstr "टूल का नाम"
 #: src/pages/PluginsOverlay.tsx
 #: src/pages/shell/bot-panel.tsx
 msgid "Tools"
+msgstr ""
+
+#. placeholder {0}: server.health.toolCount
+#: src/pages/McpServersOverlay.tsx
+msgid "Tools discovered: {0}"
 msgstr ""
 
 #: src/components/composer/HoldToTalk.tsx

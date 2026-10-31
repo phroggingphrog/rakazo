@@ -57,6 +57,7 @@ vi.mock("@rakazo/ui-web", async () => {
       "DialogContent",
       "DialogHeader",
       "DialogTitle",
+      "Disclosure",
       "Field",
       "FieldError",
       "FieldGroup",
@@ -144,6 +145,92 @@ it("offers stdio only where the deployment runs it, and still shows existing std
 
     await act(async () => root.render(overlay()));
     expect(host.textContent).toContain("STDIO");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it.each([
+  {
+    label: "discovered tools without OAuth authorization",
+    server: {
+      ...server("gmail", "ok"),
+      transport: "streamable_http",
+      oauthStatus: "none",
+      health: { status: "ok", toolCount: 23 },
+    },
+    expected: "Tools discovered: 23",
+    absent: "Running",
+  },
+  {
+    label: "expired OAuth access that needs authorization",
+    server: {
+      ...server("jobwatch"),
+      transport: "streamable_http",
+      oauthStatus: "reconnect",
+      health: { status: "ok", toolCount: 4 },
+    },
+    expected: "Authorization required",
+    explanation: "Reconnect to authorize this server before its tools can be used.",
+    absent: "Running",
+  },
+  {
+    label: "a denied STDIO command with deployment guidance",
+    server: {
+      ...server("denied", "error"),
+      health: {
+        status: "error",
+        message: "MCP stdio command is not in the configured allowlist",
+      },
+    },
+    expected: "Ask the deployment administrator to add it to the STDIO command allowlist.",
+    absent: "Running",
+  },
+  {
+    label: "a server that needs an OAuth client ID",
+    server: {
+      ...server("client", "error"),
+      transport: "streamable_http",
+      health: { status: "error", code: MCP_OAUTH_CLIENT_REQUIRED },
+      oauthClientId: null,
+    },
+    expected: "Add the OAuth client ID in Advanced settings before you connect.",
+    absent: "Connect OAuth",
+  },
+])(
+  "shows accurate MCP health guidance for $label",
+  async ({ server: value, expected, absent, explanation }) => {
+    mocks.list.mockReset().mockResolvedValue([value as unknown as McpServer]);
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(overlay()));
+      await vi.waitFor(() => expect(host.textContent).toContain(expected));
+      if (explanation) expect(host.textContent).toContain(explanation);
+      expect(host.querySelector('[data-testid="mcp-health"]')?.getAttribute("data-status")).toBe(
+        value.health.status === "ok" ? "ok" : "error",
+      );
+      expect(host.textContent).not.toContain(absent);
+      expect(host.querySelector<HTMLInputElement>('input[type="password"]')?.value ?? "").toBe("");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  },
+);
+
+it("warns when no agents are assigned without claiming default access", async () => {
+  mocks.list.mockReset().mockResolvedValue([server("docs")]);
+  access.bots.mockResolvedValue([{ id: "bot_1", name: "Ada" }]);
+  access.all.mockResolvedValue([]);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(overlay()));
+    await vi.waitFor(() =>
+      expect(host.textContent).toContain("No agents are assigned to this server."),
+    );
+    expect(host.textContent).not.toContain("all agents can use");
+    expect(host.textContent).not.toContain("inherited");
   } finally {
     await act(async () => root.unmount());
   }
@@ -320,7 +407,10 @@ it("points a server that cannot register a client at the client ID fields", asyn
     expect(button("Connect OAuth")).toBeUndefined();
     await act(async () => button("Cancel")?.click());
     expect(advancedOpen()).toBe(false);
-    await act(async () => button("Edit")?.click());
+    const edit = Array.from(host.querySelectorAll("button")).find((item) =>
+      item.textContent?.includes("Edit Advanced OAuth client ID"),
+    );
+    await act(async () => edit?.click());
     expect(advancedOpen()).toBe(true);
   } finally {
     await act(async () => root.unmount());

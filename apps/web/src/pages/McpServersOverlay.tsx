@@ -70,7 +70,7 @@ function envName(value: string): string {
 
 function oauthStatusText(server: McpServer): string | null {
   if (server.oauthStatus === "connected") return t`OAuth connected`;
-  if (server.oauthStatus === "reconnect") return t`OAuth expired`;
+  if (server.oauthStatus === "reconnect") return t`Authorization required`;
   return server.hasSecret ? t`Credential saved` : null;
 }
 
@@ -869,7 +869,7 @@ export function McpServersOverlay({
                 servers.map((server) => {
                   const statusText = oauthStatusText(server);
                   return (
-                    <Card key={server.id} size="sm">
+                    <Card key={server.id} size="sm" className="min-h-11">
                       <CardContent>
                         <div className="flex items-center justify-between">
                           <span className="font-medium text-foreground">{server.name}</span>
@@ -880,10 +880,51 @@ export function McpServersOverlay({
                         <p className="mt-1 text-xs text-muted-foreground">
                           {server.endpoint ?? server.command ?? server.slug}
                         </p>
-                        <McpServerHealthLine
-                          health={server.health}
-                          checking={testingIds.has(server.id)}
-                        />
+                        {server.health.status === "ok" && !testingIds.has(server.id) ? (
+                          <p
+                            role="status"
+                            data-testid="mcp-health"
+                            data-status="ok"
+                            className="mt-2 text-xs font-medium text-success"
+                          >
+                            {server.health.toolCount === null ? (
+                              <Trans>Connection checked</Trans>
+                            ) : (
+                              <Trans>Tools discovered: {server.health.toolCount}</Trans>
+                            )}
+                          </p>
+                        ) : (
+                          <McpServerHealthLine
+                            health={server.health}
+                            checking={testingIds.has(server.id)}
+                          />
+                        )}
+                        {needsOAuthClient(server) ? (
+                          <p className="mt-1 text-xs text-warning">
+                            <Trans>
+                              Add the OAuth client ID in Advanced settings before you connect.
+                            </Trans>
+                          </p>
+                        ) : null}
+                        {server.oauthStatus === "reconnect" ? (
+                          <p className="mt-1 text-xs text-warning">
+                            <Trans>
+                              Reconnect to authorize this server before its tools can be used.
+                            </Trans>
+                          </p>
+                        ) : null}
+                        {server.health.status === "error" &&
+                        server.transport === "stdio" &&
+                        /allowlist|command.*(?:not allowed|isn.t allowed)|stdio.*not.*available|stdio.*aren.t available/i.test(
+                          server.health.message ?? "",
+                        ) ? (
+                          <p className="mt-1 text-xs text-destructive">
+                            <Trans>
+                              This command is not allowed by the deployment. Ask the deployment
+                              administrator to add it to the STDIO command allowlist.
+                            </Trans>
+                          </p>
+                        ) : null}
                         {statusText ? (
                           <p
                             className={`mt-1.5 text-[11px] ${server.oauthStatus === "reconnect" ? "text-warning" : "text-muted-foreground"}`}
@@ -905,6 +946,7 @@ export function McpServersOverlay({
                                 type="button"
                                 variant={assigned ? "default" : "outline"}
                                 size="xs"
+                                className="min-h-11"
                                 aria-pressed={assigned}
                                 disabled={!assignmentsReady}
                                 onClick={() => void toggleAssignment(server, bot.id)}
@@ -915,6 +957,17 @@ export function McpServersOverlay({
                             );
                           })}
                         </div>
+                        {assignmentsReady &&
+                        bots.length > 0 &&
+                        !bots.some((bot) =>
+                          (botAssignments[bot.id] ?? []).some(
+                            (entry) => entry.serverId === server.id,
+                          ),
+                        ) ? (
+                          <p className="mt-1 text-xs text-warning">
+                            <Trans>No agents are assigned to this server.</Trans>
+                          </p>
+                        ) : null}
                         {server.installId ? null : (
                           <div className="mt-3">
                             <AvailabilityControl
@@ -932,6 +985,7 @@ export function McpServersOverlay({
                               <Button
                                 type="button"
                                 size="sm"
+                                className="min-h-11"
                                 disabled={oauthPending === server.id}
                                 onClick={() => void connectOAuth(server)}
                               >
@@ -942,6 +996,7 @@ export function McpServersOverlay({
                                   type="button"
                                   variant="outline"
                                   size="sm"
+                                  className="min-h-11"
                                   disabled={oauthPending === server.id}
                                   onClick={() => void disconnectOAuth(server)}
                                 >
@@ -954,14 +1009,20 @@ export function McpServersOverlay({
                             type="button"
                             variant="outline"
                             size="sm"
-                            onClick={() => startEditing(server)}
+                            className="min-h-11"
+                            onClick={() => startEditing(server, needsOAuthClient(server))}
                           >
-                            <Trans>Edit</Trans>
+                            {needsOAuthClient(server) ? (
+                              <Trans>Edit Advanced OAuth client ID</Trans>
+                            ) : (
+                              <Trans>Edit</Trans>
+                            )}
                           </Button>
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
+                            className="min-h-11"
                             disabled={
                               testingIds.has(server.id) || server.health.status === "installing"
                             }
@@ -980,7 +1041,7 @@ export function McpServersOverlay({
                             type="button"
                             variant={confirmingDelete === server.id ? "destructive" : "outline"}
                             size="sm"
-                            className="ms-auto"
+                            className="ms-auto min-h-11"
                             onClick={() => void deleteServer(server)}
                           >
                             {confirmingDelete === server.id ? (

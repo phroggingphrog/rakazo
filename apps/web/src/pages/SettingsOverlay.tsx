@@ -12,6 +12,7 @@ import {
   KeyRound,
   MessageCircle,
   Monitor,
+  Plug,
   Settings,
   ShieldCheck,
   Volume2,
@@ -65,6 +66,7 @@ export function SettingsOverlay({
   onTimezoneChange,
   onAccountImported,
   onImportAgent,
+  onOpenMcp,
   billingEnabled = false,
   sandboxProvider,
   onSandboxProviderChange,
@@ -92,6 +94,7 @@ export function SettingsOverlay({
   onTimezoneChange: (timezone: string) => Promise<void>;
   onAccountImported?: () => Promise<void>;
   onImportAgent?: () => void;
+  onOpenMcp?: () => void;
   billingEnabled?: boolean;
   sandboxProvider?: string | null;
   onSandboxProviderChange?: (sandboxProvider: string) => void;
@@ -286,6 +289,18 @@ export function SettingsOverlay({
               aria-label={t`Settings`}
               className="flex min-w-0 flex-1 flex-row gap-1 overflow-x-auto py-3 md:w-[200px] md:shrink-0 md:flex-none md:flex-col md:overflow-y-auto md:border-e md:border-border md:px-3 md:py-4"
             >
+              {onOpenMcp ? (
+                <button
+                  type="button"
+                  data-testid="settings-nav-mcp"
+                  disabled={panelBusy}
+                  onClick={() => leaveSettings(onOpenMcp)}
+                  className="flex min-h-11 shrink-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-start text-[13.5px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+                >
+                  <Plug className="size-4 shrink-0" strokeWidth={1.75} />
+                  <span className="whitespace-nowrap">{t`MCP servers`}</span>
+                </button>
+              ) : null}
               {navItems.map((item) => {
                 const Icon = item.icon;
                 // A space's page is reached from General, so General stays marked.

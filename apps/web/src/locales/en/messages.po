@@ -606,6 +606,10 @@ msgstr "Add server URL"
 msgid "Add skills"
 msgstr "Add skills"
 
+#: src/pages/McpServersOverlay.tsx
+msgid "Add the OAuth client ID in Advanced settings before you connect."
+msgstr "Add the OAuth client ID in Advanced settings before you connect."
+
 #: src/components/teach/SkillDraftCard.tsx
 msgid "Add to routine"
 msgstr "Add to routine"
@@ -925,6 +929,10 @@ msgstr "Authorization code"
 #: src/pages/McpServersOverlay.tsx
 msgid "Authorization parameters (optional)"
 msgstr "Authorization parameters (optional)"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Authorization required"
+msgstr "Authorization required"
 
 #: src/pages/McpServersOverlay.tsx
 msgid "Authorization server"
@@ -1666,6 +1674,10 @@ msgstr "Connecting…"
 #: src/pages/memory-providers/ConnectionModeFields.tsx
 msgid "Connection"
 msgstr "Connection"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Connection checked"
+msgstr "Connection checked"
 
 #: src/lib/model-connection-preflight.ts
 msgid "Connection test failed."
@@ -2726,6 +2738,10 @@ msgstr "Each name can be used once."
 msgid "Edit"
 msgstr "Edit"
 
+#: src/pages/McpServersOverlay.tsx
+msgid "Edit Advanced OAuth client ID"
+msgstr "Edit Advanced OAuth client ID"
+
 #: src/components/AskCard.tsx
 msgid "Edit first"
 msgstr "Edit first"
@@ -3649,6 +3665,7 @@ msgid "MCP server"
 msgstr "MCP server"
 
 #: src/pages/McpServersOverlay.tsx
+#: src/pages/SettingsOverlay.tsx
 #: src/pages/shell/agent-import.tsx
 msgid "MCP servers"
 msgstr "MCP servers"
@@ -4022,6 +4039,10 @@ msgstr "Next page"
 msgid "Next settings sections"
 msgstr "Next settings sections"
 
+#: src/pages/McpServersOverlay.tsx
+msgid "No agents are assigned to this server."
+msgstr "No agents are assigned to this server."
+
 #: src/pages/PluginsOverlay.tsx
 msgid "No apps match your search."
 msgstr "No apps match your search."
@@ -4210,7 +4231,6 @@ msgstr "OAuth connected"
 msgid "OAuth connection failed"
 msgstr "OAuth connection failed"
 
-#: src/pages/McpServersOverlay.tsx
 #: src/pages/PluginsOverlay.tsx
 msgid "OAuth expired"
 msgstr "OAuth expired"
@@ -4659,6 +4679,10 @@ msgstr "Reconnect"
 #: src/pages/McpServersOverlay.tsx
 msgid "Reconnect OAuth"
 msgstr "Reconnect OAuth"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Reconnect to authorize this server before its tools can be used."
+msgstr "Reconnect to authorize this server before its tools can be used."
 
 #: src/App.tsx
 #: src/components/ComputerUpdateProgress.tsx
@@ -5913,6 +5937,10 @@ msgstr "This can't be undone."
 msgid "This cannot be undone."
 msgstr "This cannot be undone."
 
+#: src/pages/McpServersOverlay.tsx
+msgid "This command is not allowed by the deployment. Ask the deployment administrator to add it to the STDIO command allowlist."
+msgstr "This command is not allowed by the deployment. Ask the deployment administrator to add it to the STDIO command allowlist."
+
 #: src/pages/HostComputerPrompt.tsx
 msgid "this computer"
 msgstr "this computer"
@@ -6073,6 +6101,11 @@ msgstr "Tool name"
 #: src/pages/shell/bot-panel.tsx
 msgid "Tools"
 msgstr "Tools"
+
+#. placeholder {0}: server.health.toolCount
+#: src/pages/McpServersOverlay.tsx
+msgid "Tools discovered: {0}"
+msgstr "Tools discovered: {0}"
 
 #: src/components/composer/HoldToTalk.tsx
 msgid "Transcribing…"
