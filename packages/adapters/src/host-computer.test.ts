@@ -64,6 +64,15 @@ describe("native host computer transport", () => {
     },
   );
 
+  it("reads Hermes MCP settings and other allowlisted harness files over the authenticated protocol", async () => {
+    const hermes = await client.mcpInventory(computer, ".hermes/config.yaml", context);
+    expect(hermes?.path).toBe(".hermes/config.yaml");
+    const config = await client.mcpInventory(computer, ".pi/agent/mcp.json", context);
+    expect(config?.path).toBe(".pi/agent/mcp.json");
+    await expect(client.mcpInventory(computer, "../.ssh/config", context)).rejects.toThrow();
+    await expect(client.mcpInventory(computer, "/etc/passwd", context)).rejects.toThrow();
+  });
+
   it("flushes headers and keeps quiet native commands active on the HTTP stream", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;

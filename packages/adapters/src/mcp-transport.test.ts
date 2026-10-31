@@ -1,6 +1,9 @@
 import { strict as assert } from "node:assert";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StoredMcpOAuthProvider } from "./mcp-oauth.js";
 import {
@@ -44,6 +47,19 @@ describe("MCP transport seam", () => {
     );
   });
 
+  it("denies shell and runtime-eval arguments before process launch", async () => {
+    const { mcpStdioRefusal } = await import("./mcp-transport.js");
+    const policy = { stdioEnabled: true, allowedCommands: [process.execPath] };
+    expect(mcpStdioRefusal(process.execPath, policy)).toBeUndefined();
+    expect(
+      ["-e", "--require", "-c", "--command"].every((arg) =>
+        /^(?:--(?:eval|require|import|loader|experimental-loader)(?:=|$)|-[er](?:=|$)|-[er].+|-c(?:$|.)|--command(?:=|$))$/i.test(
+          arg,
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("gates stdio by exact command allowlist", async () => {
     const session = new McpSession();
     await expect(
@@ -57,14 +73,18 @@ describe("MCP transport seam", () => {
   });
 
   it("explains a stdio process that exits with the tail of its stderr", async () => {
+    const scriptDir = await mkdtemp(join(tmpdir(), "mcp-stdio-test-"));
+    const script = join(scriptDir, "stderr-server.js");
+    await writeFile(
+      script,
+      "process.stderr.write('\\u001b[31mnoise\\u001b[0m\\n'.repeat(500)); console.error('sh: gmail-mcp: not found'); process.exit(127)",
+    );
     const session = new McpSession();
     const error = await session
       .connectStdio({
         command: process.execPath,
-        args: [
-          "-e",
-          "process.stderr.write('\\u001b[31mnoise\\u001b[0m\\n'.repeat(500)); console.error('sh: gmail-mcp: not found'); process.exit(127)",
-        ],
+        args: [script],
+        redactSecrets: ["known-token-value"],
         allowedCommands: [process.execPath],
       })
       .catch((caught: unknown) => caught);
@@ -75,6 +95,22 @@ describe("MCP transport seam", () => {
     );
     expect(launch.stderr).not.toContain("\u001b");
     expect(launch.stderr.length).toBeLessThanOrEqual(4_096);
+    await session.close();
+    await rm(scriptDir, { recursive: true, force: true });
+  });
+
+  it("redacts secrets from launch stderr", async () => {
+    const session = new McpSession();
+    const error = await session
+      .connectStdio({
+        command: process.execPath,
+        args: ["--inspect=0", "console.error('known-token-value'); process.exit(127)"],
+        allowedCommands: [process.execPath],
+        redactSecrets: ["known-token-value"],
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(McpStdioLaunchError);
+    expect((error as Error).message).not.toContain("known-token-value");
     await session.close();
   });
 
@@ -89,7 +125,7 @@ describe("MCP transport seam", () => {
     ).rejects.toThrow("not installed by Rakazo");
     await expect(
       session.connectStdio({ command: "npx", args: ["-c", "echo hi"], allowedCommands: ["npx"] }),
-    ).rejects.toThrow("npx only launches");
+    ).rejects.toThrow("argument is denied");
     // The launcher itself must still be allowlisted.
     await expect(
       session.connectStdio({

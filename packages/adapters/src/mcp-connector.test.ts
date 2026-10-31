@@ -507,6 +507,90 @@ describe("MCP connector session cache", () => {
     await connector.close();
   });
 
+  it("denies imported commands unless they pass configured command policy", async () => {
+    const { mcpStdioRefusal } = await import("./mcp-transport.js");
+    expect(
+      mcpStdioRefusal("/usr/bin/node", { stdioEnabled: false, allowedCommands: ["/usr/bin/node"] }),
+    ).toContain("aren't available");
+    expect(
+      mcpStdioRefusal("/usr/bin/node", { stdioEnabled: true, allowedCommands: ["/usr/bin/bash"] }),
+    ).toContain("isn't allowed");
+    expect(
+      mcpStdioRefusal("npx", { stdioEnabled: true, allowedCommands: ["npx"] }),
+    ).toBeUndefined();
+  });
+
+  it("gives bot A assigned tools, denies bot B, then enforces the changed assignment", async () => {
+    const state = {
+      failNext: false,
+      initializations: 0,
+      calls: [] as string[],
+      tools: [{ name: "read", inputSchema: { type: "object" } }],
+    };
+    vi.stubGlobal("fetch", mcpFetch(state));
+    let allowedBot = "bot-a";
+    const assignment = {
+      ...ASSIGNMENT,
+      botId: "bot-a",
+      allowAllTools: false,
+      allowedTools: ["read"],
+    };
+    const prisma = {
+      botMcpServer: {
+        findMany: vi.fn(async ({ where }: { where: { botId: string } }) =>
+          where.botId === allowedBot ? [assignment] : [],
+        ),
+        findFirst: vi.fn(async ({ where }: { where: { botId: string } }) =>
+          where.botId === allowedBot ? assignment : null,
+        ),
+      },
+    };
+    const connector = new McpConnector(prisma as never, {} as never, { network: TEST_NETWORK });
+    const contextFor = (botId: string) =>
+      ({ spaceId: "w1", userId: "u1", botId, signal: new AbortController().signal }) as never;
+    const toolsA = await connector.discoverTools(contextFor("bot-a"));
+    expect(toolsA.map((tool) => tool.name)).toContain("mcp__demo__read");
+    expect(await connector.discoverTools(contextFor("bot-b"))).toEqual([]);
+    const route = {
+      ...toolsA.find((tool) => tool.name === "mcp__demo__read")!.route,
+      resourceId: "server-1",
+      toolName: "read",
+    };
+    const denied: unknown[] = [];
+    for await (const event of connector.execute(
+      { tool: "mcp__demo__read", args: {}, executionId: "bot-b-denied", route } as never,
+      contextFor("bot-b"),
+    ))
+      denied.push(event);
+    expect(denied).toEqual([{ type: "error", message: "MCP tool is not assigned to this bot" }]);
+    allowedBot = "bot-b";
+    const toolsB = await connector.discoverTools(contextFor("bot-b"));
+    expect(toolsB.map((tool) => tool.name)).toContain("mcp__demo__read");
+    const deniedForA: unknown[] = [];
+    for await (const event of connector.execute(
+      {
+        tool: "mcp__demo__read",
+        args: {},
+        executionId: "bot-a-no-longer-assigned",
+        route,
+      } as never,
+      contextFor("bot-a"),
+    ))
+      deniedForA.push(event);
+    expect(deniedForA).toEqual([
+      { type: "error", message: "MCP tool is not assigned to this bot" },
+    ]);
+    const called = await connector.execute(
+      { tool: "mcp__demo__read", args: {}, executionId: "bot-b-call", route } as never,
+      contextFor("bot-b"),
+    );
+    const callEvents: unknown[] = [];
+    for await (const event of called) callEvents.push(event);
+    expect(state.calls).toContain("read");
+    expect(callEvents).toContainEqual(expect.objectContaining({ type: "result" }));
+    await connector.close();
+  });
+
   it("exposes 20 MCP tools directly and switches at 21", async () => {
     const context = {
       spaceId: "w1",

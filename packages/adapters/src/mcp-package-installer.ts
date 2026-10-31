@@ -164,6 +164,8 @@ export type EnsureMcpPackageOptions = {
   npmCommand?: string;
   /** What npm installs instead of `spec` (tests install a local tarball). */
   installTarget?: string;
+  /** Values that must not appear in npm error output. */
+  redactSecrets?: readonly string[];
 };
 
 const inFlight = new Map<string, Promise<void>>();
@@ -200,7 +202,8 @@ export async function ensureMcpPackage(
   const name = registryPackageName(spec);
   if (!name) throw new Error(`Not an npm registry package: ${spec}`);
   const root = resolve(options.root ?? defaultMcpPackagesRoot());
-  const dir = mcpPackageDir(spec, root, options.env);
+  const safeEnv = options.env;
+  const dir = mcpPackageDir(spec, root, safeEnv);
   const key = basename(dir);
   if (!(await isReady(dir))) {
     options.onInstall?.();
@@ -212,8 +215,9 @@ export async function ensureMcpPackage(
         dir,
         name,
         target: options.installTarget ?? spec,
+        redactSecrets: options.redactSecrets ?? [],
         timeoutMs: options.timeoutMs ?? DEFAULT_MCP_INSTALL_TIMEOUT_MS,
-        env: options.env ?? {},
+        env: safeEnv ?? {},
         npmCommand: options.npmCommand ?? "npm",
       }).finally(() => inFlight.delete(dir));
       inFlight.set(dir, pending);
@@ -264,6 +268,7 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 
 type InstallPlan = {
   root: string;
+  redactSecrets: readonly string[];
   key: string;
   dir: string;
   name: string;
@@ -272,6 +277,13 @@ type InstallPlan = {
   env: Record<string, string>;
   npmCommand: string;
 };
+
+function redactSecrets(value: string, secrets: readonly string[]): string {
+  let result = value;
+  for (const secret of secrets)
+    if (secret.length >= 4) result = result.replaceAll(secret, "[redacted]");
+  return result;
+}
 
 async function installLocked(plan: InstallPlan): Promise<void> {
   await mkdir(plan.root, { recursive: true });
@@ -462,7 +474,8 @@ function runNpmInstall(plan: InstallPlan, prefix: string): Promise<void> {
     timer.unref?.();
     child.on("error", (error) => {
       clearTimeout(timer);
-      reject(new Error(`Could not run npm to install ${plan.target}: ${error.message}`));
+      const message = redactSecrets(error.message, plan.redactSecrets);
+      reject(new Error(`Could not run npm to install ${plan.target}: ${message}`));
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
@@ -470,7 +483,7 @@ function runNpmInstall(plan: InstallPlan, prefix: string): Promise<void> {
         resolvePromise();
         return;
       }
-      const tail = output.trim().slice(-OUTPUT_TAIL_CHARS);
+      const tail = redactSecrets(output.trim().slice(-OUTPUT_TAIL_CHARS), plan.redactSecrets);
       const reason = timedOut
         ? `timed out after ${Math.round(plan.timeoutMs / 1000)}s`
         : `failed (${code === null ? `signal ${signal}` : `exit ${code}`})`;

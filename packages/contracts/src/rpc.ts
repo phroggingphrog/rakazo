@@ -958,6 +958,53 @@ export const appContract = {
     remove: oc.input(z.object({ id: Id })).output(z.object({ ok: z.literal(true) })),
   },
   mcp: {
+    importPreview: oc
+      .input(
+        z.object({
+          harness: z.enum(["pi", "cursor", "claude", "codex", "dsh", "opencode"]),
+          configuration: z.string().min(1).max(1_000_000),
+        }),
+      )
+      .output(
+        z.object({
+          servers: z.array(
+            z.object({
+              name: z.string(),
+              transport: z.enum(["stdio", "streamable_http", "sse"]),
+              enabled: z.boolean(),
+              status: z.enum(["ready", "disabled", "unsupported"]),
+              auth: z.enum([
+                "none",
+                "environment_reference",
+                "static_credential",
+                "oauth",
+                "oauth_google",
+              ]),
+              credentialHeaders: z.array(z.string()),
+              provenance: z.object({ harness: z.string(), location: z.string() }),
+              unsupported: z.array(z.string()),
+            }),
+          ),
+          errors: z.array(z.string()),
+        }),
+      ),
+    importInstalled: oc.output(
+      z.object({ discovered: z.array(z.string()), unavailable: z.array(z.string()) }),
+    ),
+    importSelected: oc
+      .input(
+        z.object({
+          harness: z.enum(["pi", "cursor", "claude", "codex", "dsh", "opencode"]),
+          configuration: z.string().min(1).max(1_000_000),
+          names: z.array(z.string().min(1).max(120)).min(1).max(100),
+        }),
+      )
+      .output(
+        z.object({
+          imported: z.array(z.string()),
+          skipped: z.array(z.object({ name: z.string(), reason: z.string() })),
+        }),
+      ),
     servers: {
       list: oc.output(z.array(McpServerSchema)),
       create: oc.input(McpServerConfigInput).output(McpServerSchema),
@@ -989,7 +1036,7 @@ export const appContract = {
             assignments: z.array(
               z.object({
                 serverId: Id,
-                allowAllTools: z.boolean().default(true),
+                allowAllTools: z.boolean().default(false),
                 allowedTools: z.array(z.string().min(1).max(200)).max(500).default([]),
               }),
             ),

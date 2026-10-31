@@ -43,6 +43,20 @@ export const hostComputerRequest = z.discriminatedUnion("method", [
     ]),
   }),
   z.object({ ...base, method: z.literal("execute"), command }),
+  z
+    .object({ ...base, method: z.literal("mcpInventory"), path: z.string().max(4096) })
+    .refine(
+      ({ path }) =>
+        path === ".pi/agent/mcp.json" ||
+        path === ".claude.json" ||
+        path === ".codex/config.toml" ||
+        path === ".dsh/mcp.json" ||
+        path === ".config/omp/mcp.json" ||
+        path === ".config/opencode/opencode.json" ||
+        path === ".hermes/config.yaml" ||
+        path === "hermes/config.yaml",
+      "MCP inventory path is not allowed",
+    ),
   z.object({ ...base, method: z.literal("workspaceDirectories"), directories }),
   z.object({
     ...base,
@@ -74,5 +88,7 @@ export type HostComputerFrame<T> =
 export function hostComputerDeadlineMs(request: HostComputerRequest) {
   return request.method === "execute"
     ? boundedSandboxCommandTimeoutMs(request.command.timeoutMs) + 30_000
-    : 10 * 60_000;
+    : request.method === "mcpInventory"
+      ? 20_000
+      : 10 * 60_000;
 }

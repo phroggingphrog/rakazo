@@ -1074,6 +1074,12 @@ export class McpConnector implements ConnectorProvider {
               timeoutMs: this.options.installTimeoutMs,
               signal: context.signal,
               env: installEnv,
+              redactSecrets: [
+                ...Object.values(env),
+                ...Object.values(material.files ?? {}),
+                ...(material.secret ? [material.secret] : []),
+                ...Object.values(material.headers ?? {}),
+              ],
               onSettled: async () => {
                 if (installHealth && this.healthWrites.get(server.id) === installHealth)
                   await this.recordHealth(
@@ -1163,6 +1169,15 @@ export class McpConnector implements ConnectorProvider {
           args: npx ? npx.binArgs : args,
           installedBin,
           env: launchEnv,
+          redactSecrets: [
+            ...Object.values(env),
+            ...Object.values(launchEnv),
+            ...Object.values(material.files ?? {}),
+            ...(material.secret ? [material.secret] : []),
+            ...Object.values(material.headers ?? {}),
+            ...args,
+          ],
+          deniedArgs: npx ? ["-c", "--command"] : undefined,
           allowedCommands: this.options.allowedCommands ?? [],
           signal: context.signal,
           timeoutMs: this.options.startupTimeoutMs ?? DEFAULT_MCP_STDIO_STARTUP_TIMEOUT_MS,

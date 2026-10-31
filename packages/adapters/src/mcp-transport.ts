@@ -77,9 +77,11 @@ export interface McpStdioOptions {
   maxBufferSize?: number;
   signal?: AbortSignal;
   timeoutMs?: number;
+  redactSecrets?: readonly string[];
+  deniedArgs?: readonly string[];
 }
 
-/** The process exited or never answered; the message carries the tail of its stderr. */
+/** The process exited or never answered; stderr is redacted before it reaches the caller. */
 export class McpStdioLaunchError extends Error {
   constructor(
     cause: unknown,
@@ -99,12 +101,17 @@ const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[A-Za-z]`, 
 class StderrTail {
   private text = "";
 
+  constructor(private readonly secrets: readonly string[]) {}
+
   push(chunk: Buffer | string): void {
     this.text = (this.text + chunk.toString()).slice(-STDERR_TAIL_CHARS * 2);
   }
 
   toString(): string {
-    return this.text.replace(ANSI_ESCAPE, "").trim().slice(-STDERR_TAIL_CHARS);
+    let text = this.text.replace(ANSI_ESCAPE, "");
+    for (const secret of this.secrets)
+      if (secret.length >= 4) text = text.replaceAll(secret, "[redacted]");
+    return text.trim().slice(-STDERR_TAIL_CHARS);
   }
 }
 
@@ -294,6 +301,16 @@ export function mcpStdioRefusal(command: string, policy: McpStdioPolicy): string
 }
 
 function stdioParams(options: McpStdioOptions): StdioServerParameters {
+  for (const arg of options.args ?? []) {
+    if (options.deniedArgs?.includes(arg))
+      throw new Error("MCP stdio argument is denied by policy");
+    if (
+      /^(?:--(?:eval|require|import|loader|experimental-loader)(?:=|$)|-[er](?:=|$)|-[er].+|-c(?:$|.)|--command(?:=|$))$/i.test(
+        arg,
+      )
+    )
+      throw new Error("MCP stdio argument is denied by policy");
+  }
   if (!isAllowedStdioCommand(options.command, options.allowedCommands)) {
     throw new Error("MCP stdio command is not in the configured allowlist");
   }
@@ -420,7 +437,7 @@ export class McpSession {
     this.transport = transport;
     // Always drain stderr: an unread pipe fills up and blocks a chatty server. The tail
     // explains a launch that fails ("not found", a crash) instead of a bare timeout.
-    const stderr = new StderrTail();
+    const stderr = new StderrTail(options.redactSecrets ?? []);
     transport.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
     const signal = combineSignals(options.signal, AbortSignal.timeout(options.timeoutMs ?? 15_000));
     this.connecting = this.client

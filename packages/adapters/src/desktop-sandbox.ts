@@ -381,6 +381,22 @@ export class DesktopSandboxProvider implements SandboxProvider {
     return listed.filter((entry) => entry !== null);
   }
 
+  async readUserFile(filePath: string, options?: { maxBytes?: number }): Promise<Uint8Array> {
+    const target = await realpath(path.resolve(filePath));
+    const roots = await Promise.all(
+      [homedir(), ...(this.opts.root ? [this.opts.root] : [])].map((root) => realpath(root)),
+    );
+    const allowed = roots.some((root) => {
+      const relative = path.relative(root, target);
+      return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
+    });
+    if (!allowed) throw new Error("Path is outside approved host roots");
+    const info = await stat(target);
+    if (!info.isFile() || (options?.maxBytes !== undefined && info.size > options.maxBytes))
+      throw new Error("MCP config is unavailable or too large");
+    return new Uint8Array(await readFile(target));
+  }
+
   async readFile(
     computer: ComputerRef,
     filePath: string,

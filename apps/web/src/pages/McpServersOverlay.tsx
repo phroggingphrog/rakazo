@@ -120,6 +120,25 @@ export function McpServersOverlay({
   const [saving, setSaving] = useState(false);
   const [oauthPending, setOauthPending] = useState<string | null>(null);
   const [testingIds, setTestingIds] = useState<Set<string>>(() => new Set());
+  const [importHarness, setImportHarness] = useState<
+    "pi" | "cursor" | "claude" | "codex" | "dsh" | "opencode"
+  >("pi");
+  const [importConfiguration, setImportConfiguration] = useState("");
+  const [importPreview, setImportPreview] = useState<{
+    servers: Array<{
+      name: string;
+      transport: "stdio" | "streamable_http" | "sse";
+      enabled: boolean;
+      status: "ready" | "disabled" | "unsupported";
+      auth: "none" | "environment_reference" | "static_credential" | "oauth" | "oauth_google";
+      credentialHeaders: string[];
+      provenance: { harness: string; location: string };
+      unsupported: string[];
+    }>;
+    errors: string[];
+  } | null>(null);
+  const [importedNames, setImportedNames] = useState<string[]>([]);
+  const [discovering, setDiscovering] = useState(false);
   const queries = useSpaceQueries();
   const queryClient = useQueryClient();
   const serversOptions = queries.mcp.servers.list.queryOptions();
@@ -347,7 +366,7 @@ export function McpServersOverlay({
             botId,
             assignments: [
               ...existing,
-              { serverId: created.id, allowAllTools: true, allowedTools: [] },
+              { serverId: created.id, allowAllTools: false, allowedTools: [] },
             ],
           });
         }),
@@ -404,7 +423,7 @@ export function McpServersOverlay({
     const assigned = current.some((entry) => entry.serverId === server.id);
     const next = assigned
       ? current.filter((entry) => entry.serverId !== server.id)
-      : [...current, { serverId: server.id, allowAllTools: true, allowedTools: [] }];
+      : [...current, { serverId: server.id, allowAllTools: false, allowedTools: [] }];
     try {
       const updated = await rpc.mcp.assignments.replace({
         botId,
@@ -503,6 +522,161 @@ export function McpServersOverlay({
           </p>
         ) : null}
         <div className="rk-scroll grid min-h-0 grid-cols-1 gap-5 overflow-y-auto p-6 lg:grid-cols-2">
+          <Card className="self-start lg:col-span-2">
+            <CardHeader>
+              <CardTitle>
+                <Trans>Import MCP servers</Trans>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={discovering}
+                  onClick={async () => {
+                    setDiscovering(true);
+                    try {
+                      const result = await rpc.mcp.importInstalled({});
+                      setError(
+                        [
+                          ...result.discovered.map((name) => `Added ${name}`),
+                          ...result.unavailable.map((message) => `Skipped ${message}`),
+                        ].join(" · ") || t`No supported connections found`,
+                      );
+                      await refresh();
+                    } catch (err) {
+                      setError(errorText(err, t`Could not discover connections`));
+                    } finally {
+                      setDiscovering(false);
+                    }
+                  }}
+                >
+                  <Trans>Discover installed connections</Trans>
+                </Button>
+                <select
+                  aria-label={t`Configuration source`}
+                  className="h-10 rounded-md border border-border bg-background px-3"
+                  value={importHarness}
+                  onChange={(event) => setImportHarness(event.target.value as typeof importHarness)}
+                >
+                  <option value="pi">Pi</option>
+                  <option value="cursor">Cursor</option>
+                  <option value="claude">Claude Code</option>
+                  <option value="codex">Codex</option>
+                  <option value="dsh">DSH</option>
+                  <option value="opencode">OpenCode</option>
+                </select>
+                <Input
+                  aria-label={t`Configuration file`}
+                  type="file"
+                  accept=".json,.toml"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void file.text().then(setImportConfiguration);
+                  }}
+                />
+                <Button
+                  variant="secondary"
+                  disabled={!importConfiguration}
+                  onClick={async () => {
+                    try {
+                      setImportPreview(
+                        await rpc.mcp.importPreview({
+                          harness: importHarness,
+                          configuration: importConfiguration,
+                        }),
+                      );
+                      setImportedNames([]);
+                    } catch (err) {
+                      setError(errorText(err, t`Could not preview import`));
+                    }
+                  }}
+                >
+                  <Trans>Preview</Trans>
+                </Button>
+              </div>
+              {importPreview ? (
+                <div className="space-y-3">
+                  {importPreview.errors.map((message) => (
+                    <p key={message} role="alert" className="text-sm text-destructive">
+                      {message}
+                    </p>
+                  ))}
+                  {importPreview.servers.map((server) => (
+                    <label
+                      key={server.name}
+                      className="flex items-start gap-3 rounded-lg border border-border p-3 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={
+                          server.status !== "ready" ||
+                          server.transport === "stdio" ||
+                          server.auth === "static_credential" ||
+                          server.auth === "oauth" ||
+                          server.auth === "oauth_google"
+                        }
+                        checked={importedNames.includes(server.name)}
+                        onChange={(event) =>
+                          setImportedNames((current) =>
+                            event.target.checked
+                              ? [...current, server.name]
+                              : current.filter((name) => name !== server.name),
+                          )
+                        }
+                      />
+                      <span className="min-w-0 flex-1">
+                        <strong>{server.name}</strong>
+                        <span className="ml-2 text-muted-foreground">
+                          {server.transport} · {server.status} · {server.auth}
+                        </span>
+                        {server.unsupported.length ? (
+                          <span className="block text-destructive">
+                            {server.unsupported.join("; ")}
+                          </span>
+                        ) : null}
+                        {server.transport === "stdio" ? (
+                          <span className="block text-muted-foreground">
+                            <Trans>Local servers need the private host bridge.</Trans>
+                          </span>
+                        ) : null}
+                        {server.auth === "static_credential" || server.auth === "oauth" ? (
+                          <span className="block text-muted-foreground">
+                            <Trans>Reconnect to add credentials securely.</Trans>
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                  ))}
+                  <Button
+                    disabled={!importedNames.length}
+                    onClick={async () => {
+                      try {
+                        const result = await rpc.mcp.importSelected({
+                          harness: importHarness,
+                          configuration: importConfiguration,
+                          names: importedNames,
+                        });
+                        setError(
+                          result.skipped.length
+                            ? result.skipped
+                                .map((item) => `${item.name}: ${item.reason}`)
+                                .join("; ")
+                            : null,
+                        );
+                        setImportPreview(null);
+                        setImportConfiguration("");
+                        await refresh();
+                      } catch (err) {
+                        setError(errorText(err, t`Could not import servers`));
+                      }
+                    }}
+                  >
+                    <Trans>Import selected</Trans>
+                  </Button>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
           <Card className="self-start">
             <CardHeader>
               <CardTitle>{editing ? editing.name : <Trans>Add server</Trans>}</CardTitle>
@@ -896,22 +1070,63 @@ export function McpServersOverlay({
                             <Trans>Agents:</Trans>
                           </span>
                           {bots.map((bot) => {
-                            const assigned = (botAssignments[bot.id] ?? []).some(
-                              (entry) => entry.serverId === server.id,
+                            const assignment = (botAssignments[bot.id] ?? []).find(
+                              (item) => item.serverId === server.id,
                             );
+                            const assigned = Boolean(assignment);
                             return (
-                              <Button
-                                key={bot.id}
-                                type="button"
-                                variant={assigned ? "default" : "outline"}
-                                size="xs"
-                                aria-pressed={assigned}
-                                disabled={!assignmentsReady}
-                                onClick={() => void toggleAssignment(server, bot.id)}
-                              >
-                                {assigned ? <Check aria-hidden="true" /> : null}
-                                {bot.name}
-                              </Button>
+                              <div key={bot.id} className="flex items-center gap-1.5">
+                                <Button
+                                  type="button"
+                                  variant={assigned ? "default" : "outline"}
+                                  size="xs"
+                                  aria-pressed={assigned}
+                                  disabled={!assignmentsReady}
+                                  onClick={() => void toggleAssignment(server, bot.id)}
+                                >
+                                  {assigned ? <Check aria-hidden="true" /> : null}
+                                  {bot.name}
+                                </Button>
+                                {assigned ? (
+                                  <select
+                                    aria-label={`${bot.name} tool access for ${server.name}`}
+                                    className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                                    value={assignment?.allowAllTools ? "all" : "none"}
+                                    onChange={async (event) => {
+                                      const next = (botAssignments[bot.id] ?? []).map((item) =>
+                                        item.serverId === server.id
+                                          ? {
+                                              ...item,
+                                              allowAllTools: event.target.value === "all",
+                                              allowedTools: [],
+                                            }
+                                          : item,
+                                      );
+                                      try {
+                                        const updated = await rpc.mcp.assignments.replace({
+                                          botId: bot.id,
+                                          assignments: next,
+                                        });
+                                        await writeSaved(
+                                          queryClient,
+                                          assignmentsOptions.queryKey,
+                                          (all) => [
+                                            ...(all ?? []).filter(
+                                              (entry) => entry.botId !== bot.id,
+                                            ),
+                                            ...updated,
+                                          ],
+                                        );
+                                      } catch (err) {
+                                        setError(errorText(err, t`Could not update agent access`));
+                                      }
+                                    }}
+                                  >
+                                    <option value="none">No tools</option>
+                                    <option value="all">All tools</option>
+                                  </select>
+                                ) : null}
+                              </div>
                             );
                           })}
                         </div>

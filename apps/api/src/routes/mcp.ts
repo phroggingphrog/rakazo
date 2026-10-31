@@ -3,6 +3,12 @@ import { ORPCError } from "@orpc/server";
 import { runContinueJob } from "@rakazo/adapter-kit";
 import {
   createPluginMarketplace,
+  importClaudeMcpConfig,
+  importCodexMcpConfig,
+  importCursorMcpConfig,
+  importDshMcpConfig,
+  importOpenCodeMcpConfig,
+  importPiMcpConfig,
   isTransientFetchError,
   McpOAuthClientRequiredError,
   persistPreparedSecret,
@@ -75,6 +81,7 @@ export function mcpRoutes(ctx: RouterContext) {
     probeMcpServer,
     beginMcpProbe,
     removeMcpServerInTransaction,
+    importHarnessMcpInventory,
     prepareMcpServer,
     insertMcpServer,
     announceMcpServer,
@@ -374,6 +381,140 @@ export function mcpRoutes(ctx: RouterContext) {
       }),
     },
     mcp: {
+      importInstalled: authed.mcp.importInstalled.handler(async ({ context }) => {
+        const result = await importHarnessMcpInventory(context.actor);
+        return {
+          ...result,
+          discovered: result.discovered.map((name) => name.replace(/\/[^/]+\//g, "[path]/")),
+        };
+      }),
+      importPreview: authed.mcp.importPreview.handler(async ({ input }) => {
+        const location = `${input.harness}:configuration`;
+        const result = (
+          {
+            pi: importPiMcpConfig,
+            cursor: importCursorMcpConfig,
+            claude: importClaudeMcpConfig,
+            codex: importCodexMcpConfig,
+            dsh: importDshMcpConfig,
+            opencode: importOpenCodeMcpConfig,
+          } as const
+        )[input.harness](input.configuration, location);
+        return {
+          servers: result.servers.map(
+            ({
+              name,
+              transport,
+              enabled,
+              status,
+              auth,
+              credentialHeaders,
+              provenance,
+              unsupported,
+            }) => ({
+              name,
+              transport,
+              enabled,
+              status,
+              auth,
+              credentialHeaders,
+              provenance: { harness: provenance.harness, location: provenance.location },
+              unsupported,
+            }),
+          ),
+          errors: result.errors,
+        };
+      }),
+      importSelected: authed.mcp.importSelected.handler(async ({ context, input }) => {
+        const location = `${input.harness}:configuration`;
+        const result = (
+          {
+            pi: importPiMcpConfig,
+            cursor: importCursorMcpConfig,
+            claude: importClaudeMcpConfig,
+            codex: importCodexMcpConfig,
+            dsh: importDshMcpConfig,
+            opencode: importOpenCodeMcpConfig,
+          } as const
+        )[input.harness](input.configuration, location);
+        const imported: string[] = [];
+        const skipped: Array<{ name: string; reason: string }> = [];
+        for (const name of input.names) {
+          const server = result.servers.find((item) => item.name === name);
+          const duplicate = result.servers.filter((item) => item.name === name).length > 1;
+          if (duplicate) {
+            skipped.push({
+              name,
+              reason: "Duplicate names need separate explicit connection review",
+            });
+            continue;
+          }
+          if (!server) {
+            skipped.push({ name, reason: "Server is missing or invalid" });
+            continue;
+          }
+          if (server.status === "unsupported") {
+            skipped.push({
+              name,
+              reason: server.unsupported.join("; ") || "Configuration is unsupported",
+            });
+            continue;
+          }
+          if (server.auth === "static_credential" || server.auth === "oauth") {
+            skipped.push({ name, reason: "Credentials require secure reconnect" });
+            continue;
+          }
+          if (server.enabled === false) {
+            skipped.push({
+              name,
+              reason: "This definition is disabled. Enable it in the catalog before importing.",
+            });
+            continue;
+          }
+          if (server.transport === "stdio") {
+            skipped.push({
+              name,
+              reason: "Local stdio import requires a verified private host bridge",
+            });
+            continue;
+          }
+          const slug = `${server.name
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 54)}-${createHash("sha256")
+            .update(
+              `${server.provenance.harness}:${server.provenance.location}:${server.endpoint ?? ""}`,
+            )
+            .digest("hex")
+            .slice(0, 8)}`;
+          const inputConfig = {
+            slug,
+            name: server.name,
+            description: `Imported from ${server.provenance.harness}`,
+            enabled: server.enabled,
+            transport: server.transport,
+            endpoint: server.endpoint!,
+            headers: {},
+            secret: undefined,
+            oauthClient: null,
+          } as const;
+          try {
+            const stored = await prepareMcpServer(context.actor, inputConfig);
+            const row = await deps.prisma.$transaction((tx) =>
+              insertMcpServer(tx, context.actor, inputConfig, stored, { everywhere: true }),
+            );
+            imported.push(name);
+            if (server.enabled) void probeMcpServer(row, context.actor);
+          } catch (error) {
+            skipped.push({
+              name,
+              reason: error instanceof Error ? error.message : "Import failed",
+            });
+          }
+        }
+        return { imported, skipped };
+      }),
       servers: {
         list: authed.mcp.servers.list.handler(async ({ context }) => {
           const rows = await deps.prisma.mcpServer.findMany({
@@ -775,6 +916,7 @@ export function mcpRoutes(ctx: RouterContext) {
             const servers = await tx.mcpServer.findMany({
               where: {
                 id: { in: input.assignments.map((assignment) => assignment.serverId) },
+                enabled: true,
                 ...availableInSpace(context.actor),
               },
               select: { id: true },
@@ -807,7 +949,9 @@ export function mcpRoutes(ctx: RouterContext) {
                   botId: bot.id,
                   serverId: assignment.serverId,
                   allowAllTools: assignment.allowAllTools,
-                  allowedTools: assignment.allowedTools as Prisma.InputJsonValue,
+                  allowedTools: assignment.allowAllTools
+                    ? (assignment.allowedTools as Prisma.InputJsonValue)
+                    : [],
                 })),
               });
             const seqs = (
