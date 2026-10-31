@@ -6,12 +6,26 @@ export const SOL_LOW_TARGET = {
   modelId: "openai/sol",
   thinkingLevel: "low",
 } as const;
+export type EscalationMonetaryPolicy = "capped" | "uncapped";
+
+/** Explicit opt-in. Defaults keep escalation disabled. */
+export function toolEscalationConfig(env: NodeJS.ProcessEnv = process.env) {
+  if (
+    env.TOOL_NO_PROGRESS_ESCALATION_MODEL?.trim() !== SOL_LOW_TARGET.modelId ||
+    env.TOOL_NO_PROGRESS_ESCALATION_PROVIDER?.trim() !== SOL_LOW_TARGET.provider ||
+    env.TOOL_NO_PROGRESS_ESCALATION_THINKING?.trim() !== SOL_LOW_TARGET.thinkingLevel ||
+    env.TOOL_NO_PROGRESS_ESCALATION_MONETARY_POLICY?.trim() !== "uncapped"
+  ) return undefined;
+  return { target: SOL_LOW_TARGET, monetaryPolicy: "uncapped" as const };
+}
+
 export interface EscalationEligibility {
   catalogContainsExactModel: boolean;
   authenticatedConnection: boolean;
   connectionAllowsExactModel: boolean;
   supportsLowReasoning: boolean;
   ownerApproved: boolean;
+  monetaryPolicy: "capped" | "uncapped";
   maxCostUsd?: number;
 }
 /** A plan is not permission to execute. The runtime must retain the same tool grants. */
@@ -45,14 +59,18 @@ export function planToolEscalation(
       enabled: false,
       reason: "Enable openai/sol in the existing connection model allowlist",
     } as const;
-  if (!Number.isFinite(eligibility.maxCostUsd) || eligibility.maxCostUsd! <= 0)
+  if (
+    eligibility.monetaryPolicy === "capped" &&
+    (!Number.isFinite(eligibility.maxCostUsd) || eligibility.maxCostUsd! <= 0)
+  )
     return { enabled: false, reason: "Set an explicit positive escalation cost limit" } as const;
   return {
     enabled: true,
     target: SOL_LOW_TARGET,
     maxAttempts: 1,
     maxOutputTokens: 2048,
-    maxCostUsd: eligibility.maxCostUsd!,
+    monetaryPolicy: eligibility.monetaryPolicy,
+    ...(eligibility.monetaryPolicy === "capped" ? { maxCostUsd: eligibility.maxCostUsd } : {}),
     preserveToolGrants: true,
     preserveApprovals: true,
     reason: evidence.code,
