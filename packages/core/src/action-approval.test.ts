@@ -755,17 +755,27 @@ describe("watchToolRefusal", () => {
   const rule = (matchKind: string, matchValue: string, effect = "require_approval") =>
     ({ effect, matchKind, matchValue }) as Parameters<typeof watchToolRefusal>[0]["rules"][number];
 
-  it("allows only explicitly declared reads", () => {
+  it("allows a declared read", () => {
     expect(watchToolRefusal({ toolName: "drive_files", readOnly: true, rules: [] })).toBeNull();
   });
 
   it.each(["brain_changed", "gmail_search_threads", "clickbot_tasks", "send_email"])(
-    "refuses missing metadata even for %s",
+    "allows %s without read-only metadata (owner decision 2026-11-01)",
     (toolName) => {
-      expect(watchToolRefusal({ toolName, rules: [] })).toMatch(/can change data/);
-      expect(watchToolRefusal({ toolName, readOnly: false, rules: [] })).toMatch(/can change data/);
+      expect(watchToolRefusal({ toolName, rules: [] })).toBeNull();
+      expect(watchToolRefusal({ toolName, readOnly: false, rules: [] })).toBeNull();
     },
   );
+
+  it("still refuses a write tool that a deny rule blocks", () => {
+    expect(
+      watchToolRefusal({
+        toolName: "send_email",
+        readOnly: false,
+        rules: [rule("tool", "send_email", "deny")],
+      }),
+    ).toMatch(/blocked/);
+  });
 
   it("refuses a read the space's rules would ask about", () => {
     expect(

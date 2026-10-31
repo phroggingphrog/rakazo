@@ -110,7 +110,11 @@ export function connectorToolRequiresApproval(toolName: string, readOnly?: boole
   return !READ_ONLY_CONNECTOR_PATTERN.test(toolName);
 }
 
-/** Unattended watches require explicit read-only metadata and must respect approval rules. */
+/**
+ * Owner decision 2026-11-01: a change trigger may run a tool that writes, so read-only metadata
+ * is no longer required. An explicit deny rule still blocks it; a read-only tool must also pass
+ * the space's approval rules, while a write tool is allowed because the owner chose it here.
+ */
 export function watchToolRefusal(input: {
   toolName: string;
   readOnly?: boolean;
@@ -118,9 +122,6 @@ export function watchToolRefusal(input: {
   rules: ActionApprovalRule[];
 }): string | null {
   const { toolName, readOnly } = input;
-  if (readOnly !== true) {
-    return `${toolName} can change data, so a change trigger can't run it. Pick a read-only tool.`;
-  }
   const decision = resolveActionApprovalDetail({
     toolName,
     connectorKind: input.connectorKind,
@@ -128,7 +129,7 @@ export function watchToolRefusal(input: {
     rules: input.rules,
   }).decision;
   if (decision === "deny") return `${toolName} is blocked, so a change trigger can't run it.`;
-  if (decision === "ask") {
+  if (decision === "ask" && readOnly === true) {
     return `${toolName} needs approval under this space's rules, and a change check cannot ask.`;
   }
   return null;
