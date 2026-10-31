@@ -1,7 +1,12 @@
 import * as z from "zod";
 
 export type McpImportTransport = "stdio" | "streamable_http" | "sse";
-export type McpImportAuth = "none" | "environment_reference" | "static_credential" | "oauth";
+export type McpImportAuth =
+  | "none"
+  | "environment_reference"
+  | "static_credential"
+  | "oauth"
+  | "oauth_google";
 
 export const ImportedHarnessMcpServerSchema = z.object({
   name: z.string().min(1).max(120),
@@ -13,7 +18,7 @@ export const ImportedHarnessMcpServerSchema = z.object({
   endpointIdentity: z.string().optional(),
   endpointHasCredentialPlaceholder: z.boolean().default(false),
   envReferences: z.record(z.string(), z.string().max(4096)).default({}),
-  auth: z.enum(["none", "environment_reference", "static_credential", "oauth"]),
+  auth: z.enum(["none", "environment_reference", "static_credential", "oauth", "oauth_google"]),
   enabled: z.boolean(),
   toolPolicy: z
     .object({ allowedTools: z.array(z.string()).optional(), approval: z.string().optional() })
@@ -40,27 +45,32 @@ function scrubEnv(env: unknown): {
   env: Record<string, string>;
   auth: McpImportAuth;
   fields: string[];
+  references: Record<string, string>;
   values: Record<string, string>;
 } {
   const safe: Record<string, string> = {};
   const values: Record<string, string> = {};
+  const references: Record<string, string> = {};
   const fields: string[] = [];
   if (!env || typeof env !== "object" || Array.isArray(env))
-    return { env: safe, auth: "none", fields, values };
+    return { env: safe, auth: "none", fields, references, values };
   for (const [key, value] of Object.entries(env)) {
     if (typeof value !== "string") continue;
     if (sensitiveKey.test(key) && !/^\$\{[^}]+\}$/.test(value)) {
       fields.push(key);
       values[key] = value;
       safe[key] = "[credential requires protected re-entry]";
-    } else if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value)) safe[key] = value;
-    else safe[key] = "[value not imported]";
+    } else if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value)) {
+      safe[key] = value;
+      references[key] = value;
+    } else safe[key] = "[value not imported]";
   }
   const refs = Object.values(safe).some((v) => /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(v));
   return {
     env: safe,
     auth: fields.length ? "static_credential" : refs ? "environment_reference" : "none",
     fields,
+    references,
     values,
   };
 }
@@ -138,7 +148,18 @@ function normalize(
           auth = "static_credential";
         }
     if (endpointHasCredentials) auth = "static_credential";
-    if (raw.oauth || raw.oauth_config) auth = "oauth";
+    const environmentReferences = Object.fromEntries(
+      Object.entries(scrubbed.env).filter(
+        ([key, value]) =>
+          !scrubbed.fields.includes(key) && /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value),
+      ),
+    );
+    if (Object.keys(environmentReferences).length && auth === "none")
+      auth = "environment_reference";
+    if (raw.oauth || raw.oauth_config)
+      auth = /(?:accounts\.google|oauth2\.googleapis)/i.test(endpoint ?? "")
+        ? "oauth_google"
+        : "oauth";
     if (type === "http" || type === "streamable_http") transport = "streamable_http";
     const enabled = raw.enabled !== false;
     const parsed = ImportedHarnessMcpServerSchema.safeParse({
@@ -154,7 +175,7 @@ function normalize(
       endpointIdentity: endpoint
         ? new URL(endpoint).origin + new URL(endpoint).pathname
         : undefined,
-      envReferences: scrubbed.env,
+      envReferences: scrubbed.references,
       auth,
       enabled,
       toolPolicy: {
@@ -171,12 +192,7 @@ function normalize(
       environmentValues: scrubbed.values,
       credentialHeaders,
       headerValues: Object.fromEntries(
-        credentialHeaders.map((key) => [
-          key,
-          sensitiveKey.test(key)
-            ? "[credential requires protected reconnection]"
-            : "[non-credential header value not imported]",
-        ]),
+        credentialHeaders.map((key) => [key, "[credential requires protected reconnection]"]),
       ),
       status: unsupported.length ? "unsupported" : enabled ? "ready" : "disabled",
       unsupported,

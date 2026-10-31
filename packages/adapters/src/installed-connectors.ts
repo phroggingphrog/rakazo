@@ -10,6 +10,9 @@ import type {
 import type { PrismaClient } from "@rakazo/db";
 import { availableInSpace, itemSecretIn } from "@rakazo/db";
 import { parse as parseYaml } from "yaml";
+
+export { parseYaml as parseYamlConfiguration };
+
 import { z } from "zod";
 import {
   AuthSchema,

@@ -17,6 +17,7 @@ import {
   importPiMcpConfig,
   mcpServerHealthDto,
   mcpStdioRefusal,
+  parseYamlConfiguration,
   recordMcpServerHealth,
 } from "@rakazo/adapters";
 import type { Actor, McpServer, McpServerConfigInput } from "@rakazo/contracts";
@@ -216,6 +217,205 @@ export function mcpCredentialRecords(
   return parsed.headers && parsed.env ? { headers: parsed.headers, env: parsed.env } : null;
 }
 
+async function readHermesMcpInventory(
+  userDevices: UserDeviceGateway,
+  userId: string,
+  deviceId: string,
+  revealCredentials = false,
+): Promise<{
+  servers: import("@rakazo/adapters").ImportedHarnessMcpServer[];
+  unavailable: string[];
+}> {
+  const path = ".hermes/config.yaml";
+  try {
+    for await (const frame of userDevices.request(
+      userId,
+      { method: "mcpInventory", botId: `mcp-import-${userId}`, path },
+      AbortSignal.timeout(15000),
+      deviceId,
+    )) {
+      if (
+        !frame ||
+        typeof frame !== "object" ||
+        !("content" in frame) ||
+        typeof frame.content !== "string"
+      )
+        continue;
+      return normalizeHermesMcpInventory(frame.content, { includeCredentials: revealCredentials });
+    }
+  } catch {
+    return {
+      servers: [],
+      unavailable: ["Hermes MCP settings could not be read from the paired host"],
+    };
+  }
+  return {
+    servers: [],
+    unavailable: ["Hermes MCP settings were not available on the paired host"],
+  };
+}
+export function normalizeHermesMcpInventory(
+  source: string,
+  options: { includeCredentials?: boolean } = {},
+): {
+  servers: import("@rakazo/adapters").ImportedHarnessMcpServer[];
+  unavailable: string[];
+} {
+  let parsed: unknown;
+  try {
+    parsed = parseHermesYaml(source);
+  } catch {
+    return { servers: [], unavailable: ["Hermes MCP settings have unsupported YAML syntax"] };
+  }
+  const root = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  const config =
+    root.mcp_servers && typeof root.mcp_servers === "object" && !Array.isArray(root.mcp_servers)
+      ? (root.mcp_servers as Record<string, Record<string, unknown>>)
+      : {};
+  const servers: import("@rakazo/adapters").ImportedHarnessMcpServer[] = Object.entries(config).map(
+    ([name, item]) => {
+      const command = typeof item.command === "string" ? item.command : undefined;
+      const url = typeof item.url === "string" ? item.url : undefined;
+      const status = item.enabled === false ? "disabled" : "ready";
+      const transport: "stdio" | "sse" | "streamable_http" = command
+        ? "stdio"
+        : url?.includes("/sse")
+          ? "sse"
+          : "streamable_http";
+      const env =
+        item.env && typeof item.env === "object" && !Array.isArray(item.env)
+          ? (item.env as Record<string, unknown>)
+          : {};
+      const headers =
+        item.headers && typeof item.headers === "object" && !Array.isArray(item.headers)
+          ? (item.headers as Record<string, unknown>)
+          : {};
+      const envFields = Object.keys(env).filter(
+        (key) =>
+          /token|secret|password|key|credential/i.test(key) &&
+          typeof env[key] === "string" &&
+          !/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(env[key] as string),
+      );
+      const malformed =
+        (item.url !== undefined && typeof item.url !== "string") ||
+        (item.command !== undefined && typeof item.command !== "string") ||
+        (item.env !== undefined &&
+          (!item.env ||
+            typeof item.env !== "object" ||
+            Array.isArray(item.env) ||
+            Object.values(item.env as Record<string, unknown>).some(
+              (v) => typeof v !== "string",
+            ))) ||
+        (item.headers !== undefined &&
+          (!item.headers ||
+            typeof item.headers !== "object" ||
+            Array.isArray(item.headers) ||
+            Object.values(item.headers as Record<string, unknown>).some(
+              (v) => typeof v !== "string",
+            ))) ||
+        (item.args !== undefined &&
+          (!Array.isArray(item.args) || item.args.some((v) => typeof v !== "string")));
+      const credentialHeaders = Object.keys(headers).filter((key) =>
+        /authorization|token|secret|key/i.test(key),
+      );
+      const oauth = item.auth === "oauth";
+      const referenceInUrl = typeof url === "string" && /\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(url);
+      const headerReferences = Object.entries(headers).flatMap(([key, value]) => {
+        if (typeof value !== "string") return [];
+        const matches = [...value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)];
+        return matches.map((match) => [key, match[1]!] as const);
+      });
+      const credentialEnvFields = envFields.filter(
+        (key) => !/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(env[key] as string),
+      );
+      const credentialHeaderFields = credentialHeaders.filter(
+        (key) => !headerReferences.some(([referenceKey]) => referenceKey === key),
+      );
+      const environmentReferences = Object.fromEntries([
+        ...Object.entries(env).flatMap(([key, value]) =>
+          typeof value === "string" && /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value)
+            ? [[key, value] as const]
+            : [],
+        ),
+        ...headerReferences,
+      ]);
+      let safeUrl: string | undefined;
+      let endpointHasCredentialPlaceholder = false;
+      if (url && !referenceInUrl) {
+        try {
+          const parsedUrl = new URL(url);
+          const loopback =
+            parsedUrl.protocol === "http:" &&
+            ["localhost", "127.0.0.1", "::1"].includes(parsedUrl.hostname);
+          endpointHasCredentialPlaceholder =
+            Boolean(parsedUrl.username || parsedUrl.password) ||
+            [...parsedUrl.searchParams.keys()].some((key) =>
+              /token|secret|password|key|credential|authorization/i.test(key),
+            );
+          if (!endpointHasCredentialPlaceholder && (parsedUrl.protocol === "https:" || loopback))
+            safeUrl = parsedUrl.toString();
+        } catch {
+          safeUrl = undefined;
+        }
+      }
+      return {
+        name,
+        transport,
+        command,
+        args: Array.isArray(item.args)
+          ? item.args.filter((v): v is string => typeof v === "string")
+          : [],
+        endpoint: safeUrl,
+        endpointIdentity: safeUrl ? new URL(safeUrl).origin + new URL(safeUrl).pathname : undefined,
+        endpointHasCredentialPlaceholder: endpointHasCredentialPlaceholder || referenceInUrl,
+        envReferences: environmentReferences,
+        auth: oauth
+          ? "oauth"
+          : credentialEnvFields.length || credentialHeaderFields.length
+            ? "static_credential"
+            : Object.keys(environmentReferences).length
+              ? "environment_reference"
+              : "none",
+        enabled: status === "ready",
+        status: malformed || (!command && !safeUrl) ? "unsupported" : status,
+        unsupported: malformed
+          ? ["Hermes MCP entry has invalid field types"]
+          : endpointHasCredentialPlaceholder || referenceInUrl
+            ? ["Hermes URL credentials or references require protected reconnect"]
+            : !command && !safeUrl
+              ? ["Hermes URL is unresolved or unsupported"]
+              : [],
+        provenance: { harness: "Hermes", location: "Hermes settings" },
+        toolPolicy: {
+          allowedTools: Array.isArray(item.tools) ? (item.tools as string[]) : undefined,
+        },
+        credentialFields: [...credentialEnvFields, ...credentialHeaderFields],
+        environmentFields: [...credentialEnvFields, ...Object.keys(environmentReferences)],
+        credentialHeaders,
+        environmentValues: Object.fromEntries(
+          credentialEnvFields.map((key) => [
+            key,
+            options.includeCredentials
+              ? (env[key] as string)
+              : "[credential requires protected reconnection]",
+          ]),
+        ),
+        headerValues: Object.fromEntries(
+          credentialHeaders.map((key) => [
+            key,
+            !credentialHeaderFields.includes(key) || !options.includeCredentials
+              ? "[credential requires protected reconnection]"
+              : (headers[key] as string),
+          ]),
+        ),
+      };
+    },
+  );
+  return { servers, unavailable: [] };
+}
+function parseHermesYaml(source: string): unknown {
+  return parseYamlConfiguration(source, { maxAliasCount: 0, uniqueKeys: true });
+}
 export function createMcpServers(
   deps: RouterDeps,
   onboardingDeps: Parameters<typeof dismissMcpServerApprovals>[0],
@@ -378,6 +578,12 @@ export function createMcpServers(
         throw new ORPCError("BAD_REQUEST", { message: "Connect a paired Rakazo computer first" });
       const imported: string[] = [];
       const skipped: string[] = [];
+      const hermesInventory = await readHermesMcpInventory(
+        userDevices,
+        actor.userId,
+        device.deviceId,
+        true,
+      );
       const candidates = new Map<
         string,
         { server: import("@rakazo/adapters").ImportedHarnessMcpServer; id: string; harness: string }
@@ -430,8 +636,12 @@ export function createMcpServers(
                 skipped.push(`${id} (OAuth authorization needs renewal)`);
                 continue;
               }
-              if (server.auth === "static_credential" && server.environmentFields.length > 0) {
-                skipped.push(`${id} (environment credentials need protected reconnection)`);
+              if (
+                server.auth === "static_credential" &&
+                server.environmentFields.length > 0 &&
+                Object.keys(server.environmentValues).length === 0
+              ) {
+                skipped.push(`${id} (credential needs protected reconnection)`);
                 continue;
               }
               if (server.endpointHasCredentialPlaceholder) {
@@ -453,6 +663,196 @@ export function createMcpServers(
           }
         }
       }
+      skipped.push(...hermesInventory.unavailable);
+      for (const server of hermesInventory.servers) {
+        const id = `Hermes:${server.name}`;
+        const identity = [
+          server.name.toLowerCase(),
+          server.transport,
+          server.command ?? server.endpoint ?? "",
+          server.credentialFields.join(","),
+        ].join("\0");
+        if (candidates.has(identity)) {
+          skipped.push(`${id} (duplicate of another harness connection)`);
+          continue;
+        }
+        if (server.transport === "stdio") {
+          const config = {
+            transport: "stdio" as const,
+            slug: deriveMcpSlug(`hermes-${server.name}`),
+            name: server.name,
+            description:
+              "Imported from Hermes; disabled until command isolation and allowlist checks pass",
+            enabled: false,
+            command: server.command ?? "",
+            args: server.args,
+            env: {},
+            secret: undefined,
+          };
+          try {
+            const existing = await deps.prisma.mcpServer.findFirst({
+              where: {
+                userId: actor.userId,
+                transport: "stdio",
+                command: config.command,
+                allSpaces: true,
+              },
+            });
+            if (existing) skipped.push(`${id} (already in catalog)`);
+            else {
+              await deps.prisma.$transaction((tx) =>
+                insertMcpServer(tx, actor, config, null, { everywhere: true }),
+              );
+              imported.push(`${id} (disabled; requires isolation and command policy)`);
+            }
+          } catch {
+            skipped.push(`${id} (disabled STDIO entry could not be represented)`);
+          }
+          continue;
+        }
+        if (server.endpointHasCredentialPlaceholder) {
+          const config = {
+            transport: server.transport,
+            slug: deriveMcpSlug(`hermes-${server.name}`),
+            name: server.name,
+            description: "Imported from Hermes; URL credential requires protected reconnect",
+            enabled: false,
+            endpoint: server.endpoint ?? "https://invalid.invalid",
+            headers: {},
+            secret: undefined,
+            oauthClient: null,
+          };
+          try {
+            const existing = await deps.prisma.mcpServer.findFirst({
+              where: {
+                userId: actor.userId,
+                transport: server.transport,
+                endpoint: server.endpoint ?? null,
+                allSpaces: true,
+              },
+            });
+            if (existing) skipped.push(`${id} (already in catalog)`);
+            else {
+              const stored = await prepareMcpServer(actor, config);
+              await deps.prisma.$transaction((tx) =>
+                insertMcpServer(tx, actor, config, stored, { everywhere: true }),
+              );
+              imported.push(`${id} (disabled; URL credential needs protected reconnect)`);
+            }
+          } catch {
+            skipped.push(`${id} (URL credential could not be represented safely)`);
+          }
+          continue;
+        }
+        if (server.auth === "environment_reference") {
+          const disabledConfig = {
+            transport: server.transport,
+            slug: deriveMcpSlug(`hermes-${server.name}`),
+            name: server.name,
+            description: "Imported from Hermes; environment reference needs protected reconnect",
+            enabled: false,
+            endpoint: server.endpoint ?? "https://invalid.invalid",
+            headers: {},
+            secret: undefined,
+            oauthClient: null,
+          };
+          try {
+            const existing = await deps.prisma.mcpServer.findFirst({
+              where: {
+                userId: actor.userId,
+                transport: server.transport,
+                endpoint: server.endpoint ?? null,
+                allSpaces: true,
+              },
+            });
+            if (existing) skipped.push(`${id} (already in catalog)`);
+            else {
+              const stored = await prepareMcpServer(actor, disabledConfig);
+              await deps.prisma.$transaction((tx) =>
+                insertMcpServer(tx, actor, disabledConfig, stored, { everywhere: true }),
+              );
+              imported.push(`${id} (disabled; environment reference needs protected reconnect)`);
+            }
+          } catch {
+            skipped.push(`${id} (environment reference could not be represented safely)`);
+          }
+          continue;
+        }
+        if (server.status === "unsupported") {
+          skipped.push(`${id} (unsupported: ${server.unsupported.join("; ")})`);
+          continue;
+        }
+        if (server.auth === "oauth_google" || server.auth === "oauth") {
+          if (!server.enabled) {
+            const disabledConfig = {
+              transport: server.transport,
+              slug: deriveMcpSlug(`hermes-${server.name}`),
+              name: server.name,
+              description: "Imported from Hermes",
+              enabled: false,
+              endpoint: server.endpoint ?? "https://invalid.invalid",
+              headers: {},
+              secret: undefined,
+              oauthClient: null,
+            };
+            try {
+              const existing = await deps.prisma.mcpServer.findFirst({
+                where: {
+                  userId: actor.userId,
+                  transport: server.transport,
+                  endpoint: server.endpoint ?? null,
+                  allSpaces: true,
+                },
+              });
+              if (existing) skipped.push(`${id} (already in catalog)`);
+              else {
+                const stored = await prepareMcpServer(actor, disabledConfig);
+                await deps.prisma.$transaction((tx) =>
+                  insertMcpServer(tx, actor, disabledConfig, stored, { everywhere: true }),
+                );
+                imported.push(`${id} (disabled)`);
+              }
+            } catch {
+              skipped.push(`${id} (disabled OAuth entry unavailable)`);
+            }
+            continue;
+          }
+          const config = {
+            transport: server.transport,
+            slug: deriveMcpSlug(`hermes-${server.name}`),
+            name: server.name,
+            description: "Imported from Hermes",
+            enabled: false,
+            endpoint: server.endpoint ?? "https://invalid.invalid",
+            headers: {},
+            secret: undefined,
+            oauthClient: null,
+          };
+          try {
+            const existing = await deps.prisma.mcpServer.findFirst({
+              where: {
+                userId: actor.userId,
+                transport: server.transport,
+                endpoint: server.endpoint ?? null,
+                allSpaces: true,
+              },
+            });
+            if (existing) {
+              skipped.push(`${id} (already in catalog)`);
+              continue;
+            }
+            const stored = await prepareMcpServer(actor, config);
+            await deps.prisma.$transaction((tx) =>
+              insertMcpServer(tx, actor, config, stored, { everywhere: true }),
+            );
+            imported.push(`${id} (disabled; OAuth reconnect required)`);
+          } catch {
+            skipped.push(`${id} (OAuth server could not be imported)`);
+          }
+          continue;
+        }
+        candidates.set(identity, { server, id, harness: "Hermes" });
+      }
       for (const { server, id, harness } of candidates.values()) {
         const slug = deriveMcpSlug(
           `${server.name.toLowerCase()}-${createHash("sha256")
@@ -463,6 +863,10 @@ export function createMcpServers(
             .slice(0, 8)}`,
         );
         if (server.transport === "stdio") {
+          if (harness === "Hermes") {
+            skipped.push(`${id} (Hermes STDIO already exists in disabled form)`);
+            continue;
+          }
           const stdioSlug = deriveMcpSlug(`${harness}-${server.name}`);
           const stdioConfig = {
             transport: "stdio" as const,
@@ -476,7 +880,7 @@ export function createMcpServers(
             secret: undefined,
           };
           try {
-            await deps.prisma.$transaction(async (tx) => {
+            const row = await deps.prisma.$transaction(async (tx) => {
               const existing = await tx.mcpServer.findFirst({
                 where: {
                   userId: actor.userId,
@@ -485,40 +889,18 @@ export function createMcpServers(
                   allSpaces: true,
                 },
               });
-              if (
-                !existing &&
-                deps.env.mcpStdioEnabled &&
-                mcpStdioRefusal(stdioConfig.command, mcpStdioPolicy(deps)) === null
-              ) {
-                await assertMcpStdioCommand(stdioConfig.command, actor, deps);
-                return insertMcpServer(tx, actor, stdioConfig, null, { everywhere: true });
-              }
-              return existing;
+              if (existing) return existing;
+              return insertMcpServer(tx, actor, stdioConfig, null, { everywhere: true });
             });
-            const commandAllowed = Boolean(
-              deps.env.mcpStdioEnabled &&
-                mcpStdioRefusal(stdioConfig.command, mcpStdioPolicy(deps)) === null,
-            );
-            imported.push(
-              commandAllowed
-                ? `${id} (disabled pending explicit enable)`
-                : `${id} (disabled; deployment command allowlist required)`,
-            );
+            if (row.enabled) throw new Error("STDIO import must remain disabled");
+            imported.push(`${id} (disabled; requires isolation and command policy)`);
           } catch {
             skipped.push(`${id} (unavailable; command needs deployment allowlist)`);
           }
           continue;
         }
-        if (server.endpointHasCredentialPlaceholder) {
-          skipped.push(`${id} (credential needs protected reconnection)`);
-          continue;
-        }
         if (server.status === "unsupported") {
           skipped.push(`${id} (unsupported: ${server.unsupported.join("; ")})`);
-          continue;
-        }
-        if (server.auth === "oauth") {
-          skipped.push(`${id} (OAuth authorization needs renewal in the protected UI)`);
           continue;
         }
         if (
@@ -584,7 +966,11 @@ export function createMcpServers(
                 ...((material.env as Record<string, string>) ?? {}),
                 ...protectedEnv,
               };
-              const protectedHeaders = server.headerValues;
+              const protectedHeaders = Object.fromEntries(
+                Object.entries(server.headerValues).filter(([key]) =>
+                  server.credentialHeaders.includes(key),
+                ),
+              );
               const encrypted = await deps.secrets.put(
                 JSON.stringify({
                   ...material,

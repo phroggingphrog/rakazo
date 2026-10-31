@@ -64,6 +64,21 @@ describe("harness MCP import", () => {
     expect(deduplicateImportedMcpServers([one, same, other])).toHaveLength(2);
   });
 
+  it("classifies a remote Google OAuth provider as Google OAuth", () => {
+    const result = importPiMcpConfig(
+      JSON.stringify({
+        mcpServers: {
+          google: { type: "http", url: "https://accounts.google.com/mcp", oauth: {} },
+        },
+      }),
+    );
+    expect(result.servers[0]).toMatchObject({
+      auth: "oauth_google",
+      transport: "streamable_http",
+      endpoint: "https://accounts.google.com/mcp",
+    });
+  });
+
   it("imports Codex TOML and retains server enablement and approval policy", () => {
     const result = importCodexMcpConfig(
       '[mcp_servers.sample]\nurl = "https://mcp.example.test/mcp"\nenabled = false\n[mcp_servers.sample.tools.write]\napproval_mode = "approve"',

@@ -73,6 +73,8 @@ export function createHostComputerRunner(options: { root: string }) {
           ".dsh/mcp.json",
           ".config/omp/mcp.json",
           ".config/opencode/opencode.json",
+          ".hermes/config.yaml",
+          "hermes/config.yaml",
         ]);
         if (!allowed.has(input.path)) throw new Error("MCP inventory path is not allowed");
         try {

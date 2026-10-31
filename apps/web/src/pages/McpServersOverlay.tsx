@@ -130,7 +130,8 @@ export function McpServersOverlay({
       transport: "stdio" | "streamable_http" | "sse";
       enabled: boolean;
       status: "ready" | "disabled" | "unsupported";
-      auth: "none" | "environment_reference" | "static_credential" | "oauth";
+      auth: "none" | "environment_reference" | "static_credential" | "oauth" | "oauth_google";
+      credentialHeaders: string[];
       provenance: { harness: string; location: string };
       unsupported: string[];
     }>;
@@ -611,7 +612,8 @@ export function McpServersOverlay({
                           server.status !== "ready" ||
                           server.transport === "stdio" ||
                           server.auth === "static_credential" ||
-                          server.auth === "oauth"
+                          server.auth === "oauth" ||
+                          server.auth === "oauth_google"
                         }
                         checked={importedNames.includes(server.name)}
                         onChange={(event) =>

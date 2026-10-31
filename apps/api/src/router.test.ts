@@ -38,6 +38,7 @@ import { AnswerTooLongError, runProviderTransaction } from "@rakazo/db";
 import { createLogger, createTestSink, installLogger } from "@rakazo/logging";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mainRole, withModelRoles } from "../../../packages/adapters/src/testing/model-roles.js";
+import { normalizeHermesMcpInventory } from "./mcp-servers.js";
 import type { RouterDeps } from "./router.js";
 import {
   botIntroPrompt,
@@ -63,6 +64,45 @@ async function handle(handler: RouterHandler, ...args: Parameters<RouterHandler[
   if (!response) throw new Error("no response");
   return response;
 }
+
+describe("Hermes MCP settings import", () => {
+  it("parses all fixture entries without exposing credential values and keeps disabled STDIO disabled", () => {
+    const source = `mcp_servers:\n  remote:\n    url: https://mcp.example.test/mcp\n    headers:\n      Authorization: Bearer fixture-secret\n    enabled: true\n  disabled:\n    url: https://disabled.example.test/mcp\n    enabled: false\n  cloudflare:\n    url: https://mcp.cloudflare.com/mcp\n    auth: oauth\n    enabled: false\n  unsafe-local:\n    command: /usr/bin/env\n    args:\n      - bash\n    enabled: true\n`;
+    const result = normalizeHermesMcpInventory(source);
+    expect(result.unavailable).toEqual([]);
+    expect(result.servers).toHaveLength(4);
+    expect(
+      result.servers.map(({ name, status, transport, auth }) => ({
+        name,
+        status,
+        transport,
+        auth,
+      })),
+    ).toEqual([
+      { name: "remote", status: "ready", transport: "streamable_http", auth: "static_credential" },
+      { name: "disabled", status: "disabled", transport: "streamable_http", auth: "none" },
+      { name: "cloudflare", status: "disabled", transport: "streamable_http", auth: "oauth" },
+      { name: "unsafe-local", status: "ready", transport: "stdio", auth: "none" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("fixture-secret");
+    expect(result.servers[0]?.headerValues.Authorization).toBe(
+      "[credential requires protected reconnection]",
+    );
+    const protectedPreview = normalizeHermesMcpInventory(source, { includeCredentials: true });
+    expect(protectedPreview.servers[0]?.headerValues.Authorization).toBe("Bearer fixture-secret");
+  });
+  it("rejects invalid field shapes and does not resolve URL credentials", () => {
+    const result = normalizeHermesMcpInventory(
+      `mcp_servers:\n  malformed:\n    headers: [not, a, map]\n    enabled: true\n  credential-url:\n    url: https://example.test/mcp?access_token=do-not-leak\n    enabled: true\n`,
+    );
+    expect(result.servers[0]).toMatchObject({ status: "unsupported" });
+    expect(result.servers[1]).toMatchObject({
+      endpointHasCredentialPlaceholder: true,
+      status: "unsupported",
+    });
+    expect(JSON.stringify(result)).not.toContain("do-not-leak");
+  });
+});
 
 describe("MCP bot tool assignments", () => {
   it("assigns one server to bot A and enforces denial, grant change, and cross-space isolation", async () => {
