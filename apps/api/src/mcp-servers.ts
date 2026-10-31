@@ -617,9 +617,15 @@ export function createMcpServers(
             server.environmentFields.includes(key),
           ),
         );
-        const secret = Object.keys(protectedEnv).length
-          ? JSON.stringify({ env: protectedEnv })
-          : undefined;
+        const protectedHeaders = Object.fromEntries(
+          Object.entries(server.headerValues).filter(([key]) =>
+            server.credentialHeaders.includes(key),
+          ),
+        );
+        const secret =
+          Object.keys(protectedEnv).length || Object.keys(protectedHeaders).length
+            ? JSON.stringify({ env: protectedEnv, headers: protectedHeaders })
+            : undefined;
         const config = {
           transport: server.transport,
           slug,
