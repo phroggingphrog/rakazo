@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { AdapterContext, ArtifactPut } from "@rakazo/adapter-kit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { LocalArtifactStore } from "./artifacts.js";
 import type { McpOutputLedger, McpOutputMetadata, McpOutputScope } from "./mcp-output-store.js";
 import { MCP_OUTPUT_LIMITS, McpOutputStore } from "./mcp-output-store.js";
 
@@ -78,6 +82,11 @@ function harness() {
   return { artifacts, ledger, metadata };
 }
 const signingKey = new Uint8Array(32).fill(7);
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 describe("McpOutputStore", () => {
   it("stores bounded output and pages it with a digest and valid UTF-8 boundaries", async () => {
@@ -144,6 +153,70 @@ describe("McpOutputStore", () => {
     expect(await store.sweepExpired(context(), 1)).toBe(1);
     expect(h.metadata.size).toBe(0);
     expect(h.artifacts.records.size).toBe(0);
+  });
+
+  it("sweeps 256 expired files within the worker's 30-second timeout", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "rakazo-mcp-output-sweep-"));
+    tempDirs.push(root);
+    const artifacts = new LocalArtifactStore(root);
+    const metadata = new Map<string, McpOutputMetadata>();
+    const ledger: McpOutputLedger = {
+      ...harness().ledger,
+      async createUnderRunLock(record) { metadata.set(record.id, record); },
+      async findOwned(id) { return metadata.get(id) ?? null; },
+      async listExpired(now, limit) {
+        return [...metadata.values()].filter((row) => row.expiresAt <= now).slice(0, limit);
+      },
+      async delete(id) { metadata.delete(id); },
+    };
+    const store = new McpOutputStore(artifacts, ledger, signingKey, () => 100);
+    const sweepContext = context({ spaceId: "system", userId: "system" });
+    for (let i = 0; i < 256; i++) {
+      await store.store(`payload-${i}`, { ...scope, runId: `run-${i}` }, context());
+      const row = [...metadata.values()][i]!;
+      metadata.set(row.id, { ...row, expiresAt: new Date(100) });
+    }
+
+    const started = performance.now();
+    expect(await store.sweepExpired(sweepContext)).toBe(256);
+    const elapsedMs = performance.now() - started;
+    console.info(`256 local artifact sweep: ${elapsedMs.toFixed(1)} ms (${(256 / (elapsedMs / 1000)).toFixed(1)} records/s)`);
+    expect(elapsedMs).toBeLessThan(30_000);
+    expect(metadata.size).toBe(0);
+    expect(await artifacts.fileCounts()).toMatchObject({ sealed: 0, plaintext: 0, abandoned: 0 });
+    expect(256 / (elapsedMs / 1000)).toBeGreaterThan(256 / 30);
+  });
+
+  it("retains rows when file removal fails and retries them on the next sweep", async () => {
+    const h = harness();
+    const store = new McpOutputStore(h.artifacts, h.ledger, signingKey, () => 100);
+    await store.store("expired", scope, context());
+    const row = [...h.metadata.values()][0]!;
+    h.metadata.set(row.id, { ...row, expiresAt: new Date(100) });
+    const remove = h.artifacts.remove;
+    remove.mockRejectedValueOnce(Error("temporary file failure"));
+
+    expect(await store.sweepExpired(context())).toBe(0);
+    expect(h.metadata.size).toBe(1);
+    expect(await store.sweepExpired(context())).toBe(1);
+    expect(h.metadata.size).toBe(0);
+    expect(h.artifacts.records.size).toBe(0);
+  });
+
+  it("stops a sweep when cancelled and leaves unprocessed rows for retry", async () => {
+    const h = harness();
+    const store = new McpOutputStore(h.artifacts, h.ledger, signingKey, () => 100);
+    await store.store("one", { ...scope, runId: "run-1" }, context());
+    await store.store("two", { ...scope, runId: "run-2" }, context());
+    for (const row of h.metadata.values()) h.metadata.set(row.id, { ...row, expiresAt: new Date(100) });
+    const controller = new AbortController();
+    h.artifacts.remove.mockImplementationOnce(async (id) => {
+      h.artifacts.records.delete(id);
+      controller.abort();
+    });
+
+    await expect(store.sweepExpired(context({ signal: controller.signal }))).rejects.toThrow();
+    expect(h.metadata.size).toBe(2);
   });
 
   it("enforces the durable per-run quota before accepting another artifact", async () => {

@@ -300,17 +300,20 @@ export class McpOutputStore {
   }
 
   /** Removes at most `limit` expired rows. The ledger must run with trusted system DB access. */
-  async sweepExpired(context: AdapterContext, limit = 32): Promise<number> {
+  async sweepExpired(context: AdapterContext, limit = 256): Promise<number> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256)
       throw new Error("Invalid MCP output sweep limit");
     const expired = await this.ledger.listExpired(new Date(this.now()), limit);
     let cleaned = 0;
     for (const row of expired) {
+      context.signal.throwIfAborted();
       try {
         await this.artifacts.remove(row.storageId, artifactContext(context, row));
+        context.signal.throwIfAborted();
         await this.ledger.delete(row.id);
         cleaned++;
-      } catch {
+      } catch (error) {
+        context.signal.throwIfAborted();
         // Keep the ledger row when artifact removal fails. A later sweep can retry safely.
       }
     }

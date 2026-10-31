@@ -18,8 +18,10 @@ CREATE INDEX "mcp_tool_outputs_scope_expiry_idx" ON "mcp_tool_outputs"("spaceId"
 CREATE INDEX "mcp_tool_outputs_expiresAt_idx" ON "mcp_tool_outputs"("expiresAt");
 ALTER TABLE "mcp_tool_outputs" ENABLE ROW LEVEL SECURITY;
 CREATE POLICY mcp_tool_outputs_tenant ON "mcp_tool_outputs"
-  USING ("spaceId" = NULLIF(current_setting('app.space_id', true), ''))
-  WITH CHECK ("spaceId" = NULLIF(current_setting('app.space_id', true), ''));
+  USING ("spaceId" = NULLIF(current_setting('app.space_id', true), '') AND "userId" = NULLIF(current_setting('app.user_id', true), ''))
+  WITH CHECK ("spaceId" = NULLIF(current_setting('app.space_id', true), '') AND "userId" = NULLIF(current_setting('app.user_id', true), ''));
 CREATE POLICY mcp_tool_outputs_system ON "mcp_tool_outputs"
   USING (current_setting('app.rls_bypass', true) = 'on')
   WITH CHECK (current_setting('app.rls_bypass', true) = 'on');
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON "mcp_tool_outputs" TO rakazo_app;
