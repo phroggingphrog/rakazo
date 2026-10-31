@@ -612,6 +612,14 @@ export function createMcpServers(
           skipped.push(`${id} (OAuth authorization needs renewal in the protected UI)`);
           continue;
         }
+        if (
+          server.auth === "static_credential" &&
+          server.credentialHeaders.length === 0 &&
+          server.environmentFields.length === 0
+        ) {
+          skipped.push(`${id} (credential requires protected reconnection)`);
+          continue;
+        }
         const protectedEnv = Object.fromEntries(
           Object.entries(server.environmentValues).filter(([key]) =>
             server.environmentFields.includes(key),
