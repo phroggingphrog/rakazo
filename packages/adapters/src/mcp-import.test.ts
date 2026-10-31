@@ -45,6 +45,25 @@ describe("harness MCP import", () => {
     expect(redactMcpImportPreview(result)).not.toContain("do-not-leak");
   });
 
+  it("deduplicates endpoints across harnesses but preserves different identities", () => {
+    const one = importPiMcpConfig(
+      JSON.stringify({
+        mcpServers: { wiki: { type: "http", url: "https://mcp.example.test/mcp" } },
+      }),
+    ).servers[0]!;
+    const same = {
+      ...one,
+      provenance: { harness: "Claude Code", location: "claude:.claude.json" },
+    };
+    const other = {
+      ...same,
+      name: "wiki-personal",
+      endpoint: "https://mcp.example.test/personal",
+      endpointIdentity: "https://mcp.example.test/personal",
+    };
+    expect(deduplicateImportedMcpServers([one, same, other])).toHaveLength(2);
+  });
+
   it("imports Codex TOML and retains server enablement and approval policy", () => {
     const result = importCodexMcpConfig(
       '[mcp_servers.sample]\nurl = "https://mcp.example.test/mcp"\nenabled = false\n[mcp_servers.sample.tools.write]\napproval_mode = "approve"',

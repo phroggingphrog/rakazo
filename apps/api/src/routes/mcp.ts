@@ -81,6 +81,7 @@ export function mcpRoutes(ctx: RouterContext) {
     probeMcpServer,
     beginMcpProbe,
     removeMcpServerInTransaction,
+    importHarnessMcpInventory,
     prepareMcpServer,
     insertMcpServer,
     announceMcpServer,
@@ -380,6 +381,9 @@ export function mcpRoutes(ctx: RouterContext) {
       }),
     },
     mcp: {
+      importInstalled: authed.mcp.importInstalled.handler(async ({ context }) =>
+        importHarnessMcpInventory(context.actor),
+      ),
       importPreview: authed.mcp.importPreview.handler(async ({ input }) => {
         const location = `${input.harness}:configuration`;
         const result = (
@@ -394,12 +398,22 @@ export function mcpRoutes(ctx: RouterContext) {
         )[input.harness](input.configuration, location);
         return {
           servers: result.servers.map(
-            ({ name, transport, enabled, status, auth, provenance, unsupported }) => ({
+            ({
               name,
               transport,
               enabled,
               status,
               auth,
+              credentialHeaders,
+              provenance,
+              unsupported,
+            }) => ({
+              name,
+              transport,
+              enabled,
+              status,
+              auth,
+              credentialHeaders,
               provenance: { harness: provenance.harness, location: provenance.location },
               unsupported,
             }),

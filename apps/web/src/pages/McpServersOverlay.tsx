@@ -137,6 +137,7 @@ export function McpServersOverlay({
     errors: string[];
   } | null>(null);
   const [importedNames, setImportedNames] = useState<string[]>([]);
+  const [discovering, setDiscovering] = useState(false);
   const queries = useSpaceQueries();
   const queryClient = useQueryClient();
   const serversOptions = queries.mcp.servers.list.queryOptions();
@@ -528,6 +529,28 @@ export function McpServersOverlay({
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={discovering}
+                  onClick={async () => {
+                    setDiscovering(true);
+                    try {
+                      const result = await rpc.mcp.importInstalled({});
+                      setError(
+                        [
+                          ...result.discovered.map((name) => `Added ${name}`),
+                          ...result.unavailable.map((message) => `Skipped ${message}`),
+                        ].join(" · ") || t`No supported connections found`,
+                      );
+                      await refresh();
+                    } catch (err) {
+                      setError(errorText(err, t`Could not discover connections`));
+                    } finally {
+                      setDiscovering(false);
+                    }
+                  }}
+                >
+                  <Trans>Discover installed connections</Trans>
+                </Button>
                 <select
                   aria-label={t`Configuration source`}
                   className="h-10 rounded-md border border-border bg-background px-3"

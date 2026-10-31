@@ -64,6 +64,27 @@ export function createHostComputerRunner(options: { root: string }) {
       case "environment":
         yield await provider.environment();
         break;
+      case "mcpInventory": {
+        if (!enabled) throw new Error("Host access is disabled");
+        const allowed = new Set([
+          ".pi/agent/mcp.json",
+          ".claude.json",
+          ".codex/config.toml",
+          ".dsh/mcp.json",
+          ".config/omp/mcp.json",
+          ".config/opencode/opencode.json",
+        ]);
+        if (!allowed.has(input.path)) throw new Error("MCP inventory path is not allowed");
+        try {
+          const content = await provider.readUserFile(path.join(homedir(), input.path), {
+            maxBytes: 1_000_000,
+          });
+          yield { path: input.path, content: Buffer.from(content).toString("utf8") };
+        } catch {
+          yield null;
+        }
+        break;
+      }
       case "provision": {
         const result = await provider.provision({ botId: computer.botId, homePath: "" }, context);
         yield { ...result, botId: input.botId, providerRef: `host:${computer.botId}` };

@@ -64,6 +64,88 @@ async function handle(handler: RouterHandler, ...args: Parameters<RouterHandler[
   return response;
 }
 
+describe("MCP bot tool assignments", () => {
+  it("assigns one server to bot A and enforces denial, grant change, and cross-space isolation", async () => {
+    const state: {
+      assignments: Array<Record<string, unknown>>;
+      bot: { id: string };
+      server: { id: string; enabled: boolean };
+      botMcpServer: { findMany: ReturnType<typeof vi.fn>; createMany: ReturnType<typeof vi.fn> };
+    } = {
+      assignments: [],
+      bot: { id: "bot-a" },
+      server: { id: "mcp-a", enabled: true },
+      botMcpServer: { findMany: vi.fn(), createMany: vi.fn() },
+    };
+    const tx = {
+      bot: {
+        findFirst: vi.fn(async ({ where }: any) => (where.id === "bot-a" ? state.bot : null)),
+      },
+      mcpServer: {
+        findMany: vi.fn(async ({ where }: any) =>
+          where.id.in.includes("mcp-a") && where.enabled ? [state.server] : [],
+        ),
+      },
+      botMcpServer: {
+        findMany: vi.fn(async ({ where }: any) =>
+          state.assignments
+            .filter((item) => item.botId === where.botId)
+            .map((item) => ({ ...item, createdAt: new Date(), updatedAt: new Date() })),
+        ),
+        deleteMany: vi.fn(async ({ where }: any) => {
+          state.assignments = state.assignments.filter((item) => item.botId !== where.botId);
+          return { count: 1 };
+        }),
+        createMany: vi.fn(async ({ data }: any) => {
+          state.assignments.push(
+            ...data.map((item: Record<string, unknown>) => ({ id: "assignment-1", ...item })),
+          );
+          return { count: data.length };
+        }),
+      },
+    };
+    const prisma = { ...tx, $transaction: async (fn: any) => fn(tx) } as unknown as PrismaClient;
+    const deps = {
+      prisma,
+      events: { notify: vi.fn(), append: vi.fn() },
+      env: {
+        defaultProvider: "fake",
+        defaultModel: "fake-model",
+        webOrigin: "http://localhost",
+        screenProxySecret: "test",
+        sandboxProvider: "fake",
+      },
+      dataDir: "/tmp/rakazo-mcp-assignment-test",
+    } as unknown as RouterDeps;
+    const actor = {
+      spaceId: "space-1",
+      userId: "owner-1",
+      email: "owner@example.test",
+      isDeploymentOwner: true,
+    } satisfies Actor;
+    const client = createRouterClient(createRouter(deps), { context: { actor } as never });
+    const set = async (botId: string, allowAllTools: boolean) =>
+      client.mcp.assignments.replace({
+        botId,
+        assignments: [{ serverId: "mcp-a", allowAllTools, allowedTools: [] }],
+      });
+    await set("bot-a", false);
+    expect(state.assignments).toHaveLength(1);
+    expect(state.assignments[0]).toMatchObject({
+      botId: "bot-a",
+      serverId: "mcp-a",
+      allowAllTools: false,
+    });
+    expect(await client.mcp.assignments.list({ botId: "bot-a" })).toHaveLength(1);
+    state.botMcpServer.findMany.mockResolvedValueOnce([] as never);
+    await set("bot-a", true);
+    expect(state.assignments[0]).toMatchObject({ allowAllTools: true });
+    state.assignments = [];
+    expect(await client.mcp.assignments.list({ botId: "bot-a" })).toEqual([]);
+    await expect(client.mcp.assignments.list({ botId: "bot-other" })).rejects.toBeDefined();
+  });
+});
+
 describe("account preferences", () => {
   function preferencesDeps(avatarStyle: string, timezone: string | null = null) {
     const update = vi.fn().mockResolvedValue({});

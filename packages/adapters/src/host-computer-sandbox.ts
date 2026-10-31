@@ -104,6 +104,12 @@ export class HostComputerSandbox implements SandboxProvider {
     for await (const value of this.request<T>(input, context)) result = value;
     return result as T;
   }
+  mcpInventory(computer: ComputerRef, path: string, context: AdapterContext) {
+    return this.one<{ path: string; content: string } | null>(
+      { method: "mcpInventory", botId: computer.botId, path },
+      context,
+    );
+  }
   environment(computer: ComputerRef, context: AdapterContext) {
     return this.one<HostComputerEnvironment>(
       { method: "environment", botId: computer.botId },

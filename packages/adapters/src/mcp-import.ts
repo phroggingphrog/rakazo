@@ -11,6 +11,7 @@ export const ImportedHarnessMcpServerSchema = z.object({
   args: z.array(z.string().max(2048)).max(64).default([]),
   endpoint: z.string().max(2048).optional(),
   endpointIdentity: z.string().optional(),
+  endpointHasCredentialPlaceholder: z.boolean().default(false),
   envReferences: z.record(z.string(), z.string().max(4096)).default({}),
   auth: z.enum(["none", "environment_reference", "static_credential", "oauth"]),
   enabled: z.boolean(),
@@ -23,6 +24,7 @@ export const ImportedHarnessMcpServerSchema = z.object({
     namespace: z.string().optional(),
   }),
   credentialFields: z.array(z.string()).default([]),
+  credentialHeaders: z.array(z.string()).default([]),
   status: z.enum(["ready", "disabled", "unsupported"]),
   unsupported: z.array(z.string()).default([]),
 });
@@ -100,14 +102,17 @@ function normalize(
       unsupported.push("Remote transport type cannot use a local command");
     if (!command && type === "stdio") unsupported.push("stdio transport has no command");
     let safeEndpoint = endpoint;
+    let endpointHasCredentials = false;
     if (endpoint)
       try {
         const url = new URL(endpoint);
         if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || url.hash)
           unsupported.push("URL must use HTTP(S) and contain no credentials or fragment");
         const sensitive = [...url.searchParams.keys()].filter((k) => sensitiveKey.test(k));
-        if (sensitive.length)
+        if (sensitive.length) {
+          endpointHasCredentials = true;
           unsupported.push("URL query contains credentials; reconnect with a protected credential");
+        }
         for (const key of sensitive)
           url.searchParams.set(key, "[credential requires protected re-entry]");
         if (url.username || url.password || sensitive.length)
@@ -117,17 +122,15 @@ function normalize(
       }
     const scrubbed = scrubEnv(raw.env ?? raw.env_vars);
     let auth = scrubbed.auth;
+    const credentialHeaders: string[] = [];
     if (raw.headers && typeof raw.headers === "object")
       for (const [key, value] of Object.entries(raw.headers as Record<string, unknown>))
         if (typeof value === "string" && (sensitiveKey.test(key) || value.length)) {
           scrubbed.fields.push(key);
+          credentialHeaders.push(key);
           auth = "static_credential";
         }
-    if (
-      endpoint &&
-      /[?&](?:token|secret|password|credential|api[-_]?key|authorization)=/i.test(endpoint)
-    )
-      auth = "static_credential";
+    if (endpointHasCredentials) auth = "static_credential";
     if (raw.oauth || raw.oauth_config) auth = "oauth";
     if (type === "http" || type === "streamable_http") transport = "streamable_http";
     const enabled = raw.enabled !== false;
@@ -140,6 +143,7 @@ function normalize(
         ? raw.args.filter((x): x is string => typeof x === "string")
         : [],
       endpoint: safeEndpoint,
+      endpointHasCredentialPlaceholder: endpointHasCredentials,
       endpointIdentity: endpoint
         ? new URL(endpoint).origin + new URL(endpoint).pathname
         : undefined,
@@ -153,7 +157,8 @@ function normalize(
         approval: raw.approval_mode === "approve" ? "approve" : undefined,
       },
       provenance: { harness, location, namespace: ns },
-      credentialFields: scrubbed.fields.sort(),
+      credentialFields: [...scrubbed.fields, ...(endpointHasCredentials ? ["URL"] : [])].sort(),
+      credentialHeaders,
       status: unsupported.length ? "unsupported" : enabled ? "ready" : "disabled",
       unsupported,
     });

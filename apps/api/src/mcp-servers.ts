@@ -1,9 +1,20 @@
+import { createHash } from "node:crypto";
 import { ORPCError } from "@orpc/server";
-import type { McpOAuthBroker, McpOAuthSummary, McpStdioPolicy } from "@rakazo/adapters";
+import type {
+  McpOAuthBroker,
+  McpOAuthSummary,
+  McpStdioPolicy,
+  UserDeviceGateway,
+} from "@rakazo/adapters";
 import {
   assertNoMcpEndpointCredential,
   assertSafeRemoteUrl,
   buildMcpCredentialBlob,
+  deriveMcpSlug,
+  importClaudeMcpConfig,
+  importCodexMcpConfig,
+  importOpenCodeMcpConfig,
+  importPiMcpConfig,
   mcpServerHealthDto,
   mcpStdioRefusal,
   recordMcpServerHealth,
@@ -209,6 +220,7 @@ export function createMcpServers(
   deps: RouterDeps,
   onboardingDeps: Parameters<typeof dismissMcpServerApprovals>[0],
   mcpOAuth: McpOAuthBroker,
+  userDevices?: UserDeviceGateway,
 ) {
   const mcpAwaitsOAuth = async (server: McpServerRow, actor: Actor, oauth: McpOAuthSummary) => {
     if (oauth.status === "connected") return false;
@@ -358,6 +370,190 @@ export function createMcpServers(
     probeMcpServer,
     beginMcpProbe,
     removeMcpServerInTransaction,
+    importHarnessMcpInventory: async (actor: Actor) => {
+      if (!userDevices)
+        throw new ORPCError("BAD_REQUEST", { message: "Secure host import is unavailable" });
+      const device = await userDevices.connected(actor.userId);
+      if (!device)
+        throw new ORPCError("BAD_REQUEST", { message: "Connect a paired Rakazo computer first" });
+      const imported: string[] = [];
+      const skipped: string[] = [];
+      const candidates = new Map<
+        string,
+        { server: import("@rakazo/adapters").ImportedHarnessMcpServer; id: string; harness: string }
+      >();
+      for (const harness of ["pi", "claude", "codex", "dsh", "omp", "opencode"] as const) {
+        const locs: Record<typeof harness, string[]> = {
+          pi: [".pi/agent/mcp.json"],
+          claude: [".claude.json"],
+          codex: [".codex/config.toml"],
+          dsh: [".dsh/mcp.json"],
+          omp: [".config/omp/mcp.json"],
+          opencode: [".config/opencode/opencode.json"],
+        };
+        for (const relative of locs[harness]) {
+          const full = relative;
+          try {
+            let file: { content: string } | null = null;
+            for await (const frame of userDevices.request(
+              actor.userId,
+              { method: "mcpInventory", botId: `mcp-import-${actor.userId}`, path: full },
+              AbortSignal.timeout(15000),
+              device.deviceId,
+            ))
+              if (
+                frame &&
+                typeof frame === "object" &&
+                "content" in frame &&
+                typeof frame.content === "string"
+              )
+                file = frame as { content: string };
+            if (!file) continue;
+            const parsed =
+              harness === "codex"
+                ? importCodexMcpConfig(file.content, `${harness}:${relative}`)
+                : harness === "opencode"
+                  ? importOpenCodeMcpConfig(file.content, `${harness}:${relative}`)
+                  : harness === "claude"
+                    ? importClaudeMcpConfig(file.content, `${harness}:${relative}`)
+                    : importPiMcpConfig(file.content, `${harness}:${relative}`);
+            for (const server of parsed.servers) {
+              const id = `${harness}:${relative}:${server.name}`;
+              const identity = [
+                server.name.toLowerCase(),
+                server.namespace ?? "",
+                server.transport,
+                server.command ?? server.endpointIdentity ?? server.endpoint ?? "",
+                server.credentialFields.join(","),
+              ].join("\0");
+              if (server.auth === "oauth") {
+                skipped.push(`${id} (OAuth authorization needs renewal)`);
+                continue;
+              }
+              if (server.endpointHasCredentialPlaceholder) {
+                skipped.push(`${id} (URL credential needs protected reconnection)`);
+                continue;
+              }
+              if (candidates.has(identity)) {
+                skipped.push(`${id} (duplicate of existing connection)`);
+                continue;
+              }
+              if (server.transport === "stdio" && server.credentialFields.length) {
+                skipped.push(`${id} (stdio credentials need protected reconnect)`);
+                continue;
+              }
+              candidates.set(identity, { server, id, harness });
+            }
+          } catch {
+            /* Missing host path or unavailable shell. */
+          }
+        }
+      }
+      for (const { server, id, harness } of candidates.values()) {
+        const slug = deriveMcpSlug(
+          `${server.name.toLowerCase()}-${createHash("sha256")
+            .update(
+              `${server.endpointIdentity ?? server.command ?? ""}:${server.credentialFields.join(",")}`,
+            )
+            .digest("hex")
+            .slice(0, 8)}`,
+        );
+        if (server.transport === "stdio") {
+          const stdioSlug = deriveMcpSlug(`${harness}-${server.name}`);
+          const stdioConfig = {
+            transport: "stdio" as const,
+            slug: stdioSlug,
+            name: server.name,
+            description: `Imported from ${harness}; disabled pending command review`,
+            enabled: false,
+            command: server.command ?? "",
+            args: server.args,
+            env: {},
+            secret: undefined,
+          };
+          try {
+            await deps.prisma.$transaction(async (tx) => {
+              const existing = await tx.mcpServer.findFirst({
+                where: {
+                  userId: actor.userId,
+                  transport: "stdio",
+                  command: stdioConfig.command,
+                  allSpaces: true,
+                },
+              });
+              if (
+                !existing &&
+                deps.env.mcpStdioEnabled &&
+                mcpStdioRefusal(stdioConfig.command, mcpStdioPolicy(deps)) === null
+              ) {
+                await assertMcpStdioCommand(stdioConfig.command, actor, deps);
+                return insertMcpServer(tx, actor, stdioConfig, null, { everywhere: true });
+              }
+              return existing;
+            });
+            const commandAllowed = Boolean(
+              deps.env.mcpStdioEnabled &&
+                mcpStdioRefusal(stdioConfig.command, mcpStdioPolicy(deps)) === null,
+            );
+            imported.push(
+              commandAllowed
+                ? `${id} (disabled pending explicit enable)`
+                : `${id} (disabled; deployment command allowlist required)`,
+            );
+          } catch {
+            skipped.push(`${id} (unavailable; command needs deployment allowlist)`);
+          }
+          continue;
+        }
+        if (server.endpointHasCredentialPlaceholder) {
+          skipped.push(`${id} (credential needs protected reconnection)`);
+          continue;
+        }
+        if (server.status === "unsupported") {
+          skipped.push(`${id} (unsupported: ${server.unsupported.join("; ")})`);
+          continue;
+        }
+        if (server.auth === "oauth") {
+          skipped.push(`${id} (OAuth authorization needs renewal in the protected UI)`);
+          continue;
+        }
+        const config = {
+          transport: server.transport,
+          slug,
+          name: server.name,
+          description: `Imported from ${harness}`,
+          enabled: server.enabled && server.status === "ready",
+          endpoint: server.endpoint ?? "https://invalid.invalid",
+          headers: {},
+          secret: undefined,
+          oauthClient: null,
+        };
+        try {
+          const existing = await deps.prisma.mcpServer.findFirst({
+            where: {
+              userId: actor.userId,
+              transport: server.transport,
+              endpoint: server.endpoint ?? null,
+              command: server.command ?? null,
+              allSpaces: true,
+            },
+          });
+          if (existing) {
+            skipped.push(`${id} (already in catalog)`);
+            continue;
+          }
+          const stored = await prepareMcpServer(actor, config);
+          const row = await deps.prisma.$transaction((tx) =>
+            insertMcpServer(tx, actor, config, stored, { everywhere: true }),
+          );
+          imported.push(id);
+          if (server.enabled) void probeMcpServer(row, actor);
+        } catch {
+          skipped.push(`${id} (unavailable)`);
+        }
+      }
+      return { discovered: imported, unavailable: skipped };
+    },
     prepareMcpServer,
     insertMcpServer,
     announceMcpServer,

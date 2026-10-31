@@ -974,6 +974,7 @@ export const appContract = {
               enabled: z.boolean(),
               status: z.enum(["ready", "disabled", "unsupported"]),
               auth: z.enum(["none", "environment_reference", "static_credential", "oauth"]),
+              credentialHeaders: z.array(z.string()),
               provenance: z.object({ harness: z.string(), location: z.string() }),
               unsupported: z.array(z.string()),
             }),
@@ -981,6 +982,9 @@ export const appContract = {
           errors: z.array(z.string()),
         }),
       ),
+    importInstalled: oc.output(
+      z.object({ discovered: z.array(z.string()), unavailable: z.array(z.string()) }),
+    ),
     importSelected: oc
       .input(
         z.object({
