@@ -202,7 +202,8 @@ export async function ensureMcpPackage(
   const name = registryPackageName(spec);
   if (!name) throw new Error(`Not an npm registry package: ${spec}`);
   const root = resolve(options.root ?? defaultMcpPackagesRoot());
-  const dir = mcpPackageDir(spec, root, options.env);
+  const safeEnv = options.env;
+  const dir = mcpPackageDir(spec, root, safeEnv);
   const key = basename(dir);
   if (!(await isReady(dir))) {
     options.onInstall?.();
@@ -216,7 +217,7 @@ export async function ensureMcpPackage(
         target: options.installTarget ?? spec,
         redactSecrets: options.redactSecrets ?? [],
         timeoutMs: options.timeoutMs ?? DEFAULT_MCP_INSTALL_TIMEOUT_MS,
-        env: options.env ?? {},
+        env: safeEnv ?? {},
         npmCommand: options.npmCommand ?? "npm",
       }).finally(() => inFlight.delete(dir));
       inFlight.set(dir, pending);

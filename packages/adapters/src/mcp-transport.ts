@@ -78,6 +78,7 @@ export interface McpStdioOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   redactSecrets?: readonly string[];
+  deniedArgs?: readonly string[];
 }
 
 /** The process exited or never answered; stderr is redacted before it reaches the caller. */
@@ -300,6 +301,16 @@ export function mcpStdioRefusal(command: string, policy: McpStdioPolicy): string
 }
 
 function stdioParams(options: McpStdioOptions): StdioServerParameters {
+  for (const arg of options.args ?? []) {
+    if (options.deniedArgs?.includes(arg))
+      throw new Error("MCP stdio argument is denied by policy");
+    if (
+      /^(?:--(?:eval|require|import|loader|experimental-loader)(?:=|$)|-[er](?:=|$)|-[er].+|-c(?:$|.)|--command(?:=|$))$/i.test(
+        arg,
+      )
+    )
+      throw new Error("MCP stdio argument is denied by policy");
+  }
   if (!isAllowedStdioCommand(options.command, options.allowedCommands)) {
     throw new Error("MCP stdio command is not in the configured allowlist");
   }

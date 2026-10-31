@@ -507,6 +507,19 @@ describe("MCP connector session cache", () => {
     await connector.close();
   });
 
+  it("denies imported commands unless they pass configured command policy", async () => {
+    const { mcpStdioRefusal } = await import("./mcp-transport.js");
+    expect(
+      mcpStdioRefusal("/usr/bin/node", { stdioEnabled: false, allowedCommands: ["/usr/bin/node"] }),
+    ).toContain("aren't available");
+    expect(
+      mcpStdioRefusal("/usr/bin/node", { stdioEnabled: true, allowedCommands: ["/usr/bin/bash"] }),
+    ).toContain("isn't allowed");
+    expect(
+      mcpStdioRefusal("npx", { stdioEnabled: true, allowedCommands: ["npx"] }),
+    ).toBeUndefined();
+  });
+
   it("gives bot A assigned tools, denies bot B, then enforces the changed assignment", async () => {
     const state = {
       failNext: false,
@@ -567,6 +580,14 @@ describe("MCP connector session cache", () => {
     expect(deniedForA).toEqual([
       { type: "error", message: "MCP tool is not assigned to this bot" },
     ]);
+    const called = await connector.execute(
+      { tool: "mcp__demo__read", args: {}, executionId: "bot-b-call", route } as never,
+      contextFor("bot-b"),
+    );
+    const callEvents: unknown[] = [];
+    for await (const event of called) callEvents.push(event);
+    expect(state.calls).toContain("read");
+    expect(callEvents).toContainEqual(expect.objectContaining({ type: "result" }));
     await connector.close();
   });
 

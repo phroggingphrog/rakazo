@@ -64,10 +64,12 @@ describe("native host computer transport", () => {
     },
   );
 
-  it("reads MCP inventory paths through the authenticated protocol only", async () => {
-    await expect(
-      client.mcpInventory(computer, ".pi/agent/mcp.json", context),
-    ).resolves.toMatchObject({ path: ".pi/agent/mcp.json" });
+  it("reads bounded config and lists Cursor plugin files under authenticated, explicit paths", async () => {
+    const config = await client.mcpInventory(computer, ".pi/agent/mcp.json", context);
+    expect(config?.path).toBe(".pi/agent/mcp.json");
+    const files = await client.mcpInventoryList(computer, ".cursor/plugins", context);
+    expect(Array.isArray(files)).toBe(true);
+    await expect(client.mcpInventoryList(computer, "../", context)).rejects.toThrow();
     await expect(client.mcpInventory(computer, "/etc/passwd", context)).rejects.toThrow();
   });
 

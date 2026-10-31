@@ -499,6 +499,66 @@ function collectMcpServers(
 }
 
 /** Pure parser; inputs are regular-file content already constrained by acquisition. */
+export function importCursorPluginConfiguration(source: string, location: string): ParsedPlugin {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(source);
+  } catch {
+    throw new Error("Cursor plugin configuration is invalid JSON");
+  }
+  if (!object(raw)) throw new Error("Cursor plugin configuration must be an object");
+  const serverObject = object(raw.mcpServers)
+    ? raw.mcpServers
+    : object(raw.servers)
+      ? raw.servers
+      : null;
+  if (!serverObject) throw new Error("Cursor plugin configuration has no MCP servers");
+  const servers: PluginMcpServerEntry[] = [];
+  for (const [name, entry] of Object.entries(serverObject)) {
+    if (!object(entry) || typeof entry.url !== "string") continue;
+    if (
+      entry.type !== undefined &&
+      entry.type !== "http" &&
+      entry.type !== "sse" &&
+      entry.type !== "streamable-http" &&
+      entry.type !== "streamable_http"
+    )
+      continue;
+    const checked = McpServerConfigInput.safeParse({
+      slug: "cursor-plugin",
+      name,
+      transport: entry.type === "sse" ? "sse" : "streamable_http",
+      endpoint: entry.url,
+      headers: {},
+    });
+    if (checked.success && checked.data.transport !== "stdio")
+      servers.push({
+        name,
+        transport: checked.data.transport,
+        endpoint: checked.data.endpoint,
+        headers: {},
+      });
+  }
+  const resolvedSha = createHash("sha256").update(source).digest("hex");
+  return {
+    format: "cursor",
+    name: location.split("/").at(-2) ?? "cursor-plugin",
+    version: null,
+    description: "Imported Cursor MCP configuration",
+    author: null,
+    homepage: null,
+    repository: null,
+    license: null,
+    keywords: [],
+    resolvedSha,
+    digest: `sha256:${resolvedSha}`,
+    skills: [],
+    mcpServers: servers,
+    skipped: [],
+    builtinNames: [],
+  };
+}
+
 export function parsePluginDirectory(input: {
   files: PluginRepoFile[];
   resolvedSha: string;

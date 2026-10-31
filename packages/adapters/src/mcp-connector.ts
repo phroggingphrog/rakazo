@@ -1177,6 +1177,7 @@ export class McpConnector implements ConnectorProvider {
             ...Object.values(material.headers ?? {}),
             ...args,
           ],
+          deniedArgs: npx ? ["-c", "--command"] : undefined,
           allowedCommands: this.options.allowedCommands ?? [],
           signal: context.signal,
           timeoutMs: this.options.startupTimeoutMs ?? DEFAULT_MCP_STDIO_STARTUP_TIMEOUT_MS,

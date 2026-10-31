@@ -381,9 +381,13 @@ export function mcpRoutes(ctx: RouterContext) {
       }),
     },
     mcp: {
-      importInstalled: authed.mcp.importInstalled.handler(async ({ context }) =>
-        importHarnessMcpInventory(context.actor),
-      ),
+      importInstalled: authed.mcp.importInstalled.handler(async ({ context }) => {
+        const result = await importHarnessMcpInventory(context.actor);
+        return {
+          ...result,
+          discovered: result.discovered.map((name) => name.replace(/\/[^/]+\//g, "[path]/")),
+        };
+      }),
       importPreview: authed.mcp.importPreview.handler(async ({ input }) => {
         const location = `${input.harness}:configuration`;
         const result = (

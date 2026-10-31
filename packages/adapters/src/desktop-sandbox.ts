@@ -397,6 +397,45 @@ export class DesktopSandboxProvider implements SandboxProvider {
     return new Uint8Array(await readFile(target));
   }
 
+  async listUserDirectory(
+    directory: string,
+    options: { maxEntries: number; maxDepth: number },
+  ): Promise<Array<{ path: string; directory: boolean }>> {
+    const base = await realpath(path.resolve(directory));
+    const roots = await Promise.all(
+      [homedir(), ...(this.opts.root ? [this.opts.root] : [])].map((root) => realpath(root)),
+    );
+    if (
+      !roots.some((root) => {
+        const relative = path.relative(root, base);
+        return relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+      })
+    )
+      throw new Error("Path outside approved roots");
+    const result: Array<{ path: string; directory: boolean }> = [];
+    const visit = async (dir: string, depth: number): Promise<void> => {
+      if (depth > options.maxDepth || result.length >= options.maxEntries) return;
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        if (entry.isSymbolicLink()) continue;
+        const full = path.join(dir, entry.name);
+        const resolved = await realpath(full);
+        if (
+          !roots.some((root) => {
+            const r = path.relative(root, resolved);
+            return r && !r.startsWith("..") && !path.isAbsolute(r);
+          })
+        )
+          continue;
+        const directoryEntry = entry.isDirectory();
+        result.push({ path: path.relative(base, full), directory: directoryEntry });
+        if (directoryEntry) await visit(full, depth + 1);
+        if (result.length >= options.maxEntries) return;
+      }
+    };
+    await visit(base, 0);
+    return result;
+  }
+
   async readFile(
     computer: ComputerRef,
     filePath: string,

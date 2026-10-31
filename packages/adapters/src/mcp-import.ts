@@ -24,7 +24,10 @@ export const ImportedHarnessMcpServerSchema = z.object({
     namespace: z.string().optional(),
   }),
   credentialFields: z.array(z.string()).default([]),
+  environmentFields: z.array(z.string()).default([]),
   credentialHeaders: z.array(z.string()).default([]),
+  headerValues: z.record(z.string(), z.string()).default({}),
+  environmentValues: z.record(z.string(), z.string()).default({}),
   status: z.enum(["ready", "disabled", "unsupported"]),
   unsupported: z.array(z.string()).default([]),
 });
@@ -37,15 +40,18 @@ function scrubEnv(env: unknown): {
   env: Record<string, string>;
   auth: McpImportAuth;
   fields: string[];
+  values: Record<string, string>;
 } {
   const safe: Record<string, string> = {};
+  const values: Record<string, string> = {};
   const fields: string[] = [];
   if (!env || typeof env !== "object" || Array.isArray(env))
-    return { env: safe, auth: "none", fields };
+    return { env: safe, auth: "none", fields, values };
   for (const [key, value] of Object.entries(env)) {
     if (typeof value !== "string") continue;
     if (sensitiveKey.test(key) && !/^\$\{[^}]+\}$/.test(value)) {
       fields.push(key);
+      values[key] = value;
       safe[key] = "[credential requires protected re-entry]";
     } else if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value)) safe[key] = value;
     else safe[key] = "[value not imported]";
@@ -55,6 +61,7 @@ function scrubEnv(env: unknown): {
     env: safe,
     auth: fields.length ? "static_credential" : refs ? "environment_reference" : "none",
     fields,
+    values,
   };
 }
 function serverEntries(root: unknown): Record<string, RawServer> {
@@ -158,7 +165,19 @@ function normalize(
       },
       provenance: { harness, location, namespace: ns },
       credentialFields: [...scrubbed.fields, ...(endpointHasCredentials ? ["URL"] : [])].sort(),
+      environmentFields: scrubbed.fields
+        .filter((field) => Object.hasOwn(scrubbed.env, field))
+        .sort(),
+      environmentValues: scrubbed.values,
       credentialHeaders,
+      headerValues: Object.fromEntries(
+        credentialHeaders.map((key) => [
+          key,
+          sensitiveKey.test(key)
+            ? "[credential requires protected reconnection]"
+            : "[non-credential header value not imported]",
+        ]),
+      ),
       status: unsupported.length ? "unsupported" : enabled ? "ready" : "disabled",
       unsupported,
     });
@@ -295,7 +314,11 @@ export function deduplicateImportedMcpServers(
       server.credentialFields.join(","),
     ].join("\0");
     if (server.credentialFields.length) {
-      keyed.set(`${identity}\0${server.provenance.harness}\0${server.provenance.location}`, server);
+      keyed.set(`${identity}\0${server.provenance.harness}\0${server.provenance.location}`, {
+        ...server,
+        environmentValues: {},
+        headerValues: {},
+      });
       continue;
     }
     const matching = [...keyed.keys()].find(
@@ -317,6 +340,11 @@ export function deduplicateImportedMcpServers(
 }
 export function redactMcpImportPreview(value: unknown): string {
   return JSON.stringify(value, (key, item) =>
-    sensitiveKey.test(key) && typeof item === "string" ? "[redacted]" : item,
+    key === "sourceContent" ||
+    key === "environmentValues" ||
+    key === "headerValues" ||
+    (sensitiveKey.test(key) && typeof item === "string")
+      ? "[redacted]"
+      : item,
   );
 }

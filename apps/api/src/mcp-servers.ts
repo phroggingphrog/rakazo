@@ -13,6 +13,7 @@ import {
   deriveMcpSlug,
   importClaudeMcpConfig,
   importCodexMcpConfig,
+  importCursorPluginConfiguration,
   importOpenCodeMcpConfig,
   importPiMcpConfig,
   mcpServerHealthDto,
@@ -214,6 +215,40 @@ export function mcpCredentialRecords(
   const { headers, env } = material as { headers?: unknown; env?: unknown };
   const parsed = { headers: record(headers), env: record(env) };
   return parsed.headers && parsed.env ? { headers: parsed.headers, env: parsed.env } : null;
+}
+
+async function listCursorPluginFiles(
+  userDevices: UserDeviceGateway | undefined,
+  userId: string,
+  deviceId: string,
+): Promise<string[]> {
+  if (!userDevices) return [];
+  const paths = [".cursor/plugins", ".cursor/extensions", ".config/Cursor/User/globalStorage"];
+  const found: string[] = [];
+  for (const path of paths) {
+    try {
+      const entries = await lastValue<Array<{ path: string; directory: boolean }>>(
+        userDevices.request<Array<{ path: string; directory: boolean }>>(
+          userId,
+          { method: "mcpInventoryList", botId: `mcp-import-${userId}`, path },
+          AbortSignal.timeout(15000),
+          deviceId,
+        ),
+      );
+      for (const entry of entries)
+        if (!entry.directory && /(?:marketplace|plugin|mcp).*\.(?:json|jsonc)$/i.test(entry.path))
+          found.push(`${path}/${entry.path}`);
+    } catch {
+      /* Cursor cache is optional. */
+    }
+  }
+  return [...new Set(found)].slice(0, 100);
+}
+async function lastValue<T>(values: AsyncIterable<T>): Promise<T> {
+  let result: T | undefined;
+  for await (const value of values) result = value;
+  if (result === undefined) throw new Error("empty host response");
+  return result;
 }
 
 export function createMcpServers(
@@ -430,6 +465,10 @@ export function createMcpServers(
                 skipped.push(`${id} (OAuth authorization needs renewal)`);
                 continue;
               }
+              if (server.auth === "static_credential" && server.environmentFields.length > 0) {
+                skipped.push(`${id} (environment credentials need protected reconnection)`);
+                continue;
+              }
               if (server.endpointHasCredentialPlaceholder) {
                 skipped.push(`${id} (URL credential needs protected reconnection)`);
                 continue;
@@ -447,6 +486,62 @@ export function createMcpServers(
           } catch {
             /* Missing host path or unavailable shell. */
           }
+        }
+      }
+      const pluginFiles = await listCursorPluginFiles(userDevices, actor.userId, device.deviceId);
+      for (const filePath of pluginFiles) {
+        try {
+          const file = await lastValue(
+            userDevices!.request(
+              actor.userId,
+              { method: "mcpInventory", botId: `mcp-import-${actor.userId}`, path: filePath },
+              AbortSignal.timeout(15000),
+              device.deviceId,
+            ),
+          );
+          if (
+            !file ||
+            typeof file !== "object" ||
+            !("content" in file) ||
+            typeof file.content !== "string"
+          )
+            continue;
+          const plugin = importCursorPluginConfiguration(file.content, filePath);
+          for (const server of plugin.mcpServers) {
+            const id = `Cursor plugin ${plugin.name}: ${server.name}`;
+            const config = {
+              transport: server.transport,
+              slug: deriveMcpSlug(`${plugin.name}-${server.name}`),
+              name: server.name,
+              description: `Imported from Cursor plugin ${plugin.name}`,
+              enabled: false,
+              endpoint: server.endpoint,
+              headers: {},
+              secret: undefined,
+              oauthClient: null,
+            };
+            if (
+              await deps.prisma.mcpServer.findFirst({
+                where: {
+                  userId: actor.userId,
+                  endpoint: server.endpoint,
+                  transport: server.transport,
+                  allSpaces: true,
+                },
+              })
+            ) {
+              skipped.push(`${id} (already in catalog)`);
+              continue;
+            }
+            const stored = await prepareMcpServer(actor, config);
+            const row = await deps.prisma.$transaction((tx) =>
+              insertMcpServer(tx, actor, config, stored, { everywhere: true }),
+            );
+            imported.push(id);
+            void probeMcpServer(row, actor);
+          }
+        } catch {
+          skipped.push(`Cursor plugin file unavailable or invalid`);
         }
       }
       for (const { server, id, harness } of candidates.values()) {
@@ -517,6 +612,14 @@ export function createMcpServers(
           skipped.push(`${id} (OAuth authorization needs renewal in the protected UI)`);
           continue;
         }
+        const protectedEnv = Object.fromEntries(
+          Object.entries(server.environmentValues).filter(([key]) =>
+            server.environmentFields.includes(key),
+          ),
+        );
+        const secret = Object.keys(protectedEnv).length
+          ? JSON.stringify({ env: protectedEnv })
+          : undefined;
         const config = {
           transport: server.transport,
           slug,
@@ -525,7 +628,7 @@ export function createMcpServers(
           enabled: server.enabled && server.status === "ready",
           endpoint: server.endpoint ?? "https://invalid.invalid",
           headers: {},
-          secret: undefined,
+          secret,
           oauthClient: null,
         };
         try {
@@ -546,6 +649,37 @@ export function createMcpServers(
           const row = await deps.prisma.$transaction((tx) =>
             insertMcpServer(tx, actor, config, stored, { everywhere: true }),
           );
+          if (stored?.id && secret) {
+            const secretRow = await deps.prisma.secret.findFirst({
+              where: { id: stored.id, ...itemSecretIn(actor) },
+            });
+            if (secretRow) {
+              const material = JSON.parse(
+                await deps.secrets.load(secretRow.ciphertext, secretRow.id),
+              ) as Record<string, unknown>;
+              const mergedEnv = {
+                ...((material.env as Record<string, string>) ?? {}),
+                ...protectedEnv,
+              };
+              const protectedHeaders = server.headerValues;
+              const encrypted = await deps.secrets.put(
+                JSON.stringify({
+                  ...material,
+                  env: mergedEnv,
+                  headers: {
+                    ...((material.headers as Record<string, string>) ?? {}),
+                    ...protectedHeaders,
+                  },
+                }),
+                computerContext(actor, "mcp", "mcp.import.credentials"),
+                { recordId: secretRow.id },
+              );
+              await deps.prisma.secret.update({
+                where: { id: secretRow.id },
+                data: { ciphertext: encrypted.ciphertext },
+              });
+            }
+          }
           imported.push(id);
           if (server.enabled) void probeMcpServer(row, actor);
         } catch {
