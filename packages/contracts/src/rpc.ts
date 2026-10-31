@@ -1026,7 +1026,7 @@ export const appContract = {
             assignments: z.array(
               z.object({
                 serverId: Id,
-                allowAllTools: z.boolean().default(true),
+                allowAllTools: z.boolean().default(false),
                 allowedTools: z.array(z.string().min(1).max(200)).max(500).default([]),
               }),
             ),

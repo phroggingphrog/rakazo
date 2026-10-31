@@ -423,21 +423,33 @@ export function mcpRoutes(ctx: RouterContext) {
         const skipped: Array<{ name: string; reason: string }> = [];
         for (const name of input.names) {
           const server = result.servers.find((item) => item.name === name);
+          const duplicate = result.servers.filter((item) => item.name === name).length > 1;
+          if (duplicate) {
+            skipped.push({
+              name,
+              reason: "Duplicate names need separate explicit connection review",
+            });
+            continue;
+          }
           if (!server) {
             skipped.push({ name, reason: "Server is missing or invalid" });
             continue;
           }
-          if (
-            server.status !== "ready" ||
-            server.auth === "static_credential" ||
-            server.auth === "oauth"
-          ) {
+          if (server.status === "unsupported") {
             skipped.push({
               name,
-              reason:
-                server.auth === "static_credential" || server.auth === "oauth"
-                  ? "Credentials require secure reconnect"
-                  : server.unsupported.join("; ") || "Server is disabled",
+              reason: server.unsupported.join("; ") || "Configuration is unsupported",
+            });
+            continue;
+          }
+          if (server.auth === "static_credential" || server.auth === "oauth") {
+            skipped.push({ name, reason: "Credentials require secure reconnect" });
+            continue;
+          }
+          if (server.enabled === false) {
+            skipped.push({
+              name,
+              reason: "This definition is disabled. Enable it in the catalog before importing.",
             });
             continue;
           }
@@ -471,10 +483,11 @@ export function mcpRoutes(ctx: RouterContext) {
           } as const;
           try {
             const stored = await prepareMcpServer(context.actor, inputConfig);
-            await deps.prisma.$transaction((tx) =>
-              insertMcpServer(tx, context.actor, inputConfig, stored),
+            const row = await deps.prisma.$transaction((tx) =>
+              insertMcpServer(tx, context.actor, inputConfig, stored, { everywhere: true }),
             );
             imported.push(name);
+            if (server.enabled) void probeMcpServer(row, context.actor);
           } catch (error) {
             skipped.push({
               name,
@@ -885,6 +898,7 @@ export function mcpRoutes(ctx: RouterContext) {
             const servers = await tx.mcpServer.findMany({
               where: {
                 id: { in: input.assignments.map((assignment) => assignment.serverId) },
+                enabled: true,
                 ...availableInSpace(context.actor),
               },
               select: { id: true },
@@ -917,7 +931,9 @@ export function mcpRoutes(ctx: RouterContext) {
                   botId: bot.id,
                   serverId: assignment.serverId,
                   allowAllTools: assignment.allowAllTools,
-                  allowedTools: assignment.allowedTools as Prisma.InputJsonValue,
+                  allowedTools: assignment.allowAllTools
+                    ? (assignment.allowedTools as Prisma.InputJsonValue)
+                    : [],
                 })),
               });
             const seqs = (

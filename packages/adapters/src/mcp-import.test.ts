@@ -42,7 +42,6 @@ describe("harness MCP import", () => {
       status: "unsupported",
       unsupported: ["Remote transport has no URL"],
     });
-    expect(result.servers[0]?.credentialReferences.API_TOKEN).toBe("do-not-leak");
     expect(redactMcpImportPreview(result)).not.toContain("do-not-leak");
   });
 
@@ -100,6 +99,23 @@ describe("harness MCP import", () => {
     const result = deduplicateImportedMcpServers([servers[0]!, duplicate, otherCredential]);
     expect(result).toHaveLength(3);
     expect(result[0]?.provenance.location).toContain("mcp.json");
+  });
+
+  it("redacts credential-bearing header and query values from every result", () => {
+    const result = importPiMcpConfig(
+      JSON.stringify({
+        mcpServers: {
+          server: {
+            type: "http",
+            url: "https://mcp.example.test/mcp?access_token=hidden-query",
+            headers: { Authorization: "Bearer hidden-header" },
+          },
+        },
+      }),
+    );
+    expect(JSON.stringify(result)).not.toContain("hidden-query");
+    expect(JSON.stringify(result)).not.toContain("hidden-header");
+    expect(result.servers[0]).toMatchObject({ auth: "static_credential", status: "unsupported" });
   });
 
   it("rejects credential-bearing URLs and keeps import records non-executable", () => {

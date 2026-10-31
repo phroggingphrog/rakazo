@@ -364,7 +364,7 @@ export function McpServersOverlay({
             botId,
             assignments: [
               ...existing,
-              { serverId: created.id, allowAllTools: true, allowedTools: [] },
+              { serverId: created.id, allowAllTools: false, allowedTools: [] },
             ],
           });
         }),
@@ -421,7 +421,7 @@ export function McpServersOverlay({
     const assigned = current.some((entry) => entry.serverId === server.id);
     const next = assigned
       ? current.filter((entry) => entry.serverId !== server.id)
-      : [...current, { serverId: server.id, allowAllTools: true, allowedTools: [] }];
+      : [...current, { serverId: server.id, allowAllTools: false, allowedTools: [] }];
     try {
       const updated = await rpc.mcp.assignments.replace({
         botId,
@@ -1045,22 +1045,63 @@ export function McpServersOverlay({
                             <Trans>Agents:</Trans>
                           </span>
                           {bots.map((bot) => {
-                            const assigned = (botAssignments[bot.id] ?? []).some(
-                              (entry) => entry.serverId === server.id,
+                            const assignment = (botAssignments[bot.id] ?? []).find(
+                              (item) => item.serverId === server.id,
                             );
+                            const assigned = Boolean(assignment);
                             return (
-                              <Button
-                                key={bot.id}
-                                type="button"
-                                variant={assigned ? "default" : "outline"}
-                                size="xs"
-                                aria-pressed={assigned}
-                                disabled={!assignmentsReady}
-                                onClick={() => void toggleAssignment(server, bot.id)}
-                              >
-                                {assigned ? <Check aria-hidden="true" /> : null}
-                                {bot.name}
-                              </Button>
+                              <div key={bot.id} className="flex items-center gap-1.5">
+                                <Button
+                                  type="button"
+                                  variant={assigned ? "default" : "outline"}
+                                  size="xs"
+                                  aria-pressed={assigned}
+                                  disabled={!assignmentsReady}
+                                  onClick={() => void toggleAssignment(server, bot.id)}
+                                >
+                                  {assigned ? <Check aria-hidden="true" /> : null}
+                                  {bot.name}
+                                </Button>
+                                {assigned ? (
+                                  <select
+                                    aria-label={`${bot.name} tool access for ${server.name}`}
+                                    className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                                    value={assignment?.allowAllTools ? "all" : "none"}
+                                    onChange={async (event) => {
+                                      const next = (botAssignments[bot.id] ?? []).map((item) =>
+                                        item.serverId === server.id
+                                          ? {
+                                              ...item,
+                                              allowAllTools: event.target.value === "all",
+                                              allowedTools: [],
+                                            }
+                                          : item,
+                                      );
+                                      try {
+                                        const updated = await rpc.mcp.assignments.replace({
+                                          botId: bot.id,
+                                          assignments: next,
+                                        });
+                                        await writeSaved(
+                                          queryClient,
+                                          assignmentsOptions.queryKey,
+                                          (all) => [
+                                            ...(all ?? []).filter(
+                                              (entry) => entry.botId !== bot.id,
+                                            ),
+                                            ...updated,
+                                          ],
+                                        );
+                                      } catch (err) {
+                                        setError(errorText(err, t`Could not update agent access`));
+                                      }
+                                    }}
+                                  >
+                                    <option value="none">No tools</option>
+                                    <option value="all">All tools</option>
+                                  </select>
+                                ) : null}
+                              </div>
                             );
                           })}
                         </div>

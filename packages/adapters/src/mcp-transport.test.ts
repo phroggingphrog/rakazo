@@ -65,6 +65,7 @@ describe("MCP transport seam", () => {
           "-e",
           "process.stderr.write('\\u001b[31mnoise\\u001b[0m\\n'.repeat(500)); console.error('sh: gmail-mcp: not found'); process.exit(127)",
         ],
+        redactSecrets: ["known-token-value"],
         allowedCommands: [process.execPath],
       })
       .catch((caught: unknown) => caught);
@@ -75,6 +76,21 @@ describe("MCP transport seam", () => {
     );
     expect(launch.stderr).not.toContain("\u001b");
     expect(launch.stderr.length).toBeLessThanOrEqual(4_096);
+    await session.close();
+  });
+
+  it("redacts secrets from launch stderr", async () => {
+    const session = new McpSession();
+    const error = await session
+      .connectStdio({
+        command: process.execPath,
+        args: ["-e", "console.error('known-token-value'); process.exit(127)"],
+        allowedCommands: [process.execPath],
+        redactSecrets: ["known-token-value"],
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(McpStdioLaunchError);
+    expect((error as Error).message).not.toContain("known-token-value");
     await session.close();
   });
 
