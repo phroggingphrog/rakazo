@@ -64,32 +64,6 @@ export function createHostComputerRunner(options: { root: string }) {
       case "environment":
         yield await provider.environment();
         break;
-      case "mcpInventoryList": {
-        if (!enabled) throw new Error("Host access is disabled");
-        const allowed = new Set([
-          ".cursor/plugins",
-          ".cursor/extensions",
-          ".config/Cursor/User/globalStorage",
-        ]);
-        if (!allowed.has(input.path)) throw new Error("Cursor inventory path is not allowed");
-        try {
-          const directoryPath = path.join(homedir(), input.path);
-          const entries = await provider.listUserDirectory(directoryPath, {
-            maxEntries: 2000,
-            maxDepth: 3,
-          });
-          yield entries
-            .filter(
-              (entry) =>
-                !entry.directory &&
-                /(?:marketplace|plugin|mcp).*\.(?:json|jsonc)$/i.test(entry.path),
-            )
-            .map((entry) => `${input.path}/${entry.path}`);
-        } catch {
-          yield [];
-        }
-        break;
-      }
       case "mcpInventory": {
         if (!enabled) throw new Error("Host access is disabled");
         const allowed = new Set([
@@ -100,12 +74,7 @@ export function createHostComputerRunner(options: { root: string }) {
           ".config/omp/mcp.json",
           ".config/opencode/opencode.json",
         ]);
-        const cursorFile =
-          /^(?:\.cursor\/(?:plugins|extensions)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*|\.config\/Cursor\/User\/globalStorage\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)\/(?:mcp|plugin|marketplace)\.json$/i.test(
-            input.path,
-          );
-        if (!allowed.has(input.path) && !cursorFile)
-          throw new Error("MCP inventory path is not allowed");
+        if (!allowed.has(input.path)) throw new Error("MCP inventory path is not allowed");
         try {
           const content = await provider.readUserFile(path.join(homedir(), input.path), {
             maxBytes: 1_000_000,

@@ -64,12 +64,10 @@ describe("native host computer transport", () => {
     },
   );
 
-  it("reads bounded config and lists Cursor plugin files under authenticated, explicit paths", async () => {
+  it("reads only allowlisted, bounded harness MCP files over the authenticated protocol", async () => {
     const config = await client.mcpInventory(computer, ".pi/agent/mcp.json", context);
     expect(config?.path).toBe(".pi/agent/mcp.json");
-    const files = await client.mcpInventoryList(computer, ".cursor/plugins", context);
-    expect(Array.isArray(files)).toBe(true);
-    await expect(client.mcpInventoryList(computer, "../", context)).rejects.toThrow();
+    await expect(client.mcpInventory(computer, "../.ssh/config", context)).rejects.toThrow();
     await expect(client.mcpInventory(computer, "/etc/passwd", context)).rejects.toThrow();
   });
 
