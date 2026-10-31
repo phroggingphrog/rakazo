@@ -420,11 +420,23 @@ function assertPublicAddresses(addresses: ResolvedAddress[]): void {
 export function limitRemoteMcpPayload(value: unknown): unknown {
   const serialized = JSON.stringify(value);
   if (serialized === undefined) return value;
-  if (Buffer.byteLength(serialized, "utf8") <= MAX_RESULT_BYTES) return value;
-  const bytes = Buffer.allocUnsafe(MAX_RESULT_BYTES);
-  const written = bytes.write(serialized, 0, MAX_RESULT_BYTES, "utf8");
+  const totalBytes = Buffer.byteLength(serialized, "utf8");
+  if (totalBytes <= MAX_RESULT_BYTES) return value;
+
+  // Keep the preview on a Unicode code-point boundary. It is deliberately a string
+  // preview, not a partial JSON value that callers might mistake for the full result.
+  let returnedBytes = 0;
+  let end = 0;
+  for (const codePoint of serialized) {
+    const codePointBytes = Buffer.byteLength(codePoint, "utf8");
+    if (returnedBytes + codePointBytes > MAX_RESULT_BYTES) break;
+    returnedBytes += codePointBytes;
+    end += codePoint.length;
+  }
   return {
     truncated: true,
-    content: bytes.toString("utf8", 0, written),
+    totalBytes,
+    returnedBytes,
+    preview: serialized.slice(0, end),
   };
 }

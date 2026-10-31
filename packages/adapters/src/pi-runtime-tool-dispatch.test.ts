@@ -5,6 +5,7 @@ import { builtinAgentTools } from "./builtin-tools.js";
 const fakeAgentState = vi.hoisted(() => ({
   mode: "dispatch" as
     | "dispatch"
+    | "repeat-failed-tool"
     | "empty"
     | "answer-then-stop"
     | "two-boundaries"
@@ -110,6 +111,25 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
           });
         }
         fakeAgentState.preparedMessages = [...fakeAgentState.steeredMessages];
+        return;
+      }
+
+      if (fakeAgentState.mode === "repeat-failed-tool") {
+        const target = this.tools.find((tool) => tool.name === fakeAgentState.invoke.name);
+        if (!target) throw new Error("expected tool was not exposed");
+        const rawArgs = fakeAgentState.invoke.args;
+        const args = target.prepareArguments?.(rawArgs) ?? rawArgs;
+        for (let index = 0; index < 3; index += 1) {
+          const result = await target.execute(`repeat-${index}`, args);
+          fakeAgentState.toolResult = result;
+          if (
+            result &&
+            typeof result === "object" &&
+            "terminate" in result &&
+            result.terminate === true
+          )
+            break;
+        }
         return;
       }
 
@@ -1123,6 +1143,48 @@ describe("Pi connector tool dispatch", () => {
       resolveAudit();
       await run;
     }
+  });
+
+  it("blocks the second equivalent permission failure at the real dispatch seam", async () => {
+    fakeAgentState.mode = "repeat-failed-tool";
+    fakeAgentState.invoke = {
+      name: "destination_write",
+      args: { collection: "notes", title: "Result", body: "Done" },
+    };
+    const executeTool = vi.fn(async () => ({ error: "403 permission denied" }));
+
+    for await (const _event of new PiAgentRuntime().run(
+      {
+        botId: "b",
+        threadId: "t",
+        runId: "repeat-permission-failure",
+        prompt: "write the result",
+        instructions: "Use the destination tool.",
+        history: [],
+        tools: [destinationTool],
+        model: { provider: "test", id: "dispatch-test-model" },
+        executeTool,
+      },
+      { signal: new AbortController().signal },
+    )) {
+      // Exhaust the dispatch stream.
+    }
+
+    expect(executeTool).toHaveBeenCalledOnce();
+    expect(fakeAgentState.toolResult).toMatchObject({
+      details: {
+        error: expect.stringContaining("Take a new recovery step"),
+        noProgress: {
+          code: "repeated_equivalent_failure",
+          toolName: "destination.write",
+          failureClass: "nontransient",
+          failedAttempts: 1,
+          recoveryStep: expect.stringContaining("Correct the reported permission"),
+        },
+        isError: true,
+      },
+      terminate: true,
+    });
   });
 
   it("audits a returned connector error after Pi wraps it without changing the model result", async () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { ORPCError, onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
@@ -69,11 +70,13 @@ import {
   isPipedreamEnabled,
   McpConnector,
   McpOAuthBroker,
+  McpOutputStore,
   messagingPlatformsFromEnv,
   PiAgentRuntime,
   PiOAuthLogins,
   PipedreamConnector,
   PostgresRealtimeFanout,
+  PrismaMcpOutputLedger,
   PrismaPushTokenStore,
   pipedreamConfigFromEnv,
   piSessionsRoot,
@@ -403,6 +406,11 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     prisma,
     secrets,
     {
+      outputStore: new McpOutputStore(
+        artifacts,
+        new PrismaMcpOutputLedger(prisma),
+        createHash("sha256").update(`mcp-output:${env.encryptionKey}`).digest(),
+      ),
       stdioEnabled: env.mcpStdioEnabled,
       allowedCommands: env.mcpStdioAllowedCommands,
       ...env.mcpStdio,

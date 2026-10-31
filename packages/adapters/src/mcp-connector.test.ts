@@ -2965,3 +2965,70 @@ it("marks a Composio MCP server's multi-execute tool as a batch under its prefix
     await connector.close();
   }
 });
+
+describe("retained MCP output authorization", () => {
+  const context = {
+    operationId: "test",
+    traceId: "test",
+    spaceId: "w1",
+    userId: "u1",
+    botId: "bot-1",
+    runId: "run-1",
+    signal: new AbortController().signal,
+  };
+  const call = {
+    tool: "mcp__demo__read_output",
+    executionId: "retained-read",
+    args: { receipt: "opaque" },
+    route: {
+      connectorId: "mcp",
+      resourceId: "server-1",
+      resourceRevision: 1,
+      toolName: "__rakazo_read_output",
+    },
+  };
+  it("rechecks assignment before retrieving retained output", async () => {
+    const retrieve = vi.fn();
+    const connector = new McpConnector(
+      { botMcpServer: { findFirst: vi.fn(async () => null) } } as never,
+      new EncryptedSecretStore("test"),
+      { outputStore: { retrieve } as never },
+    );
+    const events = [];
+    for await (const e of connector.execute(call, context)) events.push(e);
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("missing_assignment"),
+      }),
+    ]);
+    await connector.close();
+  });
+  it("keeps retrieval scoped even when an explicit tool allowlist exists", async () => {
+    const retrieve = vi.fn(async () => ({ text: "page", nextOffset: null }));
+    const assignment = { ...ASSIGNMENT, allowAllTools: false, allowedTools: ["read"] };
+    const connector = new McpConnector(
+      { botMcpServer: { findFirst: vi.fn(async () => assignment) } } as never,
+      new EncryptedSecretStore("test"),
+      { outputStore: { retrieve } as never },
+    );
+    const events = [];
+    for await (const e of connector.execute(call, context)) events.push(e);
+    expect(retrieve).toHaveBeenCalledWith(
+      "opaque",
+      expect.objectContaining({
+        spaceId: "w1",
+        userId: "u1",
+        botId: "bot-1",
+        runId: "run-1",
+        serverId: "server-1",
+      }),
+      context,
+      0,
+      4096,
+    );
+    expect(events[0]).toMatchObject({ type: "result" });
+    await connector.close();
+  });
+});
