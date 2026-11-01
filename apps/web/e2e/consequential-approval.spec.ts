@@ -101,15 +101,15 @@ test("A change asks without an approval model, and approvals settings shape what
     "aria-pressed",
     "true",
   );
-  await mode.getByRole("button", { name: "Never ask", exact: true }).click();
-  await expect(mode.getByRole("button", { name: "Never ask", exact: true })).toHaveAttribute(
+  await mode.getByRole("button", { name: "Bypass", exact: true }).click();
+  await expect(mode.getByRole("button", { name: "Bypass", exact: true })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
   await captureScreenshot(page, testInfo, "52b-approvals-never-ask-with-block");
   await settings.getByRole("button", { name: "Close user settings" }).click();
 
-  // A blocked tool is refused without a card, even in Never ask.
+  // A blocked tool is refused without a card, even in Bypass.
   await sendDestinationWrite(page, "write this to the destination crm while it is blocked");
   await waitForRunIdle(page);
   await expectComposerReady(page);
