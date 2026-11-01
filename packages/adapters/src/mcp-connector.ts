@@ -430,16 +430,50 @@ export class McpConnector implements ConnectorProvider {
 
   private async authorizedTools(context: AdapterContext): Promise<ConnectorTool[]> {
     if (!context.botId) return [];
-    const assignments = await this.prisma.botMcpServer.findMany({
-      where: {
-        botId: context.botId,
-        spaceId: context.spaceId,
-        userId: context.userId,
-        // A server no longer available in this space stays assigned but unused until it is again.
-        server: { enabled: true, ...availableInSpace(context) },
-      },
-      include: { server: true },
-    });
+    // A valid bot inherits each enabled MCP server available to its owner in this space.
+    // An explicit assignment remains authoritative, including its tool allowlist.
+    const bot = this.prisma.bot
+      ? await this.prisma.bot.findFirst({
+          where: { id: context.botId, spaceId: context.spaceId, userId: context.userId },
+          select: { id: true },
+        })
+      : undefined;
+    if (bot === null) return [];
+    const [explicitAssignments, availableServers] = await Promise.all([
+      this.prisma.botMcpServer.findMany({
+        where: {
+          botId: context.botId,
+          spaceId: context.spaceId,
+          userId: context.userId,
+          // A server no longer available in this space stays assigned but unused until it is again.
+          server: { enabled: true, ...availableInSpace(context) },
+        },
+        include: { server: true },
+      }),
+      bot
+        ? (this.prisma.mcpServer?.findMany({
+            where: { enabled: true, ...availableInSpace(context) },
+          }) ?? [])
+        : [],
+    ]);
+    const explicitByServer = new Map(
+      explicitAssignments.map((assignment) => [assignment.serverId, assignment]),
+    );
+    const assignments = [
+      ...explicitAssignments,
+      ...availableServers
+        .filter((server) => !explicitByServer.has(server.id))
+        .map((server) => ({
+          botId: context.botId!,
+          serverId: server.id,
+          spaceId: context.spaceId,
+          userId: context.userId,
+          allowAllTools: true,
+          allowedTools: [],
+          inherited: true,
+          server,
+        })),
+    ];
     const groups = await Promise.all(
       assignments.map(async (assignment): Promise<ConnectorTool[]> => {
         const startedAt = Date.now();
@@ -488,10 +522,11 @@ export class McpConnector implements ConnectorProvider {
           });
           reportAllowlistDrift(assignment, listed.tools, context);
           return listed.tools
-            .filter(
-              (tool) =>
-                assignment.allowAllTools ||
-                (assignment.allowedTools as unknown[]).includes(tool.name),
+            .filter((tool) =>
+              "inherited" in assignment
+                ? tool.annotations?.readOnlyHint === true
+                : assignment.allowAllTools ||
+                  (assignment.allowedTools as unknown[]).includes(tool.name),
             )
             .map((tool) => ({
               name: `mcp__${assignment.server.slug}__${tool.name}`,
@@ -658,16 +693,52 @@ export class McpConnector implements ConnectorProvider {
       yield { type: "error", message: "MCP tools require a bot context" };
       return;
     }
-    const assignment = await this.prisma.botMcpServer.findFirst({
-      where: {
-        botId: context.botId,
-        serverId: call.route.resourceId,
-        spaceId: context.spaceId,
-        userId: context.userId,
-        server: { enabled: true, ...availableInSpace(context) },
-      },
-      include: { server: true },
-    });
+    const [bot, explicitAssignment] = await Promise.all([
+      this.prisma.bot
+        ? this.prisma.bot.findFirst({
+            where: { id: context.botId, spaceId: context.spaceId, userId: context.userId },
+            select: { id: true },
+          })
+        : { id: context.botId },
+      this.prisma.botMcpServer.findFirst({
+        where: {
+          botId: context.botId,
+          serverId: call.route.resourceId,
+          spaceId: context.spaceId,
+          userId: context.userId,
+          server: { enabled: true, ...availableInSpace(context) },
+        },
+        include: { server: true },
+      }),
+    ]);
+    if (bot === null) {
+      yield { type: "error", message: "MCP tool is not assigned to this bot" };
+      return;
+    }
+    const inheritedServer =
+      explicitAssignment || !bot || !this.prisma.mcpServer
+        ? null
+        : await this.prisma.mcpServer.findFirst({
+            where: {
+              id: call.route.resourceId,
+              enabled: true,
+              ...availableInSpace(context),
+            },
+          });
+    const assignment =
+      explicitAssignment ??
+      (inheritedServer
+        ? {
+            botId: context.botId!,
+            serverId: inheritedServer.id,
+            spaceId: context.spaceId,
+            userId: context.userId,
+            allowAllTools: true,
+            allowedTools: [],
+            inherited: true,
+            server: inheritedServer,
+          }
+        : null);
     if (assignment && call.route.toolName === UNAVAILABLE_TOOL) {
       const reason =
         this.unavailable.get(this.sessionKey(assignment.server, context)) ??
@@ -727,11 +798,25 @@ export class McpConnector implements ConnectorProvider {
     const sessionKey = this.sessionKey(assignment.server, context);
     try {
       const toolName = call.route.toolName;
-      const result = await this.withSession(assignment.server, context, (session) => {
+      const inherited = "inherited" in assignment;
+      let refused = false;
+      const result = await this.withSession(assignment.server, context, async (session) => {
         material = this.sessions.get(sessionKey)?.material;
         launchSecrets = this.sessions.get(sessionKey)?.launchSecrets ?? [];
+        // An inherited server only runs tools it declares read-only.
+        if (inherited) {
+          const { tools } = await session.listTools({ signal: context.signal });
+          if (tools.find((tool) => tool.name === toolName)?.annotations?.readOnlyHint !== true) {
+            refused = true;
+            return undefined;
+          }
+        }
         return session.callTool(toolName, call.args, { signal: context.signal });
       });
+      if (refused) {
+        yield { type: "error", message: "MCP tool is not assigned to this bot" };
+        return;
+      }
       const secrets = [...(material ? oauthMaterialSecrets(material) : []), ...launchSecrets];
       const redacted = redactConnectorPayload(result, secrets);
       const serialized = JSON.stringify(redacted);
