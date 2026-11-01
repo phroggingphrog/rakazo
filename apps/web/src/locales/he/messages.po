@@ -1124,6 +1124,10 @@ msgstr "עיון בשרתי MCP"
 msgid "Built-in"
 msgstr "מובנה"
 
+#: src/components/ApprovalRulesSettings.tsx
+msgid "Bypass"
+msgstr ""
+
 #: src/pages/shell/chat-header.tsx
 msgid "Call"
 msgstr ""
@@ -3974,10 +3978,6 @@ msgstr "נדרשת פעולה"
 #: src/pages/shell/import-status.ts
 msgid "Needs: {names}"
 msgstr "דורש: {names}"
-
-#: src/components/ApprovalRulesSettings.tsx
-msgid "Never ask"
-msgstr "לא לשאול אף פעם"
 
 #: src/pages/shell/chat-context.tsx
 msgid "New"
