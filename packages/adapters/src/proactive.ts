@@ -146,6 +146,7 @@ export function createProactiveRuntime(deps: ProactiveRuntimeDeps) {
     ...(deps.judge ? { judge: deps.judge } : {}),
     config: deps.config,
     onError: (where, error) => getLogger().error(`proactive ${where}`, error),
+    trace: (step, fields) => getLogger().info(`proactive ${step}`, fields),
   });
   const enabled = new Set(
     (deps.enabledBots ?? "")

@@ -1,4 +1,5 @@
 export * from "./engine.js";
+export * from "./http-sink.js";
 export * from "./judge.js";
 export * from "./memory-store.js";
 export * from "./pg-store.js";
