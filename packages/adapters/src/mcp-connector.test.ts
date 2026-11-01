@@ -15,6 +15,7 @@ import { InstalledConnectorProvider } from "./installed-connectors.js";
 import { IntegrationProviderSettings } from "./integration-provider-settings.js";
 import { DIRECT_TOOL_LIMIT } from "./lazy-tool-catalog.js";
 import { allowlistDrift, McpConnector } from "./mcp-connector.js";
+import { actionableMcpFailure } from "./mcp-failure-reason.js";
 import type { McpOAuthBroker, OAuthMaterial } from "./mcp-oauth.js";
 import { StoredMcpOAuthProvider } from "./mcp-oauth.js";
 import { McpSession } from "./mcp-transport.js";
@@ -1103,6 +1104,14 @@ describe("MCP connector session cache", () => {
     }
 
     const refusal = [{ type: "error", message: "MCP tool is not assigned to this bot" }];
+    const unassigned = [
+      {
+        type: "error",
+        message: actionableMcpFailure(
+          "MCP tool is not assigned to this bot or is outside its explicit tool allowlist",
+        ),
+      },
+    ];
 
     it("lists and runs only read-only tools of an inherited server", async () => {
       const { state, prisma, connector } = setup();
@@ -1155,7 +1164,7 @@ describe("MCP connector session cache", () => {
         toolName: "read_it",
         catalogGroup: SERVER.slug,
       };
-      expect(await run(connector, "read_it", route)).toEqual(refusal);
+      expect(await run(connector, "read_it", route)).toEqual(unassigned);
       expect(state.calls).toEqual([]);
       await connector.close();
 
