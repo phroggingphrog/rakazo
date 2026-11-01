@@ -2259,3 +2259,75 @@ model CapabilityInstallSpace {
   @@index([spaceId, userId])
   @@map("capability_install_spaces")
 }
+
+/// Events the proactive core has stored but not yet applied. The primary key is the dedupe.
+model ProactiveInbox {
+  source     String
+  eventId    String
+  scope      String
+  seq        BigInt  @default(autoincrement())
+  event      Json
+  applied    Boolean @default(false)
+  receivedAt BigInt
+
+  @@id([source, eventId])
+  @@map("proactive_inbox")
+}
+
+/// Applied events, grouped by scope until a decision is recorded for them.
+model ProactiveEvent {
+  source  String
+  eventId String
+  scope   String
+  seq     BigInt
+  event   Json
+  decided Boolean @default(false)
+
+  @@id([source, eventId])
+  @@map("proactive_events")
+}
+
+/// One row per scope: the lock that orders it, and the debounce window.
+model ProactiveScope {
+  scope   String  @id
+  firstAt BigInt?
+  lastAt  BigInt?
+
+  @@map("proactive_scopes")
+}
+
+/// A decision to wake a target, recorded before hand-over so a repeat counts once.
+model ProactiveWake {
+  id         String  @id
+  scope      String
+  reason     String
+  events     Json
+  judgeError String?
+  state      String  @default("pending")
+  decidedAt  BigInt
+
+  @@map("proactive_wakes")
+}
+
+/// An outbound effect and how far it got, so a send reaches the outside once.
+model ProactiveEffect {
+  sendId    String  @id
+  toAddress String
+  payload   Json
+  state     String  @default("sending")
+  result    Json?
+  createdAt BigInt
+
+  @@map("proactive_effects")
+}
+
+model ProactiveTimer {
+  id    String @id
+  scope String
+  dueAt BigInt
+  note  String
+  setBy String
+  state String @default("pending")
+
+  @@map("proactive_timers")
+}
