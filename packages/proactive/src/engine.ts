@@ -21,7 +21,22 @@ export interface EngineOptions {
   config?: Partial<ProactiveConfig>;
   /** Called for errors the engine absorbs so a sweep can go on. */
   onError?: (where: string, error: unknown) => void;
+  /**
+   * Called at each step with ids and counts only, never message text, so one grep on a
+   * wake id or send id shows the whole path.
+   */
+  trace?: (step: TraceStep, fields: Record<string, string | number | undefined>) => void;
 }
+
+export type TraceStep =
+  | "received"
+  | "applied"
+  | "decided"
+  | "delivered"
+  | "delivery_failed"
+  | "timer_fired"
+  | "effect_sent"
+  | "effect_found";
 
 const SWEEP_LIMIT = 100;
 
@@ -38,6 +53,7 @@ export class ProactiveEngine {
   private readonly clock: Clock;
   readonly config: ProactiveConfig;
   private readonly onError: (where: string, error: unknown) => void;
+  private readonly trace: NonNullable<EngineOptions["trace"]>;
 
   constructor(options: EngineOptions) {
     this.store = options.store;
@@ -48,6 +64,7 @@ export class ProactiveEngine {
     this.clock = options.clock ?? systemClock;
     this.config = { ...DEFAULT_CONFIG, ...options.config };
     this.onError = options.onError ?? (() => undefined);
+    this.trace = options.trace ?? (() => undefined);
   }
 
   /**
@@ -60,6 +77,12 @@ export class ProactiveEngine {
     await this.scheduler
       .schedule({ name: "apply", key: `apply:${event.scope}`, runAt: this.clock.now() })
       .catch((e) => this.onError("schedule apply", e));
+    this.trace("received", {
+      source: event.source,
+      eventId: event.id,
+      scope: event.scope,
+      duplicate: outcome === "duplicate" ? 1 : 0,
+    });
     return { duplicate: outcome === "duplicate" };
   }
 
@@ -71,6 +94,7 @@ export class ProactiveEngine {
       this.config.debounceMs,
       this.config.debounceMaxMs,
     );
+    if (applied > 0) this.trace("applied", { scope, applied });
     if (applied > 0 && dueAt !== null) await this.scheduleDecide(scope, dueAt);
   }
 
@@ -98,6 +122,14 @@ export class ProactiveEngine {
       this.clock.now(),
     );
     if (!recorded.recorded) return; // another worker decided these events
+    this.trace("decided", {
+      scope,
+      events: claim.events.length,
+      outcome: decision.kind,
+      reason: decision.reason,
+      wakeId: recorded.wake?.id,
+      judgeError: decision.kind === "wake" && decision.judgeError ? 1 : 0,
+    });
     if (recorded.wake) await this.deliver(recorded.wake);
     // Events that arrived while we were deciding form the next group.
     const more = await this.store.claimGroup(
@@ -145,7 +177,9 @@ export class ProactiveEngine {
   private async deliver(wake: Wake): Promise<void> {
     try {
       await this.target.deliver(wake);
+      this.trace("delivered", { wakeId: wake.id, scope: wake.scope });
     } catch (error) {
+      this.trace("delivery_failed", { wakeId: wake.id, scope: wake.scope });
       // Left pending: `redeliver` hands it over again with the same id.
       this.onError("deliver", error);
       await this.scheduler
@@ -219,6 +253,7 @@ export class ProactiveEngine {
         raw: { setBy: timer.setBy },
       });
       await this.store.timerMarkFired(timer.id);
+      this.trace("timer_fired", { timerId: timer.id, scope: timer.scope });
       if (isFallback) await this.ensureFallback(timer.scope);
     }
     await this.armTimerJob();
@@ -262,11 +297,13 @@ export class ProactiveEngine {
       const found = await sink.findSent(to, sendId, record.createdAt);
       if (found) {
         await this.store.effectDone(sendId, found);
+        this.trace("effect_found", { sendId, sink: sink.name });
         return found;
       }
     }
     const result = await sink.send(sendId, to, payload);
     await this.store.effectDone(sendId, result);
+    this.trace("effect_sent", { sendId, sink: sink.name });
     return result;
   }
 }

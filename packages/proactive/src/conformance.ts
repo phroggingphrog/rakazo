@@ -198,6 +198,29 @@ export function runConformance(label: string, open: () => Promise<StoreHandle>):
       expect((await h.store.getWake("mention:s1:a"))?.state).toBe("delivered");
     });
 
+    it("a trace follows event to decision to delivery by id, without message text", async () => {
+      const h = await setup();
+      const steps: string[] = [];
+      const traced = new ProactiveEngine({
+        store: h.store,
+        scheduler: h.scheduler,
+        target: h.target,
+        clock: h.clock,
+        config: { fallbackMs: 0 },
+        trace: (step, fields) => steps.push(`${step} ${JSON.stringify(fields)}`),
+      });
+      await traced.receive(ev("secret-id", { addressed: "dm", text: "private words" }));
+      await h.scheduler.runUntil(traced, h.clock.t + 60_000);
+      expect(steps.map((s) => s.split(" ")[0])).toEqual([
+        "received",
+        "applied",
+        "decided",
+        "delivered",
+      ]);
+      expect(steps.join("\n")).toContain("dm:s1:secret-id");
+      expect(steps.join("\n")).not.toContain("private words");
+    });
+
     it("two engines deciding one scope produce one wake", async () => {
       const h = await setup();
       const other = h.make(new FakeTarget());
