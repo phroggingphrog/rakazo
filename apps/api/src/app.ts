@@ -163,6 +163,7 @@ import { loadEnv } from "./env.js";
 import { healthRoutes } from "./health.js";
 import { mountLocalComputerHost } from "./local-settings.js";
 import { marketingEmailRoutes, sendWelcomeEmail } from "./marketing-email.js";
+import { startMcpReprobe } from "./mcp-servers.js";
 import {
   createMessagingInboundHandler,
   teamChatSenderCanWakeMessageRoutines,
@@ -702,6 +703,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       })
     : undefined;
   reconciler?.start();
+  const stopMcpReprobe = startMcpReprobe({ prisma, mcp, secrets }, mcpOAuth);
 
   const router = createRouter({
     speechSummary:
@@ -1405,6 +1407,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       await teamChatBridge?.stop();
       await stopInstalledBridges?.();
       await email?.drain?.();
+      stopMcpReprobe();
       await reconciler?.stop();
       await oauthTokenUpgrade;
       await runsStopped;

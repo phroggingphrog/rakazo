@@ -11,7 +11,7 @@ import {
 import type { Actor, McpServer, McpServerConfigInput } from "@rakazo/contracts";
 import { mcpOAuthEnvReferences } from "@rakazo/contracts";
 import type { McpServer as McpServerRow, Prisma } from "@rakazo/db";
-import { itemSecretIn, spaceAvailability } from "@rakazo/db";
+import { itemSecretIn, runAsSystem, runAsTenant, spaceAvailability } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { assertNameFreeWhereAvailable, userAddedAvailability } from "./availability.js";
 import { dismissMcpServerApprovals } from "./mcp-approval.js";
@@ -190,45 +190,137 @@ export function mcpCredentialRecords(
   return parsed.headers && parsed.env ? { headers: parsed.headers, env: parsed.env } : null;
 }
 
+type McpProbeDeps = Pick<RouterDeps, "prisma" | "mcp" | "secrets">;
+type McpScope = Pick<Actor, "spaceId" | "userId">;
+
+async function awaitsOAuth(
+  deps: McpProbeDeps,
+  server: McpServerRow,
+  actor: McpScope,
+  oauth: McpOAuthSummary,
+) {
+  if (oauth.status === "connected") return false;
+  const secret = server.secretId
+    ? await deps.prisma.secret.findFirst({
+        where: { id: server.secretId, ...itemSecretIn(actor) },
+      })
+    : null;
+  const material: McpSecretMaterial = secret
+    ? JSON.parse(await deps.secrets.load(secret.ciphertext, { recordId: secret.id }))
+    : {};
+  const needsGrant = [
+    ...Object.values(material.env ?? {}),
+    ...Object.values(material.files ?? {}),
+  ].some((value) => mcpOAuthEnvReferences(value).fields.length > 0);
+  return (
+    needsGrant ||
+    (oauth.clientId !== null &&
+      !material.secret &&
+      Object.keys(material.headers ?? {}).length === 0)
+  );
+}
+
+async function probeServer(deps: McpProbeDeps, server: McpServerRow, actor: McpScope) {
+  if (!deps.mcp) return;
+  try {
+    // The connector records the outcome itself.
+    await deps.mcp.probe(server, { spaceId: actor.spaceId, userId: actor.userId });
+  } catch {
+    getLogger().error("mcp server probe failed", { "mcp.server.id": server.id });
+    await recordMcpServerHealth(deps.prisma, server.id, {
+      status: "error",
+      message: "Could not check this MCP server",
+    });
+  }
+}
+
+const MCP_REPROBE_INTERVAL_MS = 10 * 60_000;
+const MCP_REPROBE_RECENT_MS = 60_000;
+const MCP_REPROBE_CONCURRENCY = 3;
+const MCP_REPROBE_BATCH = 50;
+
+/**
+ * Probes enabled servers still `unknown` or never checked, which the first probe after a
+ * save leaves behind when the API restarts mid-flight. A row checked in the last minute is
+ * left alone, and stamping the check time first claims it against another API instance.
+ * Never throws; logs one line.
+ */
+export async function reprobeUnknownMcpServers(
+  deps: McpProbeDeps,
+  mcpOAuth: McpOAuthBroker,
+): Promise<void> {
+  if (!deps.mcp) return;
+  try {
+    const recent = new Date(Date.now() - MCP_REPROBE_RECENT_MS);
+    const due = {
+      enabled: true,
+      OR: [{ healthCheckedAt: null }, { healthStatus: "unknown", healthCheckedAt: { lt: recent } }],
+    };
+    const queue = await runAsSystem("re-check MCP servers left unknown", () =>
+      deps.prisma.mcpServer.findMany({
+        where: due,
+        orderBy: { createdAt: "asc" },
+        take: MCP_REPROBE_BATCH,
+      }),
+    );
+    const found = queue.length;
+    let probed = 0;
+    const worker = async () => {
+      for (let row = queue.shift(); row; row = queue.shift()) {
+        const server = row;
+        try {
+          const scope = { spaceId: server.spaceId, userId: server.userId };
+          await runAsTenant(scope, async () => {
+            const oauth = await mcpOAuth.summaryFor(server, scope);
+            if (await awaitsOAuth(deps, server, scope, oauth)) return;
+            const claimed = await deps.prisma.mcpServer.updateMany({
+              where: { id: server.id, ...due },
+              data: { healthCheckedAt: new Date() },
+            });
+            if (claimed.count === 0) return;
+            probed += 1;
+            await probeServer(deps, server, scope);
+          });
+        } catch (error) {
+          getLogger().error("mcp server re-check failed", error, { "mcp.server.id": server.id });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: MCP_REPROBE_CONCURRENCY }, worker));
+    getLogger().info("mcp re-check sweep", {
+      "mcp.reprobe.found": found,
+      "mcp.reprobe.probed": probed,
+    });
+  } catch (error) {
+    getLogger().error("mcp re-check sweep failed", error);
+  }
+}
+
+/** Runs the sweep now and every ten minutes; returns the function that stops it. */
+export function startMcpReprobe(deps: McpProbeDeps, mcpOAuth: McpOAuthBroker): () => void {
+  let running = false;
+  const run = () => {
+    if (running) return;
+    running = true;
+    void reprobeUnknownMcpServers(deps, mcpOAuth).finally(() => {
+      running = false;
+    });
+  };
+  run();
+  const timer = setInterval(run, MCP_REPROBE_INTERVAL_MS);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
 export function createMcpServers(
   deps: RouterDeps,
   onboardingDeps: Parameters<typeof dismissMcpServerApprovals>[0],
   mcpOAuth: McpOAuthBroker,
 ) {
-  const mcpAwaitsOAuth = async (server: McpServerRow, actor: Actor, oauth: McpOAuthSummary) => {
-    if (oauth.status === "connected") return false;
-    const secret = server.secretId
-      ? await deps.prisma.secret.findFirst({
-          where: { id: server.secretId, ...itemSecretIn(actor) },
-        })
-      : null;
-    const material: McpSecretMaterial = secret
-      ? JSON.parse(await deps.secrets.load(secret.ciphertext, { recordId: secret.id }))
-      : {};
-    const needsGrant = [
-      ...Object.values(material.env ?? {}),
-      ...Object.values(material.files ?? {}),
-    ].some((value) => mcpOAuthEnvReferences(value).fields.length > 0);
-    return (
-      needsGrant ||
-      (oauth.clientId !== null &&
-        !material.secret &&
-        Object.keys(material.headers ?? {}).length === 0)
-    );
-  };
-  const probeMcpServer = async (server: McpServerRow, actor: Actor): Promise<void> => {
-    if (!deps.mcp) return;
-    try {
-      // The connector records the outcome itself.
-      await deps.mcp.probe(server, { spaceId: actor.spaceId, userId: actor.userId });
-    } catch {
-      getLogger().error("mcp server probe failed", { "mcp.server.id": server.id });
-      await recordMcpServerHealth(deps.prisma, server.id, {
-        status: "error",
-        message: "Could not check this MCP server",
-      });
-    }
-  };
+  const mcpAwaitsOAuth = (server: McpServerRow, actor: Actor, oauth: McpOAuthSummary) =>
+    awaitsOAuth(deps, server, actor, oauth);
+  const probeMcpServer = (server: McpServerRow, actor: Actor): Promise<void> =>
+    probeServer(deps, server, actor);
   /**
    * Shows `installing` (stdio may have to download a package) and probes in the background.
    * Never throws; a probe problem must not fail the save.
