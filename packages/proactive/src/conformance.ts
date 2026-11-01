@@ -178,10 +178,9 @@ export function runConformance(label: string, open: () => Promise<StoreHandle>):
       const h = await setup();
       h.target.failNext = 1;
       await h.engine.receive(ev("a", { addressed: "dm" }));
-      await h.scheduler.runUntil(h.engine, h.clock.t + 60_000);
+      await h.scheduler.runUntil(h.engine, h.clock.t + 3_000);
       expect((await h.store.getWake("dm:s1:a"))?.state).toBe("pending");
-      h.clock.advance(5_000);
-      expect(await h.engine.redeliver()).toBe(1);
+      await h.scheduler.runUntil(h.engine, h.clock.t + 60_000); // the redeliver job fires itself
       expect((await h.store.getWake("dm:s1:a"))?.state).toBe("delivered");
       expect(h.target.accepted.size).toBe(1);
       expect(h.target.calls.every((w) => w.id === "dm:s1:a")).toBe(true);
