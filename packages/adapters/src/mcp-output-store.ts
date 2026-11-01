@@ -74,7 +74,7 @@ export class PrismaMcpOutputLedger implements McpOutputLedger {
   async createUnderRunLock(record: McpOutputMetadata) {
     await this.db.$transaction(async (tx) => {
       const lockKey = JSON.stringify([record.spaceId, record.userId, record.botId, record.runId]);
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`mcp-output:${lockKey}`}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`mcp-output:${lockKey}`}, 0))`;
       const used = await tx.mcpToolOutput.aggregate({
         where: {
           spaceId: record.spaceId,
