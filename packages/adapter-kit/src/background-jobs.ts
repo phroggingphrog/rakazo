@@ -35,6 +35,10 @@ const payloadSchemas = {
     ticketId: z.string().min(1),
     tokenDigest: z.string().min(1),
   }),
+  "proactive.apply": z.object({ scope: z.string().min(1) }),
+  "proactive.decide": z.object({ scope: z.string().min(1) }),
+  "proactive.redeliver": z.object({}),
+  "proactive.timers": z.object({}),
 } satisfies { [Name in BackgroundJobName]: z.ZodType<BackgroundJobPayloads[Name]> };
 
 export function parseBackgroundJob(name: string, payload: unknown): BackgroundJob {
@@ -209,4 +213,18 @@ export function purchasePollJob(purchaseId: string, availableAt?: Date): Backgro
     replaceKey: `purchase.poll:${purchaseId}`,
     ...(availableAt ? { availableAt } : {}),
   };
+}
+
+/** A delayed proactive-core job. A repeat with the same key replaces the pending one. */
+export function proactiveJob(
+  name: "apply" | "decide" | "redeliver" | "timers",
+  key: string,
+  runAt: Date,
+): BackgroundJob {
+  const replaceKey = `proactive:${key}`;
+  if (name === "apply" || name === "decide") {
+    const scope = key.slice(key.indexOf(":") + 1);
+    return { name: `proactive.${name}`, payload: { scope }, availableAt: runAt, replaceKey };
+  }
+  return { name: `proactive.${name}`, payload: {}, availableAt: runAt, replaceKey };
 }

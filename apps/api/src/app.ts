@@ -51,6 +51,7 @@ import {
   createMessagingTeamChatSender,
   createModelCreditReconciler,
   createPaymentWalletProvider,
+  createProactiveRuntime,
   createProductAnalytics,
   createRunExecutor,
   createRunSandbox,
@@ -108,7 +109,7 @@ import {
   SERVER_BUILD_HEADER,
 } from "@rakazo/contracts";
 import { encryptionKeyWarning, signupPolicyFromEnv } from "@rakazo/core";
-import type { Pool, PrismaClient } from "@rakazo/db";
+import type { Pool, PrismaClient, ThreadEvents } from "@rakazo/db";
 import {
   configureProviderTransactionPool,
   createBoardEvents,
@@ -211,6 +212,7 @@ export const MOBILE_AUTH_ORIGINS = [
 export interface AppHandles {
   app: Hono;
   prisma: PrismaClient;
+  events: ThreadEvents;
   jobs: JobPublisher;
   sandbox: SandboxProvider;
   composio?: ComposioProvider;
@@ -667,7 +669,15 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     shutdownSignal: shutdown.signal,
   });
 
+  // Off until PROACTIVE_WEBHOOK_BOTS names bots (or "*"); then those bots' webhooks use the core.
+  const proactive = createProactiveRuntime({
+    prisma,
+    events,
+    jobs,
+    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
+  });
   const jobHandlers = createBackgroundJobHandlers({
+    proactive,
     executor,
     prisma,
     sandbox,
@@ -710,6 +720,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
         ),
         reconcileAuditLog: createAuditLogReconciler(prisma, auditLogConfig()),
         reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
+        reconcileProactive: () => proactive.reconcile(),
       })
     : undefined;
   reconciler?.start();
@@ -995,7 +1006,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     },
     sessionActor,
   );
-  mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs });
+  mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs, proactive });
   if (billing && billingProvider) {
     mountBillingRoutes(app, {
       billing,
@@ -1393,6 +1404,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   return {
     app,
     prisma,
+    events,
     jobs,
     sandbox,
     composio: stack.composio,

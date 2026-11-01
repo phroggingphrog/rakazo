@@ -30,6 +30,7 @@ import type { ExpoPushProvider } from "./expo-push.js";
 import { compactHistory } from "./history-compaction.js";
 import type { MemoryProviderResolver } from "./memory-provider-factory.js";
 import { deliverMessagingOutbound, mirrorMessagingOutbound } from "./messaging-delivery.js";
+import type { ProactiveRuntime } from "./proactive.js";
 import { pollPurchase } from "./purchase-poll.js";
 import { expireTaughtSkillTeaching } from "./teaching-session.js";
 
@@ -57,6 +58,7 @@ const OWNER = { spaceId: true, userId: true } as const;
 const CONTROL_EXPIRE_RETRY_MS = 30_000;
 
 export function createBackgroundJobHandlers(deps: {
+  proactive?: ProactiveRuntime;
   executor: ReturnType<typeof createRunExecutor>;
   prisma: PrismaClient;
   sandbox: SandboxProvider;
@@ -217,6 +219,19 @@ export function createBackgroundJobHandlers(deps: {
     // A receipt belongs to a device's push token, not to a Space.
     "push.receipt": async (payload) => {
       await runAsSystem("check a push receipt", () => deps.notifications?.checkReceipt(payload));
+    },
+    // The proactive core acts for a bot's scope through its own tenant lookup, not a job owner.
+    "proactive.apply": async (payload) => {
+      await deps.proactive?.handlers.apply(payload.scope);
+    },
+    "proactive.decide": async (payload) => {
+      await deps.proactive?.handlers.decide(payload.scope);
+    },
+    "proactive.redeliver": async () => {
+      await deps.proactive?.handlers.redeliver();
+    },
+    "proactive.timers": async () => {
+      await deps.proactive?.handlers.timers();
     },
     "history.compact": asOwner(thread, async (payload) => {
       // Retrieval policies use stored context without paid message-count compaction.

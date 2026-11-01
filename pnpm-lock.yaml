@@ -710,6 +710,9 @@ importers:
       '@rakazo/logging':
         specifier: workspace:*
         version: link:../logging
+      '@rakazo/proactive':
+        specifier: workspace:*
+        version: link:../proactive
       '@stripe/link-sdk':
         specifier: 0.15.0
         version: 0.15.0

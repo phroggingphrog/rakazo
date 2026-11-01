@@ -33,6 +33,7 @@ import {
   createModelCreditReconciler,
   createPaymentWalletProvider,
   createPostgresReconciliationLeadership,
+  createProactiveRuntime,
   createProductAnalytics,
   createReservedGraphileJobWorkerHost,
   createRoutineRetryNoticeReconciler,
@@ -329,7 +330,14 @@ async function main() {
       }),
     );
 
+  const proactive = createProactiveRuntime({
+    prisma,
+    events,
+    jobs,
+    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
+  });
   const jobHandlers = createBackgroundJobHandlers({
+    proactive,
     executor,
     prisma,
     sandbox,
@@ -375,6 +383,7 @@ async function main() {
     reconcileHomeStorage: homeStorageSweeper(home),
     reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
     reconcileDeadJobs: inMemoryJobs ? undefined : createDeadJobPruner(pool),
+    reconcileProactive: () => proactive.reconcile(),
   });
   let stopHealth: (() => Promise<void>) | undefined;
   let stopping = false;
