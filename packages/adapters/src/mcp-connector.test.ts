@@ -1052,6 +1052,85 @@ describe("MCP connector session cache", () => {
     await connector.close();
   });
 
+  it("inherits enabled owner-available servers for a valid bot and rechecks inherited calls", async () => {
+    const state = {
+      failNext: false,
+      initializations: 0,
+      calls: [] as string[],
+      tools: [{ name: "inherited_tool", inputSchema: { type: "object" } }],
+    };
+    vi.stubGlobal("fetch", mcpFetch(state));
+    const botFind = vi.fn().mockResolvedValue({ id: "bot-1" });
+    const serverFindMany = vi.fn().mockResolvedValue([SERVER]);
+    const serverFindFirst = vi.fn().mockResolvedValue(SERVER);
+    const assignmentFindMany = vi.fn().mockResolvedValue([]);
+    const assignmentFindFirst = vi.fn().mockResolvedValue(null);
+    const connector = new McpConnector({
+      bot: { findFirst: botFind },
+      mcpServer: { findMany: serverFindMany, findFirst: serverFindFirst },
+      botMcpServer: { findMany: assignmentFindMany, findFirst: assignmentFindFirst },
+    } as never, {} as never, { network: TEST_NETWORK });
+    const context = {
+      spaceId: "w1",
+      userId: "u1",
+      botId: "bot-1",
+      signal: new AbortController().signal,
+    } as never;
+
+    const [tool] = await connector.discoverTools(context);
+    expect(tool?.name).toBe("mcp__demo__inherited_tool");
+    expect(botFind).toHaveBeenCalledWith({
+      where: { id: "bot-1", spaceId: "w1", userId: "u1" },
+      select: { id: true },
+    });
+    expect(serverFindMany).toHaveBeenCalledWith({
+      where: {
+        enabled: true,
+        userId: "u1",
+        OR: [
+          { spaceId: "w1" },
+          { allSpaces: true },
+          { availableIn: { some: { spaceId: "w1" } } },
+        ],
+      },
+    });
+
+    const events: unknown[] = [];
+    for await (const event of connector.execute({
+      tool: tool!.name,
+      args: {},
+      executionId: "inherited",
+      route: tool!.route,
+    } as never, context)) events.push(event);
+    expect(events).toEqual([{ type: "result", data: { content: [{ type: "text", text: "ok" }] } }]);
+    expect(assignmentFindFirst).toHaveBeenCalled();
+    expect(serverFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: SERVER.id,
+        enabled: true,
+        userId: "u1",
+        OR: [
+          { spaceId: "w1" }, { allSpaces: true }, { availableIn: { some: { spaceId: "w1" } } },
+        ],
+      },
+    });
+    await connector.close();
+  });
+
+  it("does not expose inherited servers to an unknown bot", async () => {
+    const serverFindMany = vi.fn();
+    const connector = new McpConnector({
+      bot: { findFirst: vi.fn().mockResolvedValue(null) },
+      mcpServer: { findMany: serverFindMany },
+      botMcpServer: { findMany: vi.fn().mockResolvedValue([]) },
+    } as never, {} as never);
+    await expect(connector.discoverTools({
+      spaceId: "w1", userId: "u1", botId: "not-a-bot", signal: new AbortController().signal,
+    } as never)).resolves.toEqual([]);
+    expect(serverFindMany).not.toHaveBeenCalled();
+    await connector.close();
+  });
+
   it("returns no tools when the MCP catalog is empty", async () => {
     const connector = new McpConnector(
       { botMcpServer: { findMany: vi.fn().mockResolvedValue([]) } } as never,
