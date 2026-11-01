@@ -148,6 +148,13 @@ export class ProactiveEngine {
     } catch (error) {
       // Left pending: `redeliver` hands it over again with the same id.
       this.onError("deliver", error);
+      await this.scheduler
+        .schedule({
+          name: "redeliver",
+          key: "redeliver",
+          runAt: this.clock.now() + this.config.redeliverAfterMs,
+        })
+        .catch((e) => this.onError("schedule redeliver", e));
       return;
     }
     await this.store.markDelivered(wake.id);

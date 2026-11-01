@@ -10,12 +10,38 @@ import type {
   Wake,
 } from "./types.js";
 
-/** The slice of `pg`'s Pool and PoolClient this store needs, so the package needs no driver. */
+/** Runs SQL. `transaction` must roll back when its callback throws. */
 export interface PgQueryable {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
 }
+export interface PgExecutor extends PgQueryable {
+  transaction<T>(fn: (q: PgQueryable) => Promise<T>): Promise<T>;
+}
+
+/** The slice of `pg`'s Pool this package needs to build an executor. */
 export interface PgPoolLike extends PgQueryable {
   connect(): Promise<PgQueryable & { release(error?: unknown): void }>;
+}
+
+/** Executor over a `pg` Pool: one client per transaction. */
+export function pgPoolExecutor(pool: PgPoolLike): PgExecutor {
+  return {
+    query: (text, params) => pool.query(text, params),
+    async transaction(fn) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const out = await fn(client);
+        await client.query("COMMIT");
+        client.release();
+        return out;
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        client.release();
+        throw error;
+      }
+    },
+  };
 }
 
 class Rollback extends Error {}
@@ -34,27 +60,16 @@ function dueAt(
 
 /** Postgres implementation. Safe for many instances: scope work runs under a row lock. */
 export class PgProactiveStore implements ProactiveStore {
-  constructor(private readonly pool: PgPoolLike) {}
+  constructor(private readonly pool: PgExecutor) {}
 
-  private async tx<T>(fn: (q: PgQueryable) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
-      const out = await fn(client);
-      await client.query("COMMIT");
-      client.release();
-      return out;
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      client.release();
-      throw error;
-    }
+  private tx<T>(fn: (q: PgQueryable) => Promise<T>): Promise<T> {
+    return this.pool.transaction(fn);
   }
 
   async receive(event: ProactiveEvent, now: Millis): Promise<"new" | "duplicate"> {
     const r = await this.pool.query(
       `INSERT INTO proactive_inbox ("source","eventId","scope","event","receivedAt")
-       VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING "seq"`,
+       VALUES ($1,$2,$3,$4::jsonb,$5::bigint) ON CONFLICT DO NOTHING RETURNING "seq"`,
       [event.source, event.id, event.scope, JSON.stringify(event), now],
     );
     return r.rows.length > 0 ? "new" : "duplicate";
@@ -106,11 +121,10 @@ export class PgProactiveStore implements ProactiveStore {
       if (applied > 0) {
         state.firstAt ??= now;
         state.lastAt = now;
-        await q.query(`UPDATE proactive_scopes SET "firstAt"=$2,"lastAt"=$3 WHERE "scope"=$1`, [
-          scope,
-          state.firstAt,
-          state.lastAt,
-        ]);
+        await q.query(
+          `UPDATE proactive_scopes SET "firstAt"=$2::bigint,"lastAt"=$3::bigint WHERE "scope"=$1`,
+          [scope, state.firstAt, state.lastAt],
+        );
       }
       return { applied, dueAt: dueAt(state.firstAt, state.lastAt, debounceMs, debounceMaxMs) };
     });
@@ -161,10 +175,10 @@ export class PgProactiveStore implements ProactiveStore {
           `SELECT 1 FROM proactive_events WHERE "scope"=$1 AND NOT "decided" LIMIT 1`,
           [scope],
         );
-        await q.query(`UPDATE proactive_scopes SET "firstAt"=$2,"lastAt"=$2 WHERE "scope"=$1`, [
-          scope,
-          left.rows.length > 0 ? now : null,
-        ]);
+        await q.query(
+          `UPDATE proactive_scopes SET "firstAt"=$2::bigint,"lastAt"=$2::bigint WHERE "scope"=$1`,
+          [scope, left.rows.length > 0 ? now : null],
+        );
         if (decision.kind === "drop") return { recorded: true as const };
         const wake: Wake = {
           id: wakeId(decision.reason, scope, last.id),
@@ -175,7 +189,7 @@ export class PgProactiveStore implements ProactiveStore {
         };
         await q.query(
           `INSERT INTO proactive_wakes ("id","scope","reason","events","judgeError","decidedAt")
-           VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+           VALUES ($1,$2,$3,$4::jsonb,$5,$6::bigint) ON CONFLICT DO NOTHING`,
           [wake.id, scope, wake.reason, JSON.stringify(events), wake.judgeError ?? null, now],
         );
         return { recorded: true as const, wake };
@@ -202,7 +216,7 @@ export class PgProactiveStore implements ProactiveStore {
 
   async pendingWakes(before: Millis, limit: number): Promise<Wake[]> {
     const r = await this.pool.query(
-      `SELECT * FROM proactive_wakes WHERE "state"='pending' AND "decidedAt"<=$1
+      `SELECT * FROM proactive_wakes WHERE "state"='pending' AND "decidedAt"<=$1::bigint
        ORDER BY "decidedAt" LIMIT $2`,
       [before, limit],
     );
@@ -252,7 +266,7 @@ export class PgProactiveStore implements ProactiveStore {
   ): Promise<{ created: boolean; record: EffectRecord }> {
     const ins = await this.pool.query(
       `INSERT INTO proactive_effects ("sendId","toAddress","payload","createdAt")
-       VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING *`,
+       VALUES ($1,$2,$3::jsonb,$4::bigint) ON CONFLICT DO NOTHING RETURNING *`,
       [sendId, to, JSON.stringify(payload ?? null), now],
     );
     if (ins.rows[0]) return { created: true, record: this.effectFromRow(ins.rows[0]) };
@@ -263,7 +277,7 @@ export class PgProactiveStore implements ProactiveStore {
 
   async effectDone(sendId: string, result: EffectResult): Promise<void> {
     await this.pool.query(
-      `UPDATE proactive_effects SET "state"='sent',"result"=$2 WHERE "sendId"=$1`,
+      `UPDATE proactive_effects SET "state"='sent',"result"=$2::jsonb WHERE "sendId"=$1`,
       [sendId, JSON.stringify(result)],
     );
   }
@@ -282,7 +296,7 @@ export class PgProactiveStore implements ProactiveStore {
   async timerSet(timer: Omit<TimerRecord, "state">): Promise<"set" | "exists"> {
     const r = await this.pool.query(
       `INSERT INTO proactive_timers ("id","scope","dueAt","note","setBy")
-       VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING 1`,
+       VALUES ($1,$2,$3::bigint,$4,$5) ON CONFLICT DO NOTHING RETURNING 1`,
       [timer.id, timer.scope, timer.dueAt, timer.note, timer.setBy],
     );
     return r.rows.length > 0 ? "set" : "exists";
@@ -298,7 +312,7 @@ export class PgProactiveStore implements ProactiveStore {
 
   async timersDue(now: Millis, limit: number): Promise<TimerRecord[]> {
     const r = await this.pool.query(
-      `SELECT * FROM proactive_timers WHERE "state"='pending' AND "dueAt"<=$1
+      `SELECT * FROM proactive_timers WHERE "state"='pending' AND "dueAt"<=$1::bigint
        ORDER BY "dueAt" LIMIT $2`,
       [now, limit],
     );

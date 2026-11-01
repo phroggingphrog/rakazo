@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
 import { runConformance } from "./conformance.js";
-import { PgProactiveStore } from "./pg-store.js";
+import { PgProactiveStore, pgPoolExecutor } from "./pg-store.js";
 import { PROACTIVE_SCHEMA_SQL } from "./schema.js";
 
 describe("migration", () => {
@@ -35,7 +35,7 @@ if (url) {
     });
     await pool.query(PROACTIVE_SCHEMA_SQL);
     return {
-      store: new PgProactiveStore(pool),
+      store: new PgProactiveStore(pgPoolExecutor(pool)),
       cleanup: async () => {
         await pool.end();
         const drop = new pg.Pool({ connectionString: url, max: 1 });
