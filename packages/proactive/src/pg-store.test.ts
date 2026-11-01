@@ -10,7 +10,7 @@ describe("migration", () => {
   it("is the same text as the package schema", () => {
     const file = fileURLToPath(
       new URL(
-        "../../db/prisma/migrations/20261102000000_proactive_core/migration.sql",
+        "../../db/prisma/migrations/20261114000000_proactive_core/migration.sql",
         import.meta.url,
       ),
     );

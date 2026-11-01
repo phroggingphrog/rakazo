@@ -753,6 +753,11 @@ export interface BackgroundJobPayloads {
   "purchase.poll": { purchaseId: string };
   /** Read an Expo push receipt; the token is identified by its digest, never stored. */
   "push.receipt": { userId: string; ticketId: string; tokenDigest: string };
+  /** Proactive core: apply a scope's stored events, decide its due group, hand over wakes, fire timers. */
+  "proactive.apply": { scope: string };
+  "proactive.decide": { scope: string };
+  "proactive.redeliver": Record<string, never>;
+  "proactive.timers": Record<string, never>;
 }
 
 export type BackgroundJobName = keyof BackgroundJobPayloads;

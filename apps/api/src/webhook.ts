@@ -1,10 +1,12 @@
 import { SecretStoreUnavailableError } from "@rakazo/adapter-kit";
+import { inboundRoutineModelPin } from "@rakazo/adapters";
 import { hasValidBearerToken } from "@rakazo/core";
 import type { Hono } from "hono";
 import { mountGithubWebhookRoute } from "./github-webhook.js";
 import { readBoundedBody } from "./http-body.js";
 import type { WebhookDeps, WebhookSecretCache } from "./webhook-inbound.js";
 import {
+  buildInboundPromptText,
   deliverWebhookEvent,
   formatWebhookPrompt,
   loadWebhookTarget,
@@ -87,6 +89,30 @@ export function mountWebhookHttpRoutes(app: Hono, deps: WebhookDeps) {
       (typeof payload.id === "string" ? payload.id.trim() : "") ||
       (typeof payload.event_id === "string" ? payload.event_id.trim() : "") ||
       undefined;
+
+    if (deps.proactive?.enabledFor(target.bot.id)) {
+      // The event is stored before this answers, so a 202 means it will be acted on once.
+      const pin = inboundRoutineModelPin(webhookRoutines);
+      const outcome = await deps.proactive.receiveWebhook({
+        botId: target.bot.id,
+        deliveryKey: idempotencyKey,
+        prompt: buildInboundPromptText({
+          prompt: eventPrompt,
+          routines: webhookRoutines,
+          source: "webhook",
+        }),
+        ...(pin.modelProvider && pin.modelId
+          ? {
+              modelPin: {
+                modelProvider: pin.modelProvider,
+                modelId: pin.modelId,
+                thinkingLevel: pin.thinkingLevel ?? null,
+              },
+            }
+          : {}),
+      });
+      return c.json({ ok: true, accepted: true, duplicate: outcome.duplicate }, 202);
+    }
 
     return c.json(
       await deliverWebhookEvent(deps, target, {
