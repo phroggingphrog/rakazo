@@ -80,6 +80,7 @@ import {
   withSecretPersistence,
 } from "@rakazo/adapters";
 import { resolveEncryptionKey, resolveSupervisorToken, uploadSizeFromEnv } from "@rakazo/core";
+import type { ContentKeyRing } from "@rakazo/db";
 import {
   createBoardEvents,
   createDb,
@@ -330,6 +331,7 @@ async function main() {
 
   const proactive = createProactiveRuntime({
     prisma,
+    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
     events,
     jobs,
     enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,

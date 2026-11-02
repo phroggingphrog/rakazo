@@ -28,6 +28,7 @@ import type {
   ConnectorRegistry,
   PluginRepoFetcher,
   PluginTextReader,
+  ProactiveRuntime,
   RemoteConnectorDependencies,
   UserDeviceGateway,
 } from "@rakazo/adapters";
@@ -109,7 +110,7 @@ import {
   SERVER_BUILD_HEADER,
 } from "@rakazo/contracts";
 import { encryptionKeyWarning, signupPolicyFromEnv } from "@rakazo/core";
-import type { Pool, PrismaClient, ThreadEvents } from "@rakazo/db";
+import type { ContentKeyRing, Pool, PrismaClient, ThreadEvents } from "@rakazo/db";
 import {
   createBoardEvents,
   createDb,
@@ -209,6 +210,7 @@ export interface AppHandles {
   app: Hono;
   prisma: PrismaClient;
   events: ThreadEvents;
+  proactive: ProactiveRuntime;
   jobs: JobPublisher;
   sandbox: SandboxProvider;
   composio?: ComposioProvider;
@@ -663,6 +665,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   // Off until PROACTIVE_WEBHOOK_BOTS names bots (or "*"); then those bots' webhooks use the core.
   const proactive = createProactiveRuntime({
     prisma,
+    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
     events,
     jobs,
     enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
@@ -1381,6 +1384,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     app,
     prisma,
     events,
+    proactive,
     jobs,
     sandbox,
     composio: stack.composio,

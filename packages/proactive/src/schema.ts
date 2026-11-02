@@ -32,6 +32,8 @@ CREATE TABLE "proactive_events" (
     CONSTRAINT "proactive_events_pkey" PRIMARY KEY ("source","eventId")
 );
 
+CREATE INDEX "proactive_inbox_applied_idx" ON "proactive_inbox"("receivedAt") WHERE "applied";
+
 CREATE INDEX "proactive_events_undecided_idx" ON "proactive_events"("scope", "seq") WHERE NOT "decided";
 
 CREATE TABLE "proactive_scopes" (

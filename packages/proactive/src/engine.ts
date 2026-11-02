@@ -8,6 +8,7 @@ import {
   type Millis,
   type ProactiveConfig,
   type ProactiveEvent,
+  type PruneCounts,
   type Wake,
 } from "./types.js";
 
@@ -36,7 +37,9 @@ export type TraceStep =
   | "delivery_failed"
   | "timer_fired"
   | "effect_sent"
-  | "effect_found";
+  | "effect_found"
+  | "pruned"
+  | "scope_forgotten";
 
 const SWEEP_LIMIT = 100;
 
@@ -210,6 +213,27 @@ export class ProactiveEngine {
     for (const scope of await this.store.scopesWithUndecided(SWEEP_LIMIT)) {
       await this.scheduleDecide(scope, this.clock.now());
     }
+  }
+
+  // --- retention ------------------------------------------------------------------
+
+  /** Delete finished work older than `retentionMs`. Safe to run from every instance. */
+  async prune(): Promise<PruneCounts> {
+    if (this.config.retentionMs <= 0) return { events: 0, wakes: 0, timers: 0, effects: 0 };
+    const counts = await this.store.prune(this.clock.now() - this.config.retentionMs);
+    this.trace("pruned", { ...counts });
+    return counts;
+  }
+
+  /** Scopes that hold any row, for an adapter to check against its own owners. */
+  knownScopes(limit: number, after?: string): Promise<string[]> {
+    return this.store.knownScopes(limit, after);
+  }
+
+  /** Forget a scope whose owner is gone: its events, wakes and timers. */
+  async forgetScope(scope: string): Promise<void> {
+    await this.store.deleteScope(scope);
+    this.trace("scope_forgotten", { scope });
   }
 
   // --- timers ---------------------------------------------------------------------

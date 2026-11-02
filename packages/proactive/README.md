@@ -48,7 +48,18 @@ Register the four job handlers (`apply`, `decide`, `redeliver`, `timers`) with w
 
 Roll out in this order: one test bot with a test webhook; read the `decided` lines for a week; add real bots. The model judge (`LlmJudge`) is not wired to a model in Rakazo yet, so judged sources do not exist there; webhooks are addressed and always wake.
 
+## Data at rest
+
+- `PgProactiveStore(executor, codec?)`: with a `PayloadCodec` the event, wake and timer-note bodies are sealed before they are written and opened on read; ids, scopes, timestamps and states stay readable. Without one they are plain JSON.
+- Rakazo passes `RakazoPayloadCodec`: the owning bot's space key and the same `rkz1:` cipher as message content, bound to the bot so a body copied under another bot fails to open. `CONTENT_ENCRYPTION=off` stores plaintext, as for messages.
+- The six tables have row-level security with a system-only policy: tenant contexts read and write nothing; the webhook receiver and the worker run `runAsSystem`.
+- `engine.prune()` deletes finished work older than `retentionMs` (30 days; 0 keeps everything). A repeat of a pruned event id is accepted as new, so keep the window longer than any sender retries.
+- Rakazo runs `maintain()` from the reconciler once an hour: prune, then `forgetScope` for every `bot:<id>` whose bot is gone (bot, space or account deletion). Rows of a deleted bot can live up to an hour.
+
 ## Known limits
+
+- Effect payloads and results (`proactive_effects`) are not sealed and have no scope, so deleting a bot does not remove them. Rakazo writes no effects yet; seal them before wiring a sink.
+- If a bot is deleted while its rows are still there, jobs for that scope cannot open the sealed bodies and fail until the next hourly sweep removes them.
 
 - Order across restarts is the order events were stored, not the order they were sent.
 - A deleted or archived bot's wake is dropped as delivered.

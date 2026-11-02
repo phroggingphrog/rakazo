@@ -1,4 +1,5 @@
 import { wakeId } from "./memory-store.js";
+import type { PayloadCodec } from "./ports.js";
 import type { ClaimResult, ProactiveStore, StoredWake } from "./store.js";
 import type {
   Decision,
@@ -6,6 +7,7 @@ import type {
   EffectResult,
   Millis,
   ProactiveEvent,
+  PruneCounts,
   TimerRecord,
   Wake,
 } from "./types.js";
@@ -60,17 +62,29 @@ function dueAt(
 
 /** Postgres implementation. Safe for many instances: scope work runs under a row lock. */
 export class PgProactiveStore implements ProactiveStore {
-  constructor(private readonly pool: PgExecutor) {}
+  constructor(
+    private readonly pool: PgExecutor,
+    private readonly codec?: PayloadCodec,
+  ) {}
+
+  private seal(scope: string, value: unknown): Promise<unknown> {
+    return this.codec ? this.codec.seal(scope, value) : Promise.resolve(value);
+  }
+
+  private open<T>(scope: string, value: unknown): Promise<T> {
+    return (this.codec ? this.codec.open(scope, value) : Promise.resolve(value)) as Promise<T>;
+  }
 
   private tx<T>(fn: (q: PgQueryable) => Promise<T>): Promise<T> {
     return this.pool.transaction(fn);
   }
 
   async receive(event: ProactiveEvent, now: Millis): Promise<"new" | "duplicate"> {
+    const sealed = await this.seal(event.scope, event);
     const r = await this.pool.query(
       `INSERT INTO proactive_inbox ("source","eventId","scope","event","receivedAt")
        VALUES ($1,$2,$3,$4::jsonb,$5::bigint) ON CONFLICT DO NOTHING RETURNING "seq"`,
-      [event.source, event.id, event.scope, JSON.stringify(event), now],
+      [event.source, event.id, event.scope, JSON.stringify(sealed), now],
     );
     return r.rows.length > 0 ? "new" : "duplicate";
   }
@@ -149,7 +163,10 @@ export class PgProactiveStore implements ProactiveStore {
     const last = s.rows[0]?.lastAt == null ? null : num(s.rows[0]?.lastAt);
     const due = dueAt(first, last, debounceMs, debounceMaxMs);
     if (due !== null && now < due) return { kind: "early", dueAt: due };
-    return { kind: "group", events: rows.rows.map((r) => r.event as ProactiveEvent) };
+    const events = await Promise.all(
+      rows.rows.map((r) => this.open<ProactiveEvent>(scope, r.event)),
+    );
+    return { kind: "group", events };
   }
 
   async recordDecision(
@@ -160,6 +177,7 @@ export class PgProactiveStore implements ProactiveStore {
   ): Promise<{ recorded: false } | { recorded: true; wake?: Wake }> {
     const last = events[events.length - 1];
     if (!last) return { recorded: false };
+    const sealedEvents = decision.kind === "drop" ? null : await this.seal(scope, events);
     try {
       return await this.tx(async (q) => {
         await this.lockScope(q, scope);
@@ -190,7 +208,7 @@ export class PgProactiveStore implements ProactiveStore {
         await q.query(
           `INSERT INTO proactive_wakes ("id","scope","reason","events","judgeError","decidedAt")
            VALUES ($1,$2,$3,$4::jsonb,$5,$6::bigint) ON CONFLICT DO NOTHING`,
-          [wake.id, scope, wake.reason, JSON.stringify(events), wake.judgeError ?? null, now],
+          [wake.id, scope, wake.reason, JSON.stringify(sealedEvents), wake.judgeError ?? null, now],
         );
         return { recorded: true as const, wake };
       });
@@ -200,12 +218,13 @@ export class PgProactiveStore implements ProactiveStore {
     }
   }
 
-  private wakeFromRow(row: Record<string, unknown>): Wake {
+  private async wakeFromRow(row: Record<string, unknown>): Promise<Wake> {
+    const scope = String(row.scope);
     return {
       id: String(row.id),
-      scope: String(row.scope),
+      scope,
       reason: row.reason as Wake["reason"],
-      events: row.events as ProactiveEvent[],
+      events: await this.open<ProactiveEvent[]>(scope, row.events),
       ...(row.judgeError ? { judgeError: String(row.judgeError) } : {}),
     };
   }
@@ -220,7 +239,7 @@ export class PgProactiveStore implements ProactiveStore {
        ORDER BY "decidedAt" LIMIT $2`,
       [before, limit],
     );
-    return r.rows.map((row) => this.wakeFromRow(row));
+    return Promise.all(r.rows.map((row) => this.wakeFromRow(row)));
   }
 
   async scopesWithUndecided(limit: number): Promise<string[]> {
@@ -236,7 +255,7 @@ export class PgProactiveStore implements ProactiveStore {
     const row = r.rows[0];
     if (!row) return undefined;
     return {
-      wake: this.wakeFromRow(row),
+      wake: await this.wakeFromRow(row),
       state: row.state as StoredWake["state"],
       decidedAt: num(row.decidedAt),
     };
@@ -282,22 +301,30 @@ export class PgProactiveStore implements ProactiveStore {
     );
   }
 
-  private timerFromRow(row: Record<string, unknown>): TimerRecord {
+  /** With a codec the note column holds the sealed value as JSON text. */
+  private async openNote(scope: string, stored: unknown): Promise<string> {
+    if (!this.codec) return String(stored);
+    return String(await this.open<unknown>(scope, JSON.parse(String(stored))));
+  }
+
+  private async timerFromRow(row: Record<string, unknown>): Promise<TimerRecord> {
+    const scope = String(row.scope);
     return {
       id: String(row.id),
-      scope: String(row.scope),
+      scope,
       dueAt: num(row.dueAt),
-      note: String(row.note),
+      note: await this.openNote(scope, row.note),
       setBy: String(row.setBy),
       state: row.state as TimerRecord["state"],
     };
   }
 
   async timerSet(timer: Omit<TimerRecord, "state">): Promise<"set" | "exists"> {
+    const note = this.codec ? JSON.stringify(await this.seal(timer.scope, timer.note)) : timer.note;
     const r = await this.pool.query(
       `INSERT INTO proactive_timers ("id","scope","dueAt","note","setBy")
        VALUES ($1,$2,$3::bigint,$4,$5) ON CONFLICT DO NOTHING RETURNING 1`,
-      [timer.id, timer.scope, timer.dueAt, timer.note, timer.setBy],
+      [timer.id, timer.scope, timer.dueAt, note, timer.setBy],
     );
     return r.rows.length > 0 ? "set" : "exists";
   }
@@ -316,7 +343,7 @@ export class PgProactiveStore implements ProactiveStore {
        ORDER BY "dueAt" LIMIT $2`,
       [now, limit],
     );
-    return r.rows.map((row) => this.timerFromRow(row));
+    return Promise.all(r.rows.map((row) => this.timerFromRow(row)));
   }
 
   async timerMarkFired(id: string): Promise<void> {
@@ -328,7 +355,7 @@ export class PgProactiveStore implements ProactiveStore {
 
   async timerGet(id: string): Promise<TimerRecord | undefined> {
     const r = await this.pool.query(`SELECT * FROM proactive_timers WHERE "id"=$1`, [id]);
-    return r.rows[0] ? this.timerFromRow(r.rows[0]) : undefined;
+    return r.rows[0] ? await this.timerFromRow(r.rows[0]) : undefined;
   }
 
   async nextTimerDue(): Promise<Millis | null> {
@@ -346,5 +373,68 @@ export class PgProactiveStore implements ProactiveStore {
       [scope, idPrefix],
     );
     return r.rows.length > 0;
+  }
+
+  async prune(before: Millis): Promise<PruneCounts> {
+    return this.tx(async (q) => {
+      // Events first, so the inbox rows they pointed at are free to go.
+      const events = await q.query(
+        `DELETE FROM proactive_events e USING proactive_inbox i
+         WHERE e."decided" AND i."source"=e."source" AND i."eventId"=e."eventId"
+           AND i."receivedAt"<$1::bigint RETURNING 1`,
+        [before],
+      );
+      await q.query(
+        `DELETE FROM proactive_inbox i
+         WHERE i."applied" AND i."receivedAt"<$1::bigint AND NOT EXISTS
+           (SELECT 1 FROM proactive_events e WHERE e."source"=i."source" AND e."eventId"=i."eventId")`,
+        [before],
+      );
+      const wakes = await q.query(
+        `DELETE FROM proactive_wakes WHERE "state"='delivered' AND "decidedAt"<$1::bigint RETURNING 1`,
+        [before],
+      );
+      const timers = await q.query(
+        `DELETE FROM proactive_timers WHERE "state"<>'pending' AND "dueAt"<$1::bigint RETURNING 1`,
+        [before],
+      );
+      const effects = await q.query(
+        `DELETE FROM proactive_effects WHERE "state"='sent' AND "createdAt"<$1::bigint RETURNING 1`,
+        [before],
+      );
+      return {
+        events: events.rows.length,
+        wakes: wakes.rows.length,
+        timers: timers.rows.length,
+        effects: effects.rows.length,
+      };
+    });
+  }
+
+  async knownScopes(limit: number, after = ""): Promise<string[]> {
+    const r = await this.pool.query(
+      `SELECT "scope" FROM (
+         SELECT "scope" FROM proactive_scopes UNION SELECT "scope" FROM proactive_inbox
+         UNION SELECT "scope" FROM proactive_events UNION SELECT "scope" FROM proactive_wakes
+         UNION SELECT "scope" FROM proactive_timers) s
+       WHERE "scope" > $1 ORDER BY "scope" LIMIT $2`,
+      [after, limit],
+    );
+    return r.rows.map((row) => String(row.scope));
+  }
+
+  async deleteScope(scope: string): Promise<void> {
+    await this.tx(async (q) => {
+      await this.lockScope(q, scope);
+      for (const table of [
+        "proactive_inbox",
+        "proactive_events",
+        "proactive_wakes",
+        "proactive_timers",
+        "proactive_scopes",
+      ]) {
+        await q.query(`DELETE FROM ${table} WHERE "scope"=$1`, [scope]);
+      }
+    });
   }
 }
