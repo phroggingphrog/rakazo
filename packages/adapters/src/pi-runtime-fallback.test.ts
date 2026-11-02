@@ -1669,7 +1669,7 @@ describe("Pi runtime ordered model fallback", () => {
     },
   );
 
-  it("does not switch because a tool failed", async () => {
+  it("does not switch models after a single non-transient tool failure", async () => {
     const input = request([
       { provider: backupA.provider, id: backupA.id, apiKey: "fake-backup-a" },
     ]);

@@ -228,21 +228,21 @@ describe("tickRoutineWatch", () => {
   });
 
   it.each([false, undefined])(
-    "refuses a tool with readOnly %s without executing it",
+    "runs a tool with readOnly %s (owner decision 2026-11-01)",
     async (readOnly) => {
       const { deps, routine } = setup({ data: "ok" });
       vi.mocked(deps.connector!.discoverTools).mockResolvedValue([
         { name: "brain_changed", readOnly, description: "Read changes", inputSchema: {} },
       ]);
-      await expect(checkRoutineWatch(deps, routine)).rejects.toThrow("can change data");
-      expect(deps.connector!.execute).not.toHaveBeenCalled();
+      await expect(checkRoutineWatch(deps, routine)).resolves.toMatchObject({ changed: false });
+      expect(deps.connector!.execute).toHaveBeenCalled();
       await expect(
         validateRoutineWatch(deps, RoutineWatchSchema.parse(routine.watch), routine),
-      ).rejects.toThrow("can change data");
+      ).resolves.toBeUndefined();
     },
   );
 
-  it("refuses a batch tool even when it is declared read-only", async () => {
+  it("runs a batch tool too", async () => {
     const { deps, routine } = setup({ data: "ok" });
     vi.mocked(deps.connector!.discoverTools).mockResolvedValue([
       {
@@ -253,11 +253,11 @@ describe("tickRoutineWatch", () => {
         inputSchema: {},
       },
     ]);
-    await expect(checkRoutineWatch(deps, routine)).rejects.toThrow("can change data");
-    expect(deps.connector!.execute).not.toHaveBeenCalled();
+    await expect(checkRoutineWatch(deps, routine)).resolves.toMatchObject({ changed: false });
+    expect(deps.connector!.execute).toHaveBeenCalled();
     await expect(
       validateRoutineWatch(deps, RoutineWatchSchema.parse(routine.watch), routine),
-    ).rejects.toThrow("can change data");
+    ).resolves.toBeUndefined();
   });
 
   it.each([false, undefined, true])("checks lazy tool readOnly %s", async (readOnly) => {
@@ -267,10 +267,8 @@ describe("tickRoutineWatch", () => {
       call,
       tool: { name: call.tool, readOnly, description: "Read changes", inputSchema: {} },
     }));
-    if (readOnly)
-      await expect(checkRoutineWatch(deps, routine)).resolves.toMatchObject({ changed: false });
-    else await expect(checkRoutineWatch(deps, routine)).rejects.toThrow("can change data");
-    expect(deps.connector!.execute).toHaveBeenCalledTimes(readOnly ? 1 : 0);
+    await expect(checkRoutineWatch(deps, routine)).resolves.toMatchObject({ changed: false });
+    expect(deps.connector!.execute).toHaveBeenCalledTimes(1);
   });
 
   it("runs the tool call on a fresh time budget when discovery used up its own", async () => {
@@ -1225,22 +1223,22 @@ describe("watch tool guard", () => {
     return { deps, routine, execute };
   }
 
-  it("refuses a tool that changes things, without calling it", async () => {
+  it("runs a tool that changes things", async () => {
     const { deps, routine, execute } = setupTool({ name: "send_email" }, {});
-    await expect(checkRoutineWatch(deps, routine)).rejects.toThrow(/can change data/);
-    expect(execute).not.toHaveBeenCalled();
+    await checkRoutineWatch(deps, routine);
+    expect(execute).toHaveBeenCalled();
   });
 
-  it("refuses a write action on a tool that takes one", async () => {
+  it("runs a write action on a tool that takes one", async () => {
     const { deps, routine, execute } = setupTool({ name: "clickbot_tasks" }, { action: "delete" });
-    await expect(checkRoutineWatch(deps, routine)).rejects.toThrow(/can change data/);
-    expect(execute).not.toHaveBeenCalled();
+    await checkRoutineWatch(deps, routine);
+    expect(execute).toHaveBeenCalled();
   });
 
-  it("refuses a tool that does not say it only reads, like brain_propose", async () => {
+  it("runs a tool that does not say it only reads, like brain_propose", async () => {
     const { deps, routine, execute } = setupTool({ name: "brain_propose" }, {});
-    await expect(checkRoutineWatch(deps, routine)).rejects.toThrow(/can change data/);
-    expect(execute).not.toHaveBeenCalled();
+    await checkRoutineWatch(deps, routine);
+    expect(execute).toHaveBeenCalled();
   });
 
   it("refuses a read this space's rules ask approval for", async () => {
@@ -1251,9 +1249,9 @@ describe("watch tool guard", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("refuses a tool its integration declares as a write", async () => {
+  it("runs a tool its integration declares as a write", async () => {
     const { deps, routine } = setupTool({ name: "brain_changed", readOnly: false }, {});
-    await expect(checkRoutineWatch(deps, routine)).rejects.toThrow(/can change data/);
+    await expect(checkRoutineWatch(deps, routine)).resolves.toBeDefined();
   });
 
   it("allows reads, including tools whose name does not say", async () => {

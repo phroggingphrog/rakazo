@@ -2187,6 +2187,24 @@ model McpServerSpace {
   @@map("mcp_server_spaces")
 }
 
+/// Durable ownership and quota metadata for encrypted MCP output artifacts.
+model McpToolOutput {
+  id        String   @id
+  storageId String   @unique
+  spaceId   String
+  userId    String
+  botId     String
+  runId     String
+  serverId  String
+  bytes     Int
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([spaceId, userId, botId, runId, serverId, expiresAt])
+  @@index([expiresAt])
+  @@map("mcp_tool_outputs")
+}
+
 /// A further space an account-owned plugin or tool source is available in, beyond the one it was added in.
 model CapabilityInstallSpace {
   installId String

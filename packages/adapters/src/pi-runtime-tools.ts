@@ -28,6 +28,7 @@ import { recordPiTelemetryContent, withPiTelemetrySpan } from "./pi-telemetry.js
 import { VERBATIM_TOOL_RESULTS } from "./runtime-context.js";
 import { SCHEDULE_TOOL_NAMES } from "./schedule-tools.js";
 import type { FinishedShellCommand } from "./shell-command-stream.js";
+import { type ToolProgressGuard, toolFailureClass } from "./tool-progress.js";
 import { textContentArg } from "./tool-text.js";
 
 export interface ToolCallBudget {
@@ -362,6 +363,16 @@ function toAgentTool(tool: ConnectorTool, host: ToolHost, exposedName: string): 
           if (host.depth === 0) await host.captureCheckpoint?.(rawCallId, executionId);
           if (host.pausePending)
             return { content: [], details: { skipped: true }, terminate: true };
+          const fingerprint = host.toolProgress.fingerprint(tool.name, args);
+          const blockedEvidence = host.toolProgress.evidence(fingerprint, tool.name);
+          if (blockedEvidence) {
+            const message = host.toolProgress.blockedMessage(tool.name);
+            return {
+              content: [{ type: "text", text: message }],
+              details: { error: message, noProgress: blockedEvidence, isError: true },
+              terminate: true,
+            };
+          }
           if (!beginToolCall(host)) {
             return {
               content: [{ type: "text", text: "Skipped: tool-call limit reached." }],
@@ -492,10 +503,36 @@ function toAgentTool(tool: ConnectorTool, host: ToolHost, exposedName: string): 
                 details: { error: "no executor" },
               };
             })();
+            const details = (
+              result as AgentToolResult<{ error?: unknown; isError?: unknown }> | undefined
+            )?.details;
+            const failed = details?.error != null || details?.isError === true;
+            if (failed && !host.signal.aborted) {
+              const message =
+                typeof details?.error === "string" ? details.error : "Tool execution failed.";
+              host.toolProgress.recordFailure(fingerprint, toolFailureClass(message));
+            } else if (!failed) {
+              host.toolProgress.recordSuccess(fingerprint);
+            }
             if (VERBATIM_TOOL_RESULTS.has(tool.name)) return result as AgentToolResult<unknown>;
             return boundAgentToolResult(result as AgentToolResult<unknown>);
           } catch (error) {
             failure = error;
+            if (host.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+              throw error;
+            }
+            if (!(error instanceof Error && error.name === "AbortError")) {
+              const message = error instanceof Error ? error.message : "Tool execution failed.";
+              result = {
+                content: [{ type: "text", text: message }],
+                details: { error: message, isError: true },
+              };
+              if (!host.signal.aborted) {
+                const failureClass = toolFailureClass(message);
+                host.toolProgress.recordFailure(fingerprint, failureClass);
+              }
+              return boundAgentToolResult(result as AgentToolResult<unknown>);
+            }
             throw error;
           } finally {
             // Pi only terminates a parallel batch when every result terminates.
@@ -618,6 +655,7 @@ export interface ToolHost {
   nestedAgents: Set<Agent>;
   subagentGate: { acquire(): Promise<void>; release(): void };
   toolCallBudget: ToolCallBudget;
+  toolProgress: ToolProgressGuard;
   /** Shared fallback uniqueness when the model omits toolCallId (nested hosts reuse this). */
   toolCallSeq: { value: number };
   abortTurn(): void;

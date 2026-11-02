@@ -46,6 +46,7 @@ import {
   lazyCatalogTools,
   resolveCatalogCall,
 } from "./lazy-tool-catalog.js";
+import { actionableMcpFailure } from "./mcp-failure-reason.js";
 import type { McpOAuthBroker, OAuthMaterial } from "./mcp-oauth.js";
 import {
   accessTokenExpiresAt,
@@ -54,6 +55,7 @@ import {
   oauthMaterialSecrets,
   TOKEN_REFRESH_SKEW_MS,
 } from "./mcp-oauth.js";
+import { MCP_OUTPUT_LIMITS, type McpOutputStore } from "./mcp-output-store.js";
 import type { InstalledMcpBin } from "./mcp-package-installer.js";
 import {
   DEFAULT_MCP_INSTALL_TIMEOUT_MS,
@@ -199,6 +201,7 @@ const UNAVAILABLE_TOOL = "__rakazo_unavailable";
 const HEALTH_REWRITE_MS = 60_000;
 
 export type McpConnectorOptions = {
+  outputStore?: McpOutputStore;
   stdioEnabled?: boolean;
   allowedCommands?: string[];
   network?: RemoteTransportDependencies;
@@ -598,7 +601,33 @@ export class McpConnector implements ConnectorProvider {
         }
       }),
     );
-    return groups.flat();
+    const tools = groups.flat();
+    if (this.options.outputStore)
+      for (const assignment of assignments)
+        tools.push({
+          name: `mcp__${assignment.server.slug}__read_output`,
+          description:
+            "Read a bounded page from a retained MCP output receipt. Use nextOffset until null. Receipts expire after 1 hour and require the same bot, run and server grant.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              receipt: { type: "string" },
+              offset: { type: "integer", minimum: 0 },
+              maxBytes: { type: "integer", minimum: 1, maximum: 4096 },
+            },
+            required: ["receipt"],
+            additionalProperties: false,
+          },
+          readOnly: true,
+          route: {
+            connectorId: "mcp",
+            resourceId: assignment.serverId,
+            resourceRevision: assignment.server.revision,
+            toolName: "__rakazo_read_output",
+            catalogGroup: assignment.server.slug,
+          },
+        });
+    return tools;
   }
 
   /**
@@ -722,15 +751,48 @@ export class McpConnector implements ConnectorProvider {
     }
     if (
       !assignment ||
-      (!assignment.allowAllTools &&
+      (call.route.toolName !== "__rakazo_read_output" &&
+        !assignment.allowAllTools &&
         !(assignment.allowedTools as unknown[]).includes(call.route.toolName))
     ) {
-      yield { type: "error", message: "MCP tool is not assigned to this bot" };
+      yield {
+        type: "error",
+        message: actionableMcpFailure(
+          "MCP tool is not assigned to this bot or is outside its explicit tool allowlist",
+        ),
+      };
       return;
     }
     // Capture material before callTool so a concurrent eviction/replace cannot
     // drop this call's OAuth secrets from model-visible redaction. Recompute via
     // oauthMaterialSecrets(material) so in-place token refresh stays covered.
+    const scope = {
+      spaceId: context.spaceId,
+      userId: context.userId,
+      botId: context.botId,
+      runId: context.runId ?? "",
+      serverId: assignment.serverId,
+    };
+    if (call.route.toolName === "__rakazo_read_output") {
+      try {
+        if (!this.options.outputStore) throw new Error("MCP output retrieval is not configured");
+        const data = await this.options.outputStore.retrieve(
+          String(call.args.receipt ?? ""),
+          scope,
+          context,
+          Number(call.args.offset ?? 0),
+          Number(call.args.maxBytes ?? 4096),
+        );
+        yield { type: "result", data };
+      } catch {
+        yield {
+          type: "error",
+          message:
+            "MCP output is unavailable, expired, or not authorized. Recheck the bot grant and receipt expiry.",
+        };
+      }
+      return;
+    }
     let material: OAuthMaterial | undefined;
     let launchSecrets: string[] = [];
     const sessionKey = this.sessionKey(assignment.server, context);
@@ -756,12 +818,36 @@ export class McpConnector implements ConnectorProvider {
         return;
       }
       const secrets = [...(material ? oauthMaterialSecrets(material) : []), ...launchSecrets];
-      yield { type: "result", data: redactConnectorPayload(result, secrets) };
+      const redacted = redactConnectorPayload(result, secrets);
+      const serialized = JSON.stringify(redacted);
+      const inline = context.inlineLargeOutput === true && serialized !== undefined;
+      if (inline && Buffer.byteLength(serialized) > MCP_OUTPUT_LIMITS.inlineWatchBytes)
+        throw new Error("MCP output is too large for a change check. Narrow the watch query.");
+      if (!inline && serialized && Buffer.byteLength(serialized) > MCP_OUTPUT_LIMITS.previewBytes) {
+        if (!this.options.outputStore)
+          throw new Error(
+            "MCP output limit exceeded: retained result storage is not configured. Request a smaller page.",
+          );
+        const retained = await this.options.outputStore.store(serialized, scope, context);
+        yield {
+          type: "result",
+          data: {
+            ...retained,
+            truncated: true,
+            retrievalTool: `mcp__${assignment.server.slug}__read_output`,
+            nextOffset: Buffer.byteLength(retained.preview),
+            format: "json_utf8_preview",
+          },
+        };
+      } else yield { type: "result", data: redacted };
     } catch (error) {
       // A thrown call means the transport or auth broke; drop the session so the next call reconnects.
       const secrets = [...(material ? oauthMaterialSecrets(material) : []), ...launchSecrets];
       await this.evict(sessionKey);
-      yield { type: "error", message: sanitizeConnectorError(error, secrets) };
+      yield {
+        type: "error",
+        message: actionableMcpFailure(sanitizeConnectorError(error, secrets)),
+      };
     }
   }
 

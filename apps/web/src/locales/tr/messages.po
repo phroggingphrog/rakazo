@@ -1124,6 +1124,10 @@ msgstr ""
 msgid "Built-in"
 msgstr "Yerleşik"
 
+#: src/components/ApprovalRulesSettings.tsx
+msgid "Bypass"
+msgstr ""
+
 #: src/pages/shell/chat-header.tsx
 msgid "Call"
 msgstr ""
@@ -3974,10 +3978,6 @@ msgstr ""
 #: src/pages/shell/import-status.ts
 msgid "Needs: {names}"
 msgstr "Gerekenler: {names}"
-
-#: src/components/ApprovalRulesSettings.tsx
-msgid "Never ask"
-msgstr "Asla sorma"
 
 #: src/pages/shell/chat-context.tsx
 msgid "New"

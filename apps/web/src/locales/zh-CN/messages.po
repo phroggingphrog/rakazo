@@ -1124,6 +1124,10 @@ msgstr "浏览 MCP 服务器"
 msgid "Built-in"
 msgstr "内置"
 
+#: src/components/ApprovalRulesSettings.tsx
+msgid "Bypass"
+msgstr ""
+
 #: src/pages/shell/chat-header.tsx
 msgid "Call"
 msgstr "通话"
@@ -3974,10 +3978,6 @@ msgstr "需要接管"
 #: src/pages/shell/import-status.ts
 msgid "Needs: {names}"
 msgstr "需要：{names}"
-
-#: src/components/ApprovalRulesSettings.tsx
-msgid "Never ask"
-msgstr "从不询问"
 
 #: src/pages/shell/chat-context.tsx
 msgid "New"

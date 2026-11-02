@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { ORPCError, onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
@@ -69,11 +70,13 @@ import {
   isPipedreamEnabled,
   McpConnector,
   McpOAuthBroker,
+  McpOutputStore,
   messagingPlatformsFromEnv,
   PiAgentRuntime,
   PiOAuthLogins,
   PipedreamConnector,
   PostgresRealtimeFanout,
+  PrismaMcpOutputLedger,
   PrismaPushTokenStore,
   pipedreamConfigFromEnv,
   piSessionsRoot,
@@ -160,6 +163,7 @@ import { loadEnv } from "./env.js";
 import { healthRoutes } from "./health.js";
 import { mountLocalComputerHost } from "./local-settings.js";
 import { marketingEmailRoutes, sendWelcomeEmail } from "./marketing-email.js";
+import { startMcpReprobe } from "./mcp-servers.js";
 import {
   createMessagingInboundHandler,
   teamChatSenderCanWakeMessageRoutines,
@@ -403,6 +407,11 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     prisma,
     secrets,
     {
+      outputStore: new McpOutputStore(
+        artifacts,
+        new PrismaMcpOutputLedger(prisma),
+        createHash("sha256").update(`mcp-output:${env.encryptionKey}`).digest(),
+      ),
       stdioEnabled: env.mcpStdioEnabled,
       allowedCommands: env.mcpStdioAllowedCommands,
       ...env.mcpStdio,
@@ -694,6 +703,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       })
     : undefined;
   reconciler?.start();
+  const stopMcpReprobe = startMcpReprobe({ prisma, mcp, secrets }, mcpOAuth);
 
   const router = createRouter({
     speechSummary:
@@ -1397,6 +1407,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       await teamChatBridge?.stop();
       await stopInstalledBridges?.();
       await email?.drain?.();
+      stopMcpReprobe();
       await reconciler?.stop();
       await oauthTokenUpgrade;
       await runsStopped;

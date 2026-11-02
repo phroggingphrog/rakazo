@@ -1124,6 +1124,10 @@ msgstr ""
 msgid "Built-in"
 msgstr "अंतर्निहित"
 
+#: src/components/ApprovalRulesSettings.tsx
+msgid "Bypass"
+msgstr ""
+
 #: src/pages/shell/chat-header.tsx
 msgid "Call"
 msgstr "कॉल करें"
@@ -3974,10 +3978,6 @@ msgstr ""
 #: src/pages/shell/import-status.ts
 msgid "Needs: {names}"
 msgstr "ज़रूरी: {names}"
-
-#: src/components/ApprovalRulesSettings.tsx
-msgid "Never ask"
-msgstr "कभी न पूछें"
 
 #: src/pages/shell/chat-context.tsx
 msgid "New"
