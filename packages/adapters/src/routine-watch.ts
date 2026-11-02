@@ -338,6 +338,7 @@ function context(routine: RoutineWatchTarget): AdapterContext {
     spaceId: routine.spaceId,
     userId: routine.userId,
     botId: routine.botId,
+    inlineLargeOutput: true,
     signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
   };
 }

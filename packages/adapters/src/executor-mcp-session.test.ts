@@ -166,7 +166,9 @@ async function executorHarness(server: ReturnType<typeof statefulMcpServer>) {
       }),
     },
     chatGroup: { findMany: vi.fn(async () => []) },
+    botRuntimeProfile: { findUnique: vi.fn(async () => null) },
     bot: {
+      findFirst: vi.fn(async ({ where }: { where: { id: string } }) => ({ id: where.id })),
       findUniqueOrThrow: vi.fn(async () => ({
         id: run.botId,
         name: "Assistant",

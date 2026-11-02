@@ -88,17 +88,17 @@ describe("optional Parallel web provider", () => {
       { ...large.network, endpoint: "https://search.parallel.ai/mcp" },
       "web_fetch",
       {},
-    )) as { truncated: boolean; content: string };
+    )) as { truncated: boolean; preview: string };
     expect(limited.truncated).toBe(true);
-    expect(Buffer.byteLength(limited.content)).toBeLessThanOrEqual(1_000_000);
+    expect(Buffer.byteLength(limited.preview)).toBeLessThanOrEqual(1_000_000);
     const projected = (await callRemoteMcpTool(
       { ...peer.network, endpoint: "https://search.parallel.ai/mcp" },
       "web_fetch",
       {},
       () => ({ content: "界".repeat(400_000) }),
-    )) as { truncated: boolean; content: string };
+    )) as { truncated: boolean; preview: string };
     expect(projected.truncated).toBe(true);
-    expect(Buffer.byteLength(projected.content)).toBeLessThanOrEqual(1_000_000);
+    expect(Buffer.byteLength(projected.preview)).toBeLessThanOrEqual(1_000_000);
   });
 
   it("reads a window past the result size limit", async () => {

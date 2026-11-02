@@ -41,6 +41,7 @@ import {
   loadRunTurnCheckpoint,
   parseComputerMode,
   RunHistoryWriteError,
+  readBotRuntimeProfile,
   readRunTimingFields,
   recordUsage,
   settleReleasedTakeoverCards,
@@ -161,6 +162,7 @@ import {
   resolveRunModel,
   runtimeFallbackModel,
 } from "./run-model.js";
+import { createRunProfileSnapshot, parseRunProfileSnapshot } from "./run-profile-snapshot.js";
 import { createReplyState } from "./run-progress.js";
 import { DELEGATED_EMPTY_NOTICE, runAllowsSilentEmpty, runReplyGuidance } from "./run-replies.js";
 import {
@@ -518,6 +520,7 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
           savedLoginPasswordRedactions,
           purchaseRedactions,
           runLoginRedactions,
+          storedRuntimeProfile,
         ] = await Promise.all([
           deps.prisma.bot.findUniqueOrThrow({
             where: { id: run.botId },
@@ -551,12 +554,59 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
           listAgentSkillRecords(deps.prisma, {
             spaceId: run.spaceId,
             userId: run.userId,
+            botId: run.botId,
           }),
           loadBotCommandEnvironment(deps.prisma, deps.secretStore, run),
           loadLoginPasswordRedactions(deps.prisma, deps.secretStore, run),
           deps.paymentWallet ? loadPurchaseRedactions(deps, run) : [],
           loadRunLoginRedactions(deps.prisma, deps.secretStore, run, run.id),
+          readBotRuntimeProfile(deps.prisma, {
+            botId: run.botId,
+            spaceId: run.spaceId,
+            userId: run.userId,
+          }),
         ]);
+        let runtimeProfileSnapshot = parseRunProfileSnapshot(run.runtimeProfileSnapshot);
+        if (
+          runtimeProfileSnapshot &&
+          (runtimeProfileSnapshot.settings.extensions.length > 0 ||
+            runtimeProfileSnapshot.settings.skills.mode !== "legacy-library" ||
+            runtimeProfileSnapshot.settings.learning.mode !== "off" ||
+            runtimeProfileSnapshot.settings.initiative.enabled ||
+            runtimeProfileSnapshot.settings.routing.enabled)
+        )
+          throw new Error("Run profile snapshot requires unsupported runtime features");
+        if (!runtimeProfileSnapshot && storedRuntimeProfile) {
+          runtimeProfileSnapshot = createRunProfileSnapshot(
+            storedRuntimeProfile.revision,
+            storedRuntimeProfile.settings,
+          );
+          if (
+            runtimeProfileSnapshot.settings.extensions.length > 0 ||
+            runtimeProfileSnapshot.settings.skills.mode !== "legacy-library" ||
+            runtimeProfileSnapshot.settings.learning.mode !== "off" ||
+            runtimeProfileSnapshot.settings.initiative.enabled ||
+            runtimeProfileSnapshot.settings.routing.enabled
+          )
+            throw new Error("Run profile requires unsupported runtime features");
+          const saved = await deps.prisma.$executeRaw`
+            UPDATE "runs"
+            SET "runtimeProfileSnapshot" = ${JSON.stringify(runtimeProfileSnapshot)}::jsonb
+            WHERE id = ${runId}
+              AND status = 'running'
+              AND "leaseOwner" = ${workerId}
+              AND "leaseFence" = ${fence}
+              AND "runtimeProfileSnapshot" IS NULL
+          `;
+          if (saved !== 1) {
+            const latest = await deps.prisma.run.findUnique({
+              where: { id: runId },
+              select: { runtimeProfileSnapshot: true },
+            });
+            runtimeProfileSnapshot = parseRunProfileSnapshot(latest?.runtimeProfileSnapshot);
+            if (!runtimeProfileSnapshot) return;
+          }
+        }
         const historySearchBeforeSeq =
           contextStrategy !== "current" && run.sourceMessageId
             ? (messages.find((message) => message.id === run.sourceMessageId)?.seq ??
@@ -1592,7 +1642,11 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
               // cache-aware context for connections declaring a cache window.
               contextStrategy: deps.contextStrategy,
               instructions: userTurnInstructions({
-                botInstructions: runIdentityInstruction(bot, run.trigger),
+                botInstructions: runIdentityInstruction(
+                  bot,
+                  run.trigger,
+                  runtimeProfileSnapshot?.settings.persona.persona ?? "",
+                ),
                 groupContext,
                 messagingContext,
                 redactedMemoryContext: memoryContext

@@ -318,3 +318,16 @@ it("offers Wallet only when the deployment has a wallet provider", async () => {
     await cleanup();
   }
 });
+
+it("opens MCP servers directly from Settings", async () => {
+  const onOpenMcp = vi.fn();
+  const { container, cleanup } = await render({ onOpenMcp });
+  try {
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="settings-nav-mcp"]');
+    expect(button?.textContent).toContain("MCP servers");
+    await act(async () => button?.click());
+    expect(onOpenMcp).toHaveBeenCalledOnce();
+  } finally {
+    await cleanup();
+  }
+});
