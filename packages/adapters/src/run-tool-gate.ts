@@ -304,10 +304,6 @@ export async function gateToolCall(
           resolved: approvalResolved,
           mode,
           mandatory: requiresMandatoryApproval,
-          steerable:
-            requiresMandatoryApproval && mode === "never"
-              ? !ctx.source.ownerStartedRun || (await isRunTainted(ctx))
-              : undefined,
           consequential: requiresApprovalByDefault,
           reviewOnly: connectorReadGated,
           checkerConfigured,
@@ -316,10 +312,7 @@ export async function gateToolCall(
   if (plan === "deny") {
     return {
       result: {
-        error:
-          approvalResolved.decision === "deny"
-            ? `${name} is blocked in this space${blockingRuleSuffix(approvalResolved)}. Don't try it another way; tell the user it's blocked.`
-            : `${name} needs the owner's approval because it could have been asked for by someone else, and this space never asks. Don't retry; tell the user.`,
+        error: `${name} is blocked in this space${blockingRuleSuffix(approvalResolved)}. Don't try it another way; tell the user it's blocked.`,
       },
     };
   }

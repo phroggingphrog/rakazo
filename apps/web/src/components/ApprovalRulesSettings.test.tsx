@@ -154,10 +154,10 @@ it("sets the mode, and lists Auto only when an approval model is there", async (
       expect(button(container, "Ask")?.getAttribute("aria-pressed")).toBe("true"),
     );
     expect(button(container, "Auto")).toBeUndefined();
-    await act(async () => button(container, "Never ask")?.click());
+    await act(async () => button(container, "Bypass")?.click());
     expect(rpcMock.autoReview.set).toHaveBeenLastCalledWith({ scope: "account", mode: "never" });
     await vi.waitFor(() =>
-      expect(button(container, "Never ask")?.getAttribute("aria-pressed")).toBe("true"),
+      expect(button(container, "Bypass")?.getAttribute("aria-pressed")).toBe("true"),
     );
     // No rules yet, so the rule list stays out of the way.
     expect(container.querySelector('[data-testid="approval-rules"]')).toBeNull();
@@ -263,7 +263,7 @@ it("keeps a saved mode when the revisit's older background read lands after it",
     });
     return root;
   };
-  const neverAsk = () => button(container, "Never ask");
+  const neverAsk = () => button(container, "Bypass");
   try {
     const first = await mount();
     await vi.waitFor(() =>

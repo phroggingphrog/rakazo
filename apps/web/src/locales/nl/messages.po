@@ -1124,6 +1124,10 @@ msgstr "MCP-servers doorzoeken"
 msgid "Built-in"
 msgstr "Ingebouwd"
 
+#: src/components/ApprovalRulesSettings.tsx
+msgid "Bypass"
+msgstr ""
+
 #: src/pages/shell/chat-header.tsx
 msgid "Call"
 msgstr "Bellen"
@@ -3974,10 +3978,6 @@ msgstr "Heeft jou nodig"
 #: src/pages/shell/import-status.ts
 msgid "Needs: {names}"
 msgstr "Vereist: {names}"
-
-#: src/components/ApprovalRulesSettings.tsx
-msgid "Never ask"
-msgstr "Nooit vragen"
 
 #: src/pages/shell/chat-context.tsx
 msgid "New"

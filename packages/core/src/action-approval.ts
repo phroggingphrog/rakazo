@@ -110,7 +110,11 @@ export function connectorToolRequiresApproval(toolName: string, readOnly?: boole
   return !READ_ONLY_CONNECTOR_PATTERN.test(toolName);
 }
 
-/** Unattended watches require explicit read-only metadata and must respect approval rules. */
+/**
+ * Owner decision 2026-11-01: a change trigger may run a tool that writes, so read-only metadata
+ * is no longer required. An explicit deny rule still blocks it; a read-only tool must also pass
+ * the space's approval rules, while a write tool is allowed because the owner chose it here.
+ */
 export function watchToolRefusal(input: {
   toolName: string;
   readOnly?: boolean;
@@ -118,9 +122,6 @@ export function watchToolRefusal(input: {
   rules: ActionApprovalRule[];
 }): string | null {
   const { toolName, readOnly } = input;
-  if (readOnly !== true) {
-    return `${toolName} can change data, so a change trigger can't run it. Pick a read-only tool.`;
-  }
   const decision = resolveActionApprovalDetail({
     toolName,
     connectorKind: input.connectorKind,
@@ -128,7 +129,7 @@ export function watchToolRefusal(input: {
     rules: input.rules,
   }).decision;
   if (decision === "deny") return `${toolName} is blocked, so a change trigger can't run it.`;
-  if (decision === "ask") {
+  if (decision === "ask" && readOnly === true) {
     return `${toolName} needs approval under this space's rules, and a change check cannot ask.`;
   }
   return null;
@@ -551,18 +552,15 @@ export type AutoReviewJudgeDecision = "pass" | "ask" | "error";
 
 /**
  * The gate after rule resolution. A block refuses in every mode. An approval a person must give
- * asks, except in Never ask, which never waits: there it runs when the owner started the run and no
- * outside content entered it, and is refused otherwise, since outside text could have asked for
- * it. Otherwise Never ask runs it, an ask rule asks, and anything that would ask goes to the approval
- * model in Auto, falling back to asking when no model is set up.
+ * asks, except in Never ask, which never waits and runs it in every run (owner decision). Otherwise
+ * Never ask runs it, an ask rule asks, and anything that would ask goes to the approval model in
+ * Auto, falling back to asking when no model is set up.
  */
 export function planActionGate(input: {
   resolved: ActionApprovalResolved;
   mode: ApprovalMode;
   /** Needs a person whatever the rules say (see toolRequiresExplicitApproval). */
   mandatory?: boolean;
-  /** The owner did not start this run, or outside content entered it. */
-  steerable?: boolean;
   consequential: boolean;
   /**
    * A read whose arguments outside content may have chosen (see connectorReadRequiresApproval).
@@ -574,10 +572,7 @@ export function planActionGate(input: {
   newDestination?: boolean;
 }): "ask" | "allow" | "judge" | "deny" {
   if (input.resolved.decision === "deny") return "deny";
-  if (input.mandatory) {
-    if (input.mode !== "never") return "ask";
-    return input.steerable ? "deny" : "allow";
-  }
+  if (input.mandatory) return input.mode === "never" ? "allow" : "ask";
   if (input.mode === "never") return "allow";
   if (input.resolved.decision === "ask") return "ask";
   const review = input.mode === "auto" && input.checkerConfigured ? "judge" : "ask";

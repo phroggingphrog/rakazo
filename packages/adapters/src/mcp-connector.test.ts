@@ -15,6 +15,7 @@ import { InstalledConnectorProvider } from "./installed-connectors.js";
 import { IntegrationProviderSettings } from "./integration-provider-settings.js";
 import { DIRECT_TOOL_LIMIT } from "./lazy-tool-catalog.js";
 import { allowlistDrift, McpConnector } from "./mcp-connector.js";
+import { actionableMcpFailure } from "./mcp-failure-reason.js";
 import type { McpOAuthBroker, OAuthMaterial } from "./mcp-oauth.js";
 import { StoredMcpOAuthProvider } from "./mcp-oauth.js";
 import { McpSession } from "./mcp-transport.js";
@@ -1050,6 +1051,156 @@ describe("MCP connector session cache", () => {
 
     expect(append).not.toHaveBeenCalled();
     await connector.close();
+  });
+
+  describe("inherited owner servers", () => {
+    const tools = [
+      { name: "read_it", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+      { name: "write_it", inputSchema: { type: "object" }, annotations: { readOnlyHint: false } },
+      { name: "bare_it", inputSchema: { type: "object" } },
+    ];
+    const context = {
+      spaceId: "w1",
+      userId: "u1",
+      botId: "bot-1",
+      signal: new AbortController().signal,
+    } as never;
+
+    function setup(
+      options: { bot?: unknown; servers?: unknown[]; server?: unknown; assignment?: unknown } = {},
+    ) {
+      const state = { failNext: false, initializations: 0, calls: [] as string[], tools };
+      vi.stubGlobal("fetch", mcpFetch(state));
+      const prisma = {
+        bot: {
+          findFirst: vi.fn().mockResolvedValue("bot" in options ? options.bot : { id: "bot-1" }),
+        },
+        mcpServer: {
+          findMany: vi.fn().mockResolvedValue(options.servers ?? [SERVER]),
+          findFirst: vi.fn().mockResolvedValue("server" in options ? options.server : SERVER),
+        },
+        botMcpServer: {
+          findMany: vi.fn().mockResolvedValue(options.assignment ? [options.assignment] : []),
+          findFirst: vi.fn().mockResolvedValue(options.assignment ?? null),
+        },
+      };
+      const connector = new McpConnector(prisma as never, {} as never, { network: TEST_NETWORK });
+      return { state, prisma, connector };
+    }
+
+    async function run(connector: McpConnector, toolName: string, route: unknown) {
+      const events: unknown[] = [];
+      for await (const event of connector.execute(
+        {
+          tool: `mcp__demo__${toolName}`,
+          args: {},
+          executionId: toolName,
+          route,
+        } as never,
+        context,
+      ))
+        events.push(event);
+      return events;
+    }
+
+    const refusal = [{ type: "error", message: "MCP tool is not assigned to this bot" }];
+    const unassigned = [
+      {
+        type: "error",
+        message: actionableMcpFailure(
+          "MCP tool is not assigned to this bot or is outside its explicit tool allowlist",
+        ),
+      },
+    ];
+
+    it("lists and runs only read-only tools of an inherited server", async () => {
+      const { state, prisma, connector } = setup();
+      const discovered = await connector.discoverTools(context);
+      expect(discovered.map((tool) => tool.name)).toEqual(["mcp__demo__read_it"]);
+      expect(prisma.bot.findFirst).toHaveBeenCalledWith({
+        where: { id: "bot-1", spaceId: "w1", userId: "u1" },
+        select: { id: true },
+      });
+      expect(prisma.mcpServer.findMany).toHaveBeenCalledWith({
+        where: {
+          enabled: true,
+          userId: "u1",
+          OR: [
+            { spaceId: "w1" },
+            { allSpaces: true },
+            { availableIn: { some: { spaceId: "w1" } } },
+          ],
+        },
+      });
+      const route = discovered[0]?.route;
+      expect(await run(connector, "read_it", route)).toEqual([
+        { type: "result", data: { content: [{ type: "text", text: "ok" }] } },
+      ]);
+      expect(state.calls).toEqual(["read_it"]);
+      await connector.close();
+    });
+
+    it("refuses a mutating or unannotated tool of an inherited server", async () => {
+      const { state, connector } = setup();
+      const route = (toolName: string) => ({
+        connectorId: "mcp",
+        resourceId: SERVER.id,
+        resourceRevision: SERVER.revision,
+        toolName,
+        catalogGroup: SERVER.slug,
+      });
+      expect(await run(connector, "write_it", route("write_it"))).toEqual(refusal);
+      expect(await run(connector, "bare_it", route("bare_it"))).toEqual(refusal);
+      expect(state.calls).toEqual([]);
+      await connector.close();
+    });
+
+    it("refuses a disabled or unavailable inherited server", async () => {
+      const { state, connector } = setup({ server: null });
+      const route = {
+        connectorId: "mcp",
+        resourceId: SERVER.id,
+        resourceRevision: SERVER.revision,
+        toolName: "read_it",
+        catalogGroup: SERVER.slug,
+      };
+      expect(await run(connector, "read_it", route)).toEqual(unassigned);
+      expect(state.calls).toEqual([]);
+      await connector.close();
+
+      const none = setup({ servers: [] });
+      expect(await none.connector.discoverTools(context)).toEqual([]);
+      await none.connector.close();
+    });
+
+    it("gives a bot that does not belong to the owner nothing", async () => {
+      const { state, prisma, connector } = setup({ bot: null });
+      expect(await connector.discoverTools(context)).toEqual([]);
+      expect(prisma.mcpServer.findMany).not.toHaveBeenCalled();
+      const route = {
+        connectorId: "mcp",
+        resourceId: SERVER.id,
+        resourceRevision: SERVER.revision,
+        toolName: "read_it",
+        catalogGroup: SERVER.slug,
+      };
+      expect(await run(connector, "read_it", route)).toEqual(refusal);
+      expect(state.calls).toEqual([]);
+      await connector.close();
+    });
+
+    it("lets an explicit assignment override the read-only rule", async () => {
+      const { state, connector } = setup({
+        assignment: { ...ASSIGNMENT, allowAllTools: false, allowedTools: ["write_it"] },
+      });
+      const discovered = await connector.discoverTools(context);
+      expect(discovered.map((tool) => tool.name)).toEqual(["mcp__demo__write_it"]);
+      expect(await run(connector, "write_it", discovered[0]?.route)).toEqual([
+        { type: "result", data: { content: [{ type: "text", text: "ok" }] } },
+      ]);
+      expect(state.calls).toEqual(["write_it"]);
+      await connector.close();
+    });
   });
 
   it("returns no tools when the MCP catalog is empty", async () => {
