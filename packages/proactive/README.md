@@ -39,8 +39,18 @@ Register the four job handlers (`apply`, `decide`, `redeliver`, `timers`) with w
 ## Tests
 
 - `pnpm --filter @rakazo/proactive test` runs the conformance suite on the in-memory store (no database).
+- The SQLite store runs the same suite on a temporary file per test.
 - Set `PROACTIVE_TEST_DATABASE_URL` to also run it on Postgres. Each test gets its own schema.
 - A new store or binding calls `runConformance(label, open)` from `src/conformance.ts`.
+
+## SQLite store
+
+`SqliteProactiveStore(path, codec?)` keeps the same state in one SQLite file, using Node's built-in `node:sqlite` (Node 22.5+; no dependency). Use it for a single machine that can lose power or restart, such as an edge box or a local agent: the file runs in WAL mode with full fsync, so work the store acknowledged is still there after a crash, and `engine.recover()` finishes whatever was half done.
+
+- Same schema shape, `PayloadCodec` and conformance suite as Postgres; times are integer milliseconds.
+- Steps that Postgres runs under a scope row lock (`applyScope`, `recordDecision`, `deleteScope`, `prune`) run in `BEGIN IMMEDIATE`, so several processes can share the file and writers queue.
+- It is not for instances on different hosts; use Postgres there.
+- Call `close()` on shutdown. Run `recover`, `redeliver` and `fireTimers` after opening the file.
 
 ## Turning it on in Rakazo
 
