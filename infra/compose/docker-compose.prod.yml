@@ -232,6 +232,10 @@ x-app-environment: &app-environment
   MCP_DISCOVERY_TIMEOUT_MS:
   MCP_PACKAGES_DIR:
   MCP_ALLOW_PRIVATE_ENDPOINT:
+  # phrog-web search/fetch provider and the proactive core webhook flag
+  PHROG_WEB_URL:
+  PHROG_WEB_TOKEN:
+  PROACTIVE_WEBHOOK_BOTS:
   # Messaging (outbound delivery runs in the worker)
   MESSAGING_OPEN_SIGNUP:
   SENDBLUE_API_KEY_ID:
