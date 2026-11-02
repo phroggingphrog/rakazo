@@ -113,7 +113,10 @@ export function mountWebhookHttpRoutes(app: Hono, deps: WebhookDeps) {
             }
           : {}),
       });
-      return c.json({ ok: true, accepted: true, duplicate: outcome.duplicate }, 202);
+      return c.json(
+        { ok: true, accepted: true, duplicate: outcome.duplicate, eventId: outcome.eventId },
+        202,
+      );
     }
 
     return c.json(

@@ -88,6 +88,19 @@ export interface ProactiveConfig {
   redeliverAfterMs: number;
   /** One fallback timer per scope while none is pending. 0 turns it off. */
   fallbackMs: number;
+  /**
+   * Finished work older than this is deleted by `prune`. A repeat of a pruned event id is
+   * accepted as new, so keep it longer than any sender retries. 0 keeps everything.
+   */
+  retentionMs: number;
+}
+
+/** What one `prune` removed. */
+export interface PruneCounts {
+  events: number;
+  wakes: number;
+  timers: number;
+  effects: number;
 }
 
 export const DEFAULT_CONFIG: ProactiveConfig = {
@@ -97,4 +110,5 @@ export const DEFAULT_CONFIG: ProactiveConfig = {
   judgeRetryMs: [2_000, 8_000],
   redeliverAfterMs: 3_000,
   fallbackMs: 120 * 60_000,
+  retentionMs: 30 * 24 * 60 * 60_000,
 };

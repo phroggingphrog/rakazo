@@ -63,3 +63,14 @@ export const systemClock: Clock = {
   now: () => Date.now(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
+
+/**
+ * Optional at-rest protection for what the store keeps: event bodies, wake bodies and
+ * timer notes. `scope` says whose data it is, so a binding can pick that owner's key and
+ * refuse to open it under another scope. `open` must pass unsealed values through, so
+ * rows written before sealing was switched on stay readable.
+ */
+export interface PayloadCodec {
+  seal(scope: string, value: unknown): Promise<unknown>;
+  open(scope: string, value: unknown): Promise<unknown>;
+}

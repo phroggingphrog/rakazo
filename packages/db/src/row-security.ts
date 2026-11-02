@@ -152,6 +152,12 @@ export const ROW_SECURITY_MODELS: ReadonlySet<string> = new Set([
   "UserActionAutoReviewPreference",
   "SecurityEvent",
   "AuditEvent",
+  "ProactiveInbox",
+  "ProactiveEvent",
+  "ProactiveScope",
+  "ProactiveWake",
+  "ProactiveEffect",
+  "ProactiveTimer",
 ]);
 
 /**

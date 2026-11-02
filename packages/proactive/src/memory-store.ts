@@ -5,12 +5,14 @@ import type {
   EffectResult,
   Millis,
   ProactiveEvent,
+  PruneCounts,
   TimerRecord,
   Wake,
 } from "./types.js";
 
 interface InboxRow {
   seq: number;
+  receivedAt: Millis;
   event: ProactiveEvent;
   applied: boolean;
 }
@@ -39,10 +41,10 @@ export class MemoryProactiveStore implements ProactiveStore {
   private readonly effects = new Map<string, EffectRecord>();
   private readonly timers = new Map<string, TimerRecord>();
 
-  async receive(event: ProactiveEvent, _now: Millis): Promise<"new" | "duplicate"> {
+  async receive(event: ProactiveEvent, now: Millis): Promise<"new" | "duplicate"> {
     const key = `${event.source}\u0000${event.id}`;
     if (this.inbox.has(key)) return "duplicate";
-    this.inbox.set(key, { seq: ++this.seq, event, applied: false });
+    this.inbox.set(key, { seq: ++this.seq, receivedAt: now, event, applied: false });
     return "new";
   }
 
@@ -224,6 +226,60 @@ export class MemoryProactiveStore implements ProactiveStore {
     return [...this.timers.values()].some(
       (t) => t.state === "pending" && t.scope === scope && t.id.startsWith(idPrefix),
     );
+  }
+
+  async prune(before: Millis): Promise<PruneCounts> {
+    const counts: PruneCounts = { events: 0, wakes: 0, timers: 0, effects: 0 };
+    const received = (e: ProactiveEvent) =>
+      this.inbox.get(`${e.source}\u0000${e.id}`)?.receivedAt ?? Number.POSITIVE_INFINITY;
+    for (const [scope, rows] of this.events) {
+      const kept = rows.filter((r) => !(r.decided && received(r.event) < before));
+      counts.events += rows.length - kept.length;
+      this.events.set(scope, kept);
+    }
+    const live = new Set(
+      [...this.events.values()].flat().map((r) => `${r.event.source}\u0000${r.event.id}`),
+    );
+    for (const [key, row] of this.inbox)
+      if (row.applied && row.receivedAt < before && !live.has(key)) this.inbox.delete(key);
+    for (const [id, w] of this.wakes)
+      if (w.state === "delivered" && w.decidedAt < before) {
+        this.wakes.delete(id);
+        counts.wakes++;
+      }
+    for (const [id, t] of this.timers)
+      if (t.state !== "pending" && t.dueAt < before) {
+        this.timers.delete(id);
+        counts.timers++;
+      }
+    for (const [id, e] of this.effects)
+      if (e.state === "sent" && e.createdAt < before) {
+        this.effects.delete(id);
+        counts.effects++;
+      }
+    return counts;
+  }
+
+  async knownScopes(limit: number, after = ""): Promise<string[]> {
+    const all = new Set<string>([
+      ...[...this.inbox.values()].map((r) => r.event.scope),
+      ...this.events.keys(),
+      ...this.scopes.keys(),
+      ...[...this.wakes.values()].map((w) => w.wake.scope),
+      ...[...this.timers.values()].map((t) => t.scope),
+    ]);
+    return [...all]
+      .filter((s) => s > after)
+      .sort()
+      .slice(0, limit);
+  }
+
+  async deleteScope(scope: string): Promise<void> {
+    for (const [key, row] of this.inbox) if (row.event.scope === scope) this.inbox.delete(key);
+    this.events.delete(scope);
+    this.scopes.delete(scope);
+    for (const [id, w] of this.wakes) if (w.wake.scope === scope) this.wakes.delete(id);
+    for (const [id, t] of this.timers) if (t.scope === scope) this.timers.delete(id);
   }
 }
 

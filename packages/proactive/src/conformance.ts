@@ -353,5 +353,65 @@ export function runConformance(label: string, open: () => Promise<StoreHandle>):
         { numRuns: 25 },
       );
     });
+
+    it("retention: prune deletes finished work, keeps open work, and an old id is new again", async () => {
+      const h = await setup({ config: { retentionMs: 10_000 } });
+      await h.engine.receive(ev("old", { addressed: "dm" }));
+      await h.scheduler.runUntil(h.engine, h.clock.t + 60_000);
+      expect((await h.store.getWake("dm:s1:old"))?.state).toBe("delivered");
+      await h.engine.setTimer({
+        id: "t-old",
+        scope: "s1",
+        dueAt: h.clock.t + 1_000,
+        note: "n",
+        setBy: "x",
+      });
+      await h.scheduler.runUntil(h.engine, h.clock.t + 5_000);
+      h.clock.t += 20_000;
+      // open work: an event received now, not yet decided
+      await h.engine.receive(ev("fresh", { addressed: "dm" }, h.clock.t));
+      await h.engine.apply("s1");
+      const counts = await h.engine.prune();
+      // the dm event and the event the fired timer produced, each with its wake
+      expect(counts).toMatchObject({ events: 2, wakes: 2, timers: 1 });
+      expect(await h.store.getWake("dm:s1:old")).toBeUndefined();
+      expect(await h.store.timerGet("t-old")).toBeUndefined();
+      expect(await h.store.claimGroup("s1", h.clock.t + 60_000, 3_000, 20_000)).toMatchObject({
+        kind: "group",
+      });
+      // the pruned id is accepted again; the open one is still a duplicate
+      expect((await h.engine.receive(ev("old", { addressed: "dm" }))).duplicate).toBe(false);
+      expect((await h.engine.receive(ev("fresh", { addressed: "dm" }))).duplicate).toBe(true);
+    });
+
+    it("retention: 0 keeps everything", async () => {
+      const h = await setup({ config: { retentionMs: 0 } });
+      await h.engine.receive(ev("keep", { addressed: "dm" }));
+      await h.scheduler.runUntil(h.engine, h.clock.t + 60_000);
+      h.clock.t += 400 * 24 * 3_600_000;
+      expect(await h.engine.prune()).toEqual({ events: 0, wakes: 0, timers: 0, effects: 0 });
+      expect((await h.store.getWake("dm:s1:keep"))?.state).toBe("delivered");
+    });
+
+    it("forgetScope removes one scope and leaves the others", async () => {
+      const h = await setup();
+      await h.engine.receive(ev("a", { addressed: "dm", scope: "gone" }));
+      await h.engine.receive(ev("b", { addressed: "dm", scope: "stays" }));
+      await h.engine.setTimer({
+        id: "t-gone",
+        scope: "gone",
+        dueAt: h.clock.t + 99_000,
+        note: "n",
+        setBy: "x",
+      });
+      await h.scheduler.runUntil(h.engine, h.clock.t + 10_000);
+      expect(await h.engine.knownScopes(10)).toEqual(["gone", "stays"]);
+      expect(await h.engine.knownScopes(10, "gone")).toEqual(["stays"]);
+      await h.engine.forgetScope("gone");
+      expect(await h.engine.knownScopes(10)).toEqual(["stays"]);
+      expect(await h.store.getWake("dm:gone:a")).toBeUndefined();
+      expect(await h.store.timerGet("t-gone")).toBeUndefined();
+      expect(await h.store.getWake("dm:stays:b")).toBeDefined();
+    });
   });
 }

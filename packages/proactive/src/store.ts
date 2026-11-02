@@ -4,6 +4,7 @@ import type {
   EffectResult,
   Millis,
   ProactiveEvent,
+  PruneCounts,
   TimerRecord,
   Wake,
 } from "./types.js";
@@ -81,4 +82,14 @@ export interface ProactiveStore {
   nextTimerDue(): Promise<Millis | null>;
   /** True when this scope has a pending timer whose id starts with the prefix. */
   hasPendingTimer(scope: string, idPrefix: string): Promise<boolean>;
+
+  /**
+   * Delete finished work older than `before`: decided events with their inbox rows,
+   * delivered wakes, fired or cancelled timers, sent effects. Undecided work stays.
+   */
+  prune(before: Millis): Promise<PruneCounts>;
+  /** Scopes that hold any row, in scope order, for sweeps. Pass the last one as `after`. */
+  knownScopes(limit: number, after?: string): Promise<string[]>;
+  /** Delete every event, wake and timer of a scope (its owner is gone). */
+  deleteScope(scope: string): Promise<void>;
 }
