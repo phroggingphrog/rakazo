@@ -6,6 +6,7 @@ import {
   historyCompactJobKey,
   messagingDeliverJob,
   parseBackgroundJob,
+  proactiveJob,
   routineRetryJob,
 } from "./background-jobs.js";
 import type { BackgroundJobHandlers } from "./types.js";
@@ -26,6 +27,10 @@ function handlers(): BackgroundJobHandlers {
     "cloud_agent.poll": vi.fn(async () => undefined),
     "purchase.poll": vi.fn(async () => undefined),
     "push.receipt": vi.fn(async () => undefined),
+    "proactive.apply": vi.fn(async () => undefined),
+    "proactive.decide": vi.fn(async () => undefined),
+    "proactive.redeliver": vi.fn(async () => undefined),
+    "proactive.timers": vi.fn(async () => undefined),
   };
 }
 
@@ -116,5 +121,27 @@ describe("historyCompactJob", () => {
 
   it("keys different threads differently", () => {
     expect(historyCompactJobKey("thread-1")).not.toBe(historyCompactJobKey("thread-2"));
+  });
+});
+
+describe("proactive jobs", () => {
+  it("keys apply and decide by scope and the rest by name", async () => {
+    const at = new Date("2026-11-02T00:00:00Z");
+    expect(proactiveJob("decide", "decide:bot:b1", at)).toEqual({
+      name: "proactive.decide",
+      payload: { scope: "bot:b1" },
+      availableAt: at,
+      replaceKey: "proactive:decide:bot:b1",
+    });
+    expect(proactiveJob("timers", "timers", at)).toEqual({
+      name: "proactive.timers",
+      payload: {},
+      availableAt: at,
+      replaceKey: "proactive:timers",
+    });
+    const target = handlers();
+    await dispatchBackgroundJob(target, "proactive.apply", { scope: "bot:b1" });
+    expect(target["proactive.apply"]).toHaveBeenCalledWith({ scope: "bot:b1" });
+    expect(() => parseBackgroundJob("proactive.apply", { scope: "" })).toThrow();
   });
 });

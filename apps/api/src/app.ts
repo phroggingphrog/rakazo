@@ -16,6 +16,7 @@ import type {
   TransactionalEmailProvider,
 } from "@rakazo/adapter-kit";
 import {
+  SandboxAllowanceUsedError,
   SandboxDamagedError,
   SandboxRateLimitError,
   SandboxUnavailableError,
@@ -27,17 +28,20 @@ import type {
   ConnectorRegistry,
   PluginRepoFetcher,
   PluginTextReader,
+  ProactiveRuntime,
   RemoteConnectorDependencies,
   UserDeviceGateway,
 } from "@rakazo/adapters";
 import {
   applyMessagingOutboundStatus,
+  auditLogConfig,
   ChatSdkMessagingSurface,
   CodexCatalogCache,
   ComposioConnector,
   contentKeyProviderFromEnv,
   createAgentHomeStore,
   createArtifactStore,
+  createAuditLogReconciler,
   createBackgroundJobHandlers,
   createCloudAgentConnection,
   createConnectorStack,
@@ -48,6 +52,7 @@ import {
   createMessagingTeamChatSender,
   createModelCreditReconciler,
   createPaymentWalletProvider,
+  createProactiveRuntime,
   createProductAnalytics,
   createRunExecutor,
   createRunSandbox,
@@ -105,8 +110,9 @@ import {
   SERVER_BUILD_HEADER,
 } from "@rakazo/contracts";
 import { encryptionKeyWarning, signupPolicyFromEnv } from "@rakazo/core";
-import type { Pool, PrismaClient } from "@rakazo/db";
+import type { ContentKeyRing, Pool, PrismaClient, ThreadEvents } from "@rakazo/db";
 import {
+  configureProviderTransactionPool,
   createBoardEvents,
   createDb,
   createPool,
@@ -114,6 +120,7 @@ import {
   createThreadEvents,
   describeRowSecurity,
   IsolationError,
+  installAuditEventStore,
   installSecurityEventStore,
   ProviderTransactionBusyError,
   parsePositiveInteger,
@@ -133,7 +140,7 @@ import {
   installLogger,
   SERVICE_NAMES,
 } from "@rakazo/logging";
-import { requestLogging } from "@rakazo/logging/hono";
+import { markExpectedFailure, requestLogging } from "@rakazo/logging/hono";
 import { MarkdownMemoryStore } from "@rakazo/memory";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -142,6 +149,7 @@ import { mountAccountExportRoute } from "./account-export.js";
 import { mountAccountImportRoute } from "./account-import.js";
 import { mountAppAssociation, nativePasskeys } from "./app-association.js";
 import { storeInboundAttachment } from "./artifacts.js";
+import { mountAuditExportRoute } from "./audit-export.js";
 import { createBillingService } from "./billing.js";
 import { mountBillingRoutes } from "./billing-webhook.js";
 import { clientBuildMiddleware, readDeployedWebBuild } from "./client-build.js";
@@ -205,6 +213,8 @@ export const MOBILE_AUTH_ORIGINS = [
 export interface AppHandles {
   app: Hono;
   prisma: PrismaClient;
+  events: ThreadEvents;
+  proactive: ProactiveRuntime;
   jobs: JobPublisher;
   sandbox: SandboxProvider;
   composio?: ComposioProvider;
@@ -276,10 +286,12 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   const env = { ...loadEnv(process.env), ...envOverrides };
   const logger = loggerOverride ?? createServiceLogger({ service: SERVICE_NAMES.api });
   installLogger(logger);
+  const poolMax = parsePositiveInteger(process.env.DB_POOL_MAX, 4);
+  configureProviderTransactionPool(poolMax);
   const created = prismaOverride
     ? { prisma: prismaOverride, pool: undefined }
     : createDb(env.databaseUrl, {
-        poolMax: parsePositiveInteger(process.env.DB_POOL_MAX, 4),
+        poolMax,
         applicationName: "rakazo-api",
         keyProvider: contentKeyProviderFromEnv(),
         encryptContent: env.contentEncryption,
@@ -310,6 +322,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     logger.warn("Secret storage degraded; encrypted credentials remain available");
   prisma = withSecretPersistence(prisma, secrets);
   installSecurityEventStore(prisma);
+  installAuditEventStore(prisma);
   const unreadableMasterKeys = await verifyContentKeys(prisma);
   if (unreadableMasterKeys.length)
     logger.error("Stored space keys need master keys that are not configured", undefined, {
@@ -455,6 +468,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     ? createBillingService({
         prisma,
         provider: billingProvider,
+        sandbox,
         webOrigin: env.webOrigin,
         managedModelsAvailable: resolveDeploymentModel().configured,
       })
@@ -657,7 +671,16 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     shutdownSignal: shutdown.signal,
   });
 
+  // Off until PROACTIVE_WEBHOOK_BOTS names bots (or "*"); then those bots' webhooks use the core.
+  const proactive = createProactiveRuntime({
+    prisma,
+    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
+    events,
+    jobs,
+    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
+  });
   const jobHandlers = createBackgroundJobHandlers({
+    proactive,
     executor,
     prisma,
     sandbox,
@@ -698,7 +721,9 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
           prisma,
           securityEventRetentionDays(),
         ),
+        reconcileAuditLog: createAuditLogReconciler(prisma, auditLogConfig()),
         reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
+        reconcileProactive: () => proactive.reconcile(),
       })
     : undefined;
   reconciler?.start();
@@ -964,6 +989,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     await next();
   });
   mountAccountExportRoute(app, { prisma, auth, artifacts, home });
+  mountAuditExportRoute(app, { prisma, sessionActor });
   mountVoiceHttpRoutes(app, { prisma, secrets, env }, async (c) => {
     const actor = await sessionActor(c.req.raw);
     if (actor) enrichLogContext({ "user.id": actor.userId, "space.id": actor.spaceId });
@@ -983,7 +1009,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     },
     sessionActor,
   );
-  mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs });
+  mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs, proactive });
   if (billing && billingProvider) {
     mountBillingRoutes(app, {
       billing,
@@ -1381,6 +1407,8 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   return {
     app,
     prisma,
+    events,
+    proactive,
     jobs,
     sandbox,
     composio: stack.composio,
@@ -1428,6 +1456,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       await secrets.close();
       await realtime.close();
       await mcp.close();
+      await installed.close();
       await prisma.$disconnect().catch(() => undefined);
       await created.pool?.end().catch(() => undefined);
       await ownedJobPool?.end().catch(() => undefined);
@@ -1537,11 +1566,13 @@ export function handleRpcError(
     getLogger().warn(`rpc ${path.join("/")} computer unavailable`, {
       reason: unavailable.cause instanceof Error ? unavailable.cause.message : undefined,
     });
+    markExpectedFailure();
     throw new ORPCError("SERVICE_UNAVAILABLE", { message: unavailable.message, cause: error });
   }
   // A provider kept another transaction busy past the wait; nothing failed, so the caller retries.
   if (error instanceof ProviderTransactionBusyError) {
     getLogger().warn(`rpc ${path.join("/")} provider transaction busy`);
+    markExpectedFailure();
     throw new ORPCError("SERVICE_UNAVAILABLE", { message: error.message, cause: error });
   }
   if (error instanceof SandboxRateLimitError) {
@@ -1549,6 +1580,11 @@ export function handleRpcError(
       reason: error.cause instanceof Error ? error.cause.message : undefined,
     });
     throw new ORPCError("TOO_MANY_REQUESTS", { message: error.message, cause: error });
+  }
+  // The organization spent this month's computer allowance; its message says so.
+  if (error instanceof SandboxAllowanceUsedError) {
+    getLogger().warn(`rpc ${path.join("/")} computer allowance used up`);
+    throw new ORPCError("FORBIDDEN", { message: error.message, cause: error });
   }
   // A retry cannot fix a damaged computer; its message tells the user to Recover it.
   if (error instanceof SandboxDamagedError) {
@@ -1560,13 +1596,16 @@ export function handleRpcError(
     getLogger().warn(`rpc ${path.join("/")} client disconnected`, {
       reason: error instanceof Error ? error.message : String(error),
     });
+    markExpectedFailure();
     return;
   }
   logUnexpectedRpcError(error, path);
 }
 
 export function logUnexpectedRpcError(error: unknown, path: readonly string[]): void {
-  if (error instanceof ORPCError) return;
+  // A procedure's own 5xx (a store it depends on is down) would otherwise reach the collector
+  // only as an anonymous failed request; report it under the procedure with its cause.
+  if (error instanceof ORPCError && error.status < 500) return;
   const where = `rpc ${path.join("/")} failed`;
   getLogger().error(where, error);
 }

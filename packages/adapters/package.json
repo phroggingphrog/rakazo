@@ -5,7 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./agent-desktop-host-screen": "./src/agent-desktop-host-screen.ts",
+    "./cua-host-screen": "./src/cua-host-screen.ts",
     "./host-computer-server": "./src/host-computer-server.ts",
+    "./host-screen": "./src/host-screen.ts",
     "./user-device-client": "./src/user-device-client.ts"
   },
   "scripts": {
@@ -40,11 +43,13 @@
     "@opentelemetry/exporter-trace-otlp-http": "0.221.0",
     "@opentelemetry/resources": "2.12.0",
     "@opentelemetry/sdk-trace-node": "2.12.0",
+    "@photon-ai/chat-adapter-imessage": "3.2.0",
     "@rakazo/adapter-kit": "workspace:*",
     "@rakazo/contracts": "workspace:*",
     "@rakazo/core": "workspace:*",
     "@rakazo/db": "workspace:*",
     "@rakazo/logging": "workspace:*",
+    "@rakazo/proactive": "workspace:*",
     "@stripe/link-sdk": "0.15.0",
     "chat": "4.43.0",
     "chat-adapter-sendblue": "0.2.0",

@@ -1,7 +1,11 @@
 import { hostname } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { JobPublisher, JobWorkerHost } from "@rakazo/adapter-kit";
-import { ComposioConnector, IntegrationProviderSettings } from "@rakazo/adapters";
+import {
+  ComposioConnector,
+  IntegrationProviderSettings,
+  unwrapEnvFromKeyManager,
+} from "@rakazo/adapters";
 import { phoneCallSettings } from "@rakazo/core";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 import { stopOnShutdownSignals } from "@rakazo/core/node/shutdown-signals";
@@ -9,13 +13,16 @@ import { startWorkerHealth, watchEventLoopStalls } from "./health.js";
 import { createWorkerSecretStore } from "./secret-store.js";
 
 loadRootEnv();
+await unwrapEnvFromKeyManager();
 
 import {
+  auditLogConfig,
   ChatSdkMessagingSurface,
   CodexCatalogCache,
   contentKeyProviderFromEnv,
   createAgentHomeStore,
   createArtifactStore,
+  createAuditLogReconciler,
   createBackgroundJobHandlers,
   createCloudAgentConnection,
   createConnectorStack,
@@ -26,6 +33,7 @@ import {
   createModelCreditReconciler,
   createPaymentWalletProvider,
   createPostgresReconciliationLeadership,
+  createProactiveRuntime,
   createProductAnalytics,
   createReservedGraphileJobWorkerHost,
   createRoutineRetryNoticeReconciler,
@@ -74,12 +82,14 @@ import {
   withSecretPersistence,
 } from "@rakazo/adapters";
 import { resolveEncryptionKey, resolveSupervisorToken, uploadSizeFromEnv } from "@rakazo/core";
+import type { ContentKeyRing } from "@rakazo/db";
 import {
   createBoardEvents,
   createDb,
   createSecurityEventPruner,
   createThreadEvents,
   describeRowSecurity,
+  installAuditEventStore,
   installSecurityEventStore,
   isPoolCheckoutTimeout,
   isTooManyDatabaseConnections,
@@ -126,6 +136,7 @@ async function main() {
     logger.warn("Secret storage degraded; encrypted credentials remain available");
   prisma = withSecretPersistence(prisma, secrets);
   installSecurityEventStore(prisma);
+  installAuditEventStore(prisma);
   const unreadableMasterKeys = await verifyContentKeys(prisma);
   if (unreadableMasterKeys.length)
     logger.error("Stored space keys need master keys that are not configured", undefined, {
@@ -206,8 +217,14 @@ async function main() {
       pipedream,
     },
   );
+  const installedConnectors = new InstalledConnectorProvider(
+    prisma,
+    secrets,
+    {},
+    allowPrivateEndpoint,
+  );
   const stack = createConnectorStack(undefined, [
-    new InstalledConnectorProvider(prisma, secrets, {}, allowPrivateEndpoint),
+    installedConnectors,
     ...integrationSettings.providers(),
     mcp,
   ]);
@@ -314,7 +331,15 @@ async function main() {
       }),
     );
 
+  const proactive = createProactiveRuntime({
+    prisma,
+    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
+    events,
+    jobs,
+    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
+  });
   const jobHandlers = createBackgroundJobHandlers({
+    proactive,
     executor,
     prisma,
     sandbox,
@@ -356,9 +381,11 @@ async function main() {
       prisma,
       securityEventRetentionDays(),
     ),
+    reconcileAuditLog: createAuditLogReconciler(prisma, auditLogConfig()),
     reconcileHomeStorage: homeStorageSweeper(home),
     reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
     reconcileDeadJobs: inMemoryJobs ? undefined : createDeadJobPruner(pool),
+    reconcileProactive: () => proactive.reconcile(),
   });
   let stopHealth: (() => Promise<void>) | undefined;
   let stopping = false;
@@ -375,6 +402,7 @@ async function main() {
       await secrets.close();
       await realtime.close();
       await mcp.close();
+      await installedConnectors.close();
       await prisma.$disconnect().catch(() => undefined);
       await pool.end().catch(() => undefined);
     } finally {

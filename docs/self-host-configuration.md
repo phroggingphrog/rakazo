@@ -13,7 +13,7 @@ Do not commit `.env`. Never put `COMPOSIO_API_KEY`, OpenRouter keys, or provider
 
 ## Settings with names you choose
 
-The Compose files pass the API and worker only the settings each one reads, listed by name, rather than the whole `.env`. A setting whose name you choose, such as `TELEGRAM_BOT_TOKEN_<NAME>`, therefore needs its own line: add it under `api` and `worker` `environment` in an override file layered after the base file (and in `RAKAZO_COMPOSE_FILE` when the updater is enabled), with no value so Compose fills it from `.env`. `install-images.sh` names any `.env` setting that no container receives.
+The Compose files pass the API and worker only the settings each one reads, listed by name, rather than the whole `.env`. A setting whose name you choose, such as `TELEGRAM_BOT_TOKEN_<NAME>` or `PHOTON_PROJECT_ID_<NAME>`, therefore needs its own line: add it under `api` and `worker` `environment` in an override file layered after the base file (and in `RAKAZO_COMPOSE_FILE` when the updater is enabled), with no value so Compose fills it from `.env`. `install-images.sh` names any `.env` setting that no container receives.
 
 ```yaml
 # docker-compose.override.yml
@@ -69,6 +69,7 @@ retries let long turns survive brief provider failures.
 | `TICKET_BOARD_ENABLED` | `false` | Turns on the ticket board. Set it on the API and worker. |
 | `USER_DEVICES_ENABLED` | on | `false` stops signed-in desktop apps from letting bots run commands on the user's own computer. Set it on the API and worker. |
 | `PI_SESSION_RECORDING` | off | `true` records agent sessions as JSONL under `DATA_DIR/pi-sessions`. The files are not encrypted, so do not use it on a shared or multi-tenant install. |
+| `PROACTIVE_WEBHOOK_BOTS` | none | Comma-separated bot ids (or `*`) whose webhooks go through the proactive core: stored first, grouped for a few seconds, then handed to one run. The webhook answers `202 {ok, accepted, duplicate, eventId}` instead of `{messageId, runId, seq}`: the run starts a few seconds later, so a caller that needs the run id reads it from the thread. Set it on the API and worker. See `packages/proactive/README.md`. |
 | `PRIVACY_POLICY_URL` | Rakazo's policy | The privacy policy linked from the AI data-sharing notice. Set it on the API. |
 
 ## Database roles
@@ -136,6 +137,8 @@ The API listens on `API_HOST` (default `127.0.0.1`) and `API_PORT` (default `310
 unless a container or a trusted reverse proxy must reach it; the Compose files set this for you.
 The published-images stack publishes the web app on `127.0.0.1:5173` and the API on
 `127.0.0.1:3100`; set `RAKAZO_WEB_PORT` or `RAKAZO_API_PORT` to use other host ports.
+For LAN access, set `RAKAZO_WEB_BIND` as described in
+[Connecting a phone on the same network](./self-host-clients.md#connecting-a-phone-on-the-same-network).
 
 ## Outbound proxy
 

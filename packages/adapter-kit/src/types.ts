@@ -518,6 +518,11 @@ export interface AgentRunRequest {
   /** Awaited producer-side accounting, independent of event-consumer cancellation. */
   onUsage?: (event: Extract<AgentRuntimeEvent, { type: "usage" }>) => void | Promise<void>;
   contextStrategy?: AgentContextStrategy;
+  /**
+   * MCP servers that must return tool results whole. Direct tools match `slugs`
+   * (`mcp__<slug>__<tool>`); catalog calls match `ids` (`<server id>:<tool>`).
+   */
+  verbatimMcpServers?: { ids: readonly string[]; slugs: readonly string[] };
   /** Exclusive workflow cost bucket; retrieval tool turns are detected for answer calls. */
   usageOperationKind?: UsageOperationKind;
   botId: string;
@@ -650,7 +655,16 @@ export type AgentRuntimeEvent =
       /** Provider-generated tool status rather than assistant-authored narration. */
       activity?: true;
     }
-  | { type: "tool"; name: string; args: Record<string, unknown>; executionId: string }
+  | {
+      type: "tool";
+      name: string;
+      args: Record<string, unknown>;
+      executionId: string;
+      /** The model reached this deferred built-in through use_tool. */
+      viaUseTool?: boolean;
+      /** Which model response made the call; calls from one response share it. */
+      response?: number;
+    }
   | {
       type: "ask";
       executionId?: string;
@@ -751,6 +765,11 @@ export interface BackgroundJobPayloads {
   "purchase.poll": { purchaseId: string };
   /** Read an Expo push receipt; the token is identified by its digest, never stored. */
   "push.receipt": { userId: string; ticketId: string; tokenDigest: string };
+  /** Proactive core: apply a scope's stored events, decide its due group, hand over wakes, fire timers. */
+  "proactive.apply": { scope: string };
+  "proactive.decide": { scope: string };
+  "proactive.redeliver": Record<string, never>;
+  "proactive.timers": Record<string, never>;
 }
 
 export type BackgroundJobName = keyof BackgroundJobPayloads;
@@ -1021,6 +1040,11 @@ export interface BrowserNavigateRequest {
 export interface BrowserNavigateResult {
   url: string;
   title: string;
+  /** The page it reached, as a snapshot shows it, when that could be read in time. */
+  tree?: string;
+  elements?: BrowserSnapshotNode[];
+  /** The page was still loading or waiting on its own requests when it was captured. */
+  loading?: boolean;
   /** When set, the page tool could not operate; use computer_act instead. */
   fallback?: "computer_act";
   error?: string;

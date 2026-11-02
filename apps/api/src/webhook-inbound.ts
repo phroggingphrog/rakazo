@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { JobPublisher, SecretStore } from "@rakazo/adapter-kit";
 import { runContinueJob, SecretStoreUnavailableError } from "@rakazo/adapter-kit";
+import type { ProactiveRuntime } from "@rakazo/adapters";
 import { inboundRoutineModelPin } from "@rakazo/adapters";
 import type { MessageBlock } from "@rakazo/contracts";
 import { escapePromptData, inboundRoutineBlock, messageBlockForArtifact } from "@rakazo/core";
@@ -30,6 +31,8 @@ export type WebhookEvents = {
 };
 
 export type WebhookDeps = {
+  /** When set, bots it enables hand webhooks to the proactive core instead of a direct run. */
+  proactive?: Pick<ProactiveRuntime, "enabledFor" | "receiveWebhook">;
   prisma: PrismaClient;
   secrets: SecretStore;
   events: WebhookEvents;
@@ -258,6 +261,26 @@ export function inboundDeliveryClientNonce(
   return `${source}:${botId}:${createHash("sha256").update(idempotencyKey).digest("base64url")}`;
 }
 
+/** The text a bot receives for one inbound delivery, with its webhook routines in front. */
+export function buildInboundPromptText(input: {
+  prompt: string;
+  routines: Array<{ name: string; prompt: string }>;
+  source: "webhook" | "github" | "messaging";
+}): string {
+  return input.routines.length > 0
+    ? [
+        ...input.routines.map(inboundRoutineBlock),
+        "",
+        input.source === "github"
+          ? "Inbound GitHub event metadata:"
+          : input.source === "messaging"
+            ? "Inbound messaging event:"
+            : "Inbound webhook payload:",
+        input.prompt,
+      ].join("\n")
+    : input.prompt;
+}
+
 export async function deliverWebhookEvent(
   deps: Pick<WebhookDeps, "events" | "jobs">,
   target: InboundTarget,
@@ -277,19 +300,7 @@ export async function deliverWebhookEvent(
     allowParallelRun?: boolean;
   },
 ) {
-  const promptText =
-    input.routines.length > 0
-      ? [
-          ...input.routines.map(inboundRoutineBlock),
-          "",
-          input.source === "github"
-            ? "Inbound GitHub event metadata:"
-            : input.source === "messaging"
-              ? "Inbound messaging event:"
-              : "Inbound webhook payload:",
-          input.prompt,
-        ].join("\n")
-      : input.prompt;
+  const promptText = buildInboundPromptText(input);
 
   const clientNonce = input.idempotencyKey
     ? inboundDeliveryClientNonce(input.source, target.bot.id, input.idempotencyKey)
