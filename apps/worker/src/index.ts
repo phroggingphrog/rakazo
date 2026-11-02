@@ -1,9 +1,12 @@
+import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { JobPublisher, JobWorkerHost } from "@rakazo/adapter-kit";
 import {
   ComposioConnector,
   IntegrationProviderSettings,
+  McpOutputStore,
+  PrismaMcpOutputLedger,
   unwrapEnvFromKeyManager,
 } from "@rakazo/adapters";
 import { phoneCallSettings } from "@rakazo/core";
@@ -174,10 +177,19 @@ async function main() {
       .map((v) => v.trim())
       .filter(Boolean),
   };
+  const artifacts = createArtifactStore(dataDir, prisma);
+  const outputStore = new McpOutputStore(
+    artifacts,
+    new PrismaMcpOutputLedger(prisma),
+    createHash("sha256")
+      .update(`mcp-output:${resolveEncryptionKey(process.env)}`)
+      .digest(),
+  );
   const mcp = new McpConnector(
     prisma,
     secrets,
     {
+      outputStore,
       ...mcpStdio,
       ...mcpStdioOptionsFromEnv(process.env),
       events,
@@ -232,7 +244,6 @@ async function main() {
   const memoryProviders = new SpaceMemoryProviderResolver(prisma, secrets);
   const home = createAgentHomeStore(dataDir, prisma);
   void home.removeStaleStaging().catch((error) => logger.error("home staging cleanup", error));
-  const artifacts = createArtifactStore(dataDir, prisma);
   const shutdown = new AbortController();
   const inMemoryJobs = process.env.WAKEUP_DRIVER === "memory" ? new InMemoryJobQueue() : undefined;
   const runs = new RunStarter(realtime, { signal: shutdown.signal });
@@ -382,7 +393,16 @@ async function main() {
       securityEventRetentionDays(),
     ),
     reconcileAuditLog: createAuditLogReconciler(prisma, auditLogConfig()),
-    reconcileHomeStorage: homeStorageSweeper(home),
+    reconcileHomeStorage: async () => {
+      await homeStorageSweeper(home)?.();
+      await outputStore.sweepExpired({
+        operationId: "mcp-output-expiry",
+        traceId: "mcp-output-expiry",
+        spaceId: "system",
+        userId: "system",
+        signal: AbortSignal.timeout(30000),
+      });
+    },
     reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
     reconcileDeadJobs: inMemoryJobs ? undefined : createDeadJobPruner(pool),
     reconcileProactive: () => proactive.reconcile(),

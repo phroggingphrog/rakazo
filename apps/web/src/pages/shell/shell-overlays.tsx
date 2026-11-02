@@ -168,6 +168,7 @@ export function SettingsOverlays({
             const nextMe = await rpc.preferences.update({ timezone });
             setBootstrapMe((prev) => (prev ? { ...prev, timezone: nextMe.timezone } : nextMe));
           }}
+          onOpenMcp={() => setOverlay({ kind: "mcp" })}
           onAccountImported={refreshSpaces}
           onImportAgent={() => {
             setOverlay(null);

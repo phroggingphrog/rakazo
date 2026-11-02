@@ -587,13 +587,38 @@ describe("remote MCP URL policy", () => {
 });
 
 describe("remote MCP result limits", () => {
-  it("applies the result budget in UTF-8 bytes instead of JavaScript characters", () => {
+  it("returns a bounded UTF-8 preview with explicit byte counts for multibyte output", () => {
     const value = { content: "界".repeat(400_000) };
-    const limited = limitRemoteMcpPayload(value) as { truncated: boolean; content: string };
+    const limited = limitRemoteMcpPayload(value) as {
+      truncated: boolean;
+      totalBytes: number;
+      returnedBytes: number;
+      preview: string;
+    };
 
-    expect(limited.truncated).toBe(true);
-    expect(Buffer.byteLength(limited.content, "utf8")).toBeLessThanOrEqual(1_000_000);
-    expect(limited.content).not.toContain("\uFFFD");
+    expect(limited).toMatchObject({ truncated: true, totalBytes: 1_200_014 });
+    expect(limited.returnedBytes).toBe(Buffer.byteLength(limited.preview, "utf8"));
+    expect(limited.returnedBytes).toBeLessThanOrEqual(1_000_000);
+    expect(limited.returnedBytes).toBeGreaterThan(999_990);
+    expect(limited.preview).not.toContain("\uFFFD");
+    expect(() => JSON.parse(limited.preview)).toThrow();
+  });
+
+  it("marks a truncated structured result as a preview, not its original JSON shape", () => {
+    const value = { structuredContent: { items: Array.from({ length: 200_000 }, (_, i) => i) } };
+    const limited = limitRemoteMcpPayload(value) as Record<string, unknown>;
+
+    expect(limited).toMatchObject({ truncated: true });
+    expect(limited).toHaveProperty("preview");
+    expect(limited).not.toHaveProperty("structuredContent");
+    expect(typeof limited.totalBytes).toBe("number");
+    expect(typeof limited.returnedBytes).toBe("number");
+  });
+
+  it("preserves undefined and small results unchanged", () => {
+    expect(limitRemoteMcpPayload(undefined)).toBeUndefined();
+    const value = { content: "small", structuredContent: { ok: true } };
+    expect(limitRemoteMcpPayload(value)).toBe(value);
   });
 });
 

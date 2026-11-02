@@ -49,6 +49,7 @@ import { changedBotSettings } from "../bot-setting-analytics.js";
 import { requireIdentityConfirmation } from "../identity-confirmation.js";
 import type { RouterDeps } from "../router.js";
 import { loadMessagePage } from "../thread-message-pages.js";
+import { botRuntimeProfileRouteEntries } from "./bot-runtime-profile.js";
 import type { RouterContext } from "./context.js";
 import {
   computerContext,
@@ -249,6 +250,7 @@ export function botsRoutes(ctx: RouterContext) {
     ctx;
   return {
     bots: {
+      ...botRuntimeProfileRouteEntries(ctx),
       list: authed.bots.list.handler(async ({ context }) => repos.listBots(context.actor)),
       listArchived: authed.bots.listArchived.handler(async ({ context }) =>
         repos.listBots(context.actor, { archived: true }),

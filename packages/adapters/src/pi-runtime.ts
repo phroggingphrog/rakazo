@@ -74,6 +74,7 @@ import { observedPiStream } from "./pi-usage.js";
 import type { RuntimeContextDecision } from "./runtime-context.js";
 import { createRuntimeContextPolicy } from "./runtime-context.js";
 import { deliverFinishedShells } from "./shell-command-stream.js";
+import { releaseToolProgress, toolProgressForRun } from "./tool-progress.js";
 import {
   restoreTurnCheckpoint,
   serializeTurnCheckpoint,
@@ -253,6 +254,7 @@ export class PiAgentRuntime implements AgentRuntime {
           nestedAgents,
           subagentGate: createGate(MAX_PARALLEL_SUBAGENTS),
           toolCallBudget: trackedBudget,
+          toolProgress: toolProgressForRun(request.runId),
           toolCallSeq: { value: 0 },
           abortTurn: () => undefined,
           signal,
@@ -990,6 +992,7 @@ export class PiAgentRuntime implements AgentRuntime {
           const keepForResume =
             (signal.aborted || Boolean(resumeHost?.pausePending)) && !trackedBudget.exceeded;
           releaseToolCallBudget(request.runId, keepForResume);
+          releaseToolProgress(request.runId, keepForResume);
         }
       }
     });

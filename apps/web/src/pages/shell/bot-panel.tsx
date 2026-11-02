@@ -41,6 +41,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Download, Settings, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { Suspense, useEffect, useId, useRef, useState } from "react";
+import { BotPersonaSettings } from "../../components/BotPersonaSettings";
 import { ErrorBoundary, SectionLoadFailed } from "../../components/ErrorBoundary";
 import { InstructionSettings } from "../../components/InstructionSettings";
 import { botProfilePatch } from "../../lib/bot-profile-patch";
@@ -748,6 +749,7 @@ export function BotSettings({
               </div>
             </SettingsGroup>
             <InstructionSettings key={bot.id} bot={bot} />
+            <BotPersonaSettings key={`${bot.id}-persona`} botId={bot.id} />
             <SettingsGroup label={t`How other bots see it`} plain>
               <Textarea
                 id={`${ids}-description`}

@@ -874,7 +874,7 @@ describe("schedule_create with a watch", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("rejects a write tool before persisting", async () => {
+  it("accepts a write tool (owner decision: change-watch may call tools that write)", async () => {
     const { deps: d, create } = deps();
     d.connector = {
       discoverTools: vi.fn(async () => [
@@ -885,8 +885,8 @@ describe("schedule_create with a watch", () => {
       ...base,
       schedule: { watch: { kind: "tool", tool: "send" } },
     });
-    expect(result).toMatchObject({ error: expect.stringContaining("can change data") });
-    expect(create).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true });
+    expect(create).toHaveBeenCalled();
   });
 
   it("rejects a caller outside the bot owner boundary", async () => {

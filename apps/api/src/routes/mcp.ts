@@ -260,6 +260,14 @@ export function mcpRoutes(ctx: RouterContext) {
             config = prepared.config;
           }
         } catch (error) {
+          // Public servers such as Cloudflare answer 401 and expect OAuth, which this
+          // form cannot run; the Add MCP server screen creates the server and signs in.
+          if (input.kind === "mcp" && !credential && (error as { code?: unknown })?.code === 401) {
+            throw new ORPCError("BAD_REQUEST", {
+              message:
+                "This MCP server requires sign-in (OAuth). Add it from Add MCP server and press Connect instead.",
+            });
+          }
           const message = sanitizeComposioError(error);
           throw new ORPCError("BAD_REQUEST", {
             message: credential ? message.split(credential).join("[redacted]") : message,

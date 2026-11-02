@@ -13,6 +13,8 @@ export interface AdapterContext {
   userId: string;
   botId?: string;
   runId?: string;
+  /** A change check compares whole results, so an oversize MCP result is returned inline (capped), never as a stored receipt. */
+  inlineLargeOutput?: boolean;
   /** Opaque fence for releasing a graphical screen without tearing down its replacement. */
   screenLeaseId?: string;
   /** Retain a completed run's screen for reuse by this bot. */
