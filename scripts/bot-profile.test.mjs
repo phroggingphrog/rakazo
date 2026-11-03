@@ -1,11 +1,11 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { after, describe, it } from "node:test";
-import assert from "node:assert/strict";
 import { Writable } from "node:stream";
+import { after, describe, it } from "node:test";
+import { promisify } from "node:util";
 import { run } from "./bot-profile.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -26,7 +26,12 @@ after(async () => {
 async function capture(fn) {
   let output = "";
   const original = { log: console.log, error: console.error };
-  const sink = new Writable({ write(chunk, _encoding, callback) { output += chunk; callback(); } });
+  const sink = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk;
+      callback();
+    },
+  });
   console.log = (...parts) => sink.write(`${parts.join(" ")}\n`);
   console.error = (...parts) => sink.write(`${parts.join(" ")}\n`);
   try {
@@ -58,12 +63,14 @@ describe("bot profile CLI", () => {
 
   it("redacts sensitive-looking field values in diff output", async () => {
     const profile = (auth) => ({
-      extensions: [{
-        extensionId: "demo.extension",
-        version: "1",
-        digest: `sha256:${"a".repeat(64)}`,
-        settings: { auth },
-      }],
+      extensions: [
+        {
+          extensionId: "demo.extension",
+          version: "1",
+          digest: `sha256:${"a".repeat(64)}`,
+          settings: { auth },
+        },
+      ],
     });
     const before = await fixture(profile("old-private-value"));
     const after = await fixture(profile("new-private-value"));
@@ -76,8 +83,16 @@ describe("bot profile CLI", () => {
   it("runs the documented pnpm CLI examples against temporary files", async () => {
     const before = await fixture({});
     const after = await fixture({ schemaVersion: 1 });
-    const { stdout: validate } = await execFileAsync(process.execPath, ["--import", "tsx", "scripts/bot-profile.mjs", "validate", before], { cwd: root });
-    const { stdout: diffOutput } = await execFileAsync(process.execPath, ["--import", "tsx", "scripts/bot-profile.mjs", "diff", before, after], { cwd: root });
+    const { stdout: validate } = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bot-profile.mjs", "validate", before],
+      { cwd: root },
+    );
+    const { stdout: diffOutput } = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bot-profile.mjs", "diff", before, after],
+      { cwd: root },
+    );
     assert.match(validate, /Profile is valid/);
     assert.match(diffOutput, /No changes/);
   });

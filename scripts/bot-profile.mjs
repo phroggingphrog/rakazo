@@ -30,7 +30,8 @@ async function readJson(path) {
     } else if (char === '"') inString = true;
     else if (char === "{" || char === "[") {
       depth += 1;
-      if (depth > MAX_JSON_DEPTH) throw new Error(`Profile JSON exceeds maximum nesting depth (${MAX_JSON_DEPTH})`);
+      if (depth > MAX_JSON_DEPTH)
+        throw new Error(`Profile JSON exceeds maximum nesting depth (${MAX_JSON_DEPTH})`);
     } else if (char === "}" || char === "]") depth -= 1;
   }
   try {
@@ -51,7 +52,8 @@ function parseProfile(profile, label) {
   return result.data;
 }
 
-const sensitiveField = /(?:secret|password|passwd|token|credential|api[-_]?key|private[-_]?key|auth|session|cookie|bearer|access[-_]?key)/i;
+const sensitiveField =
+  /(?:secret|password|passwd|token|credential|api[-_]?key|private[-_]?key|auth|session|cookie|bearer|access[-_]?key)/i;
 
 function display(value, field) {
   return sensitiveField.test(field) ? "[REDACTED]" : JSON.stringify(value);
@@ -63,9 +65,12 @@ function diff(before, after, prefix = "") {
     return [`${prefix}: [REDACTED] -> [REDACTED]`];
   }
   if (
-    before && after &&
-    typeof before === "object" && typeof after === "object" &&
-    !Array.isArray(before) && !Array.isArray(after)
+    before &&
+    after &&
+    typeof before === "object" &&
+    typeof after === "object" &&
+    !Array.isArray(before) &&
+    !Array.isArray(after)
   ) {
     const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
     return keys.flatMap((key) => diff(before[key], after[key], prefix ? `${prefix}.${key}` : key));
@@ -76,7 +81,10 @@ function diff(before, after, prefix = "") {
     }
     return [`${prefix}: [REDACTED] -> [REDACTED]`];
   }
-  const field = prefix.split(".").at(-1).replace(/\[\d+\]$/, "");
+  const field = prefix
+    .split(".")
+    .at(-1)
+    .replace(/\[\d+\]$/, "");
   return [`${prefix}: ${display(before, field)} -> ${display(after, field)}`];
 }
 
@@ -97,7 +105,9 @@ export async function run(args) {
     return 0;
   }
   if (command === "get" || command === "update") {
-    console.error("Remote profile access is unavailable. No standalone authenticated RPC setup is configured.");
+    console.error(
+      "Remote profile access is unavailable. No standalone authenticated RPC setup is configured.",
+    );
     return 2;
   }
   console.error(usage());
@@ -105,10 +115,12 @@ export async function run(args) {
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  run(process.argv.slice(2)).then((code) => {
-    process.exitCode = code;
-  }).catch((error) => {
-    console.error(error.message);
-    process.exitCode = 2;
-  });
+  run(process.argv.slice(2))
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((error) => {
+      console.error(error.message);
+      process.exitCode = 2;
+    });
 }
