@@ -2270,10 +2270,6 @@ msgstr "更新できませんでした"
 msgid "Could not update billing"
 msgstr "請求情報を更新できませんでした"
 
-#: src/pages/McpServersOverlay.tsx
-msgid "Could not update bot access"
-msgstr ""
-
 #: src/components/ComputerMaintenanceActions.tsx
 msgid "Could not update computer"
 msgstr "コンピューターを更新できませんでした"
@@ -3999,6 +3995,10 @@ msgstr "回答が必要"
 msgid "Needs an OAuth client ID"
 msgstr "OAuth クライアント ID が必要です"
 
+#: src/pages/McpServersOverlay.tsx
+msgid "Needs attention"
+msgstr ""
+
 #: src/pages/ActivityList.tsx
 msgid "Needs input"
 msgstr "入力が必要"
@@ -4122,6 +4122,10 @@ msgstr "このページに一致するアーティファクトはありません
 #: src/pages/shell/chat-model-picker.tsx
 msgid "No matching models"
 msgstr "一致するモデルはありません"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "No matching servers"
+msgstr ""
 
 #: src/pages/GroupPanel.tsx
 msgid "No members yet"
@@ -5311,6 +5315,10 @@ msgstr "モデルを検索"
 #: src/pages/shell/shell-sidebar.tsx
 msgid "Search runs"
 msgstr "実行を検索"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Search servers"
+msgstr ""
 
 #: src/components/integrations/skills-dialog.tsx
 msgid "Search skills"

@@ -2270,10 +2270,6 @@ msgstr "Could not update"
 msgid "Could not update billing"
 msgstr "Could not update billing"
 
-#: src/pages/McpServersOverlay.tsx
-msgid "Could not update bot access"
-msgstr "Could not update bot access"
-
 #: src/components/ComputerMaintenanceActions.tsx
 msgid "Could not update computer"
 msgstr "Could not update computer"
@@ -3999,6 +3995,10 @@ msgstr "Needs an answer"
 msgid "Needs an OAuth client ID"
 msgstr "Needs an OAuth client ID"
 
+#: src/pages/McpServersOverlay.tsx
+msgid "Needs attention"
+msgstr "Needs attention"
+
 #: src/pages/ActivityList.tsx
 msgid "Needs input"
 msgstr "Needs input"
@@ -4122,6 +4122,10 @@ msgstr "No matching artifacts on this page."
 #: src/pages/shell/chat-model-picker.tsx
 msgid "No matching models"
 msgstr "No matching models"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "No matching servers"
+msgstr "No matching servers"
 
 #: src/pages/GroupPanel.tsx
 msgid "No members yet"
@@ -5311,6 +5315,10 @@ msgstr "Search models"
 #: src/pages/shell/shell-sidebar.tsx
 msgid "Search runs"
 msgstr "Search runs"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Search servers"
+msgstr "Search servers"
 
 #: src/components/integrations/skills-dialog.tsx
 msgid "Search skills"

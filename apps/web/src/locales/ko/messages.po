@@ -2270,10 +2270,6 @@ msgstr "업데이트하지 못했습니다."
 msgid "Could not update billing"
 msgstr ""
 
-#: src/pages/McpServersOverlay.tsx
-msgid "Could not update bot access"
-msgstr ""
-
 #: src/components/ComputerMaintenanceActions.tsx
 msgid "Could not update computer"
 msgstr "컴퓨터를 업데이트할 수 없습니다"
@@ -3999,6 +3995,10 @@ msgstr ""
 msgid "Needs an OAuth client ID"
 msgstr "OAuth 클라이언트 ID가 필요합니다"
 
+#: src/pages/McpServersOverlay.tsx
+msgid "Needs attention"
+msgstr ""
+
 #: src/pages/ActivityList.tsx
 msgid "Needs input"
 msgstr "입력 필요"
@@ -4122,6 +4122,10 @@ msgstr ""
 #: src/pages/shell/chat-model-picker.tsx
 msgid "No matching models"
 msgstr "일치하는 모델 없음"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "No matching servers"
+msgstr ""
 
 #: src/pages/GroupPanel.tsx
 msgid "No members yet"
@@ -5311,6 +5315,10 @@ msgstr "모델 검색"
 #: src/pages/shell/shell-sidebar.tsx
 msgid "Search runs"
 msgstr "실행 검색"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Search servers"
+msgstr ""
 
 #: src/components/integrations/skills-dialog.tsx
 msgid "Search skills"

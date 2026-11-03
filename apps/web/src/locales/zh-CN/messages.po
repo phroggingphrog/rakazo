@@ -2270,10 +2270,6 @@ msgstr "无法更新"
 msgid "Could not update billing"
 msgstr "无法更新账单"
 
-#: src/pages/McpServersOverlay.tsx
-msgid "Could not update bot access"
-msgstr ""
-
 #: src/components/ComputerMaintenanceActions.tsx
 msgid "Could not update computer"
 msgstr "无法更新电脑"
@@ -3999,6 +3995,10 @@ msgstr "等你回答"
 msgid "Needs an OAuth client ID"
 msgstr "需要 OAuth 客户端 ID"
 
+#: src/pages/McpServersOverlay.tsx
+msgid "Needs attention"
+msgstr ""
+
 #: src/pages/ActivityList.tsx
 msgid "Needs input"
 msgstr "需要输入"
@@ -4122,6 +4122,10 @@ msgstr "这一页没有匹配的产物。"
 #: src/pages/shell/chat-model-picker.tsx
 msgid "No matching models"
 msgstr "没有匹配的模型"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "No matching servers"
+msgstr ""
 
 #: src/pages/GroupPanel.tsx
 msgid "No members yet"
@@ -5311,6 +5315,10 @@ msgstr "搜索模型"
 #: src/pages/shell/shell-sidebar.tsx
 msgid "Search runs"
 msgstr "搜索运行记录"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Search servers"
+msgstr ""
 
 #: src/components/integrations/skills-dialog.tsx
 msgid "Search skills"

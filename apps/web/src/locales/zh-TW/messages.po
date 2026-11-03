@@ -2271,10 +2271,6 @@ msgstr "無法更新"
 msgid "Could not update billing"
 msgstr "無法更新帳務資訊"
 
-#: src/pages/McpServersOverlay.tsx
-msgid "Could not update bot access"
-msgstr ""
-
 #: src/components/ComputerMaintenanceActions.tsx
 msgid "Could not update computer"
 msgstr "無法更新電腦"
@@ -4000,6 +3996,10 @@ msgstr "需要回覆"
 msgid "Needs an OAuth client ID"
 msgstr "需要 OAuth 用戶端 ID"
 
+#: src/pages/McpServersOverlay.tsx
+msgid "Needs attention"
+msgstr ""
+
 #: src/pages/ActivityList.tsx
 msgid "Needs input"
 msgstr "需要輸入"
@@ -4123,6 +4123,10 @@ msgstr "此頁面沒有符合的成品。"
 #: src/pages/shell/chat-model-picker.tsx
 msgid "No matching models"
 msgstr "沒有符合的模型"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "No matching servers"
+msgstr ""
 
 #: src/pages/GroupPanel.tsx
 msgid "No members yet"
@@ -5312,6 +5316,10 @@ msgstr "搜尋模型"
 #: src/pages/shell/shell-sidebar.tsx
 msgid "Search runs"
 msgstr "搜尋執行紀錄"
+
+#: src/pages/McpServersOverlay.tsx
+msgid "Search servers"
+msgstr ""
 
 #: src/components/integrations/skills-dialog.tsx
 msgid "Search skills"
