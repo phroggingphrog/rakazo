@@ -32,10 +32,10 @@ const servers = [
   },
   {
     ...base,
-    id: "jobwatch",
-    slug: "jobwatch",
-    name: "Jobwatch",
-    endpoint: "https://jobwatch.example.test/mcp",
+    id: "archive",
+    slug: "archive",
+    name: "Archive MCP",
+    endpoint: "https://archive.example.test/mcp",
     health: {
       ...base.health,
       status: "error",
