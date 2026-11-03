@@ -24,6 +24,7 @@ import type {
   PluginRepoFetcher,
   PluginTextReader,
   ProviderCatalogCache,
+  ProactiveRuntime,
   PushTokenStore,
   RemoteConnectorDependencies,
   TicketChangeNotifier,
@@ -57,6 +58,7 @@ export { HEARTBEAT_MS, SESSION_RECHECK_MS } from "./routes/shared.js";
 export { callMarkerClientNonce } from "./routes/threads.js";
 
 export interface RouterDeps {
+  proactive?: ProactiveRuntime;
   pushTokens: PushTokenStore;
   analytics?: ProductAnalytics;
   cloudAgent?: CloudAgentConnection | null;

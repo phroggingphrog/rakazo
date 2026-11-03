@@ -1209,6 +1209,39 @@ export const builtinAgentTools: ConnectorTool[] = [
     },
   },
   {
+    name: "proactive_set_interval",
+    description: "Set this bot fallback patrol interval in milliseconds, between five minutes and seven days.",
+    inputSchema: { type: "object", properties: { fallbackMs: { type: "number" } }, required: ["fallbackMs"] },
+  },
+  {
+    name: "proactive_set_wake",
+    description: "Set your next durable wake. dueAt is epoch milliseconds, at least five minutes ahead; maximum twenty self-set wakes per UTC day.",
+    inputSchema: { type: "object", properties: { dueAt: { type: "number" }, note: { type: "string" } }, required: ["dueAt"] },
+  },
+  {
+    name: "proactive_set_timer",
+    description: "Create a durable named timer for this bot. Use a unique id and dueAt epoch milliseconds at least five minutes ahead.",
+    inputSchema: { type: "object", properties: { id: { type: "string" }, dueAt: { type: "number" }, note: { type: "string" } }, required: ["id", "dueAt"] },
+  },
+  {
+    name: "proactive_cancel_timer",
+    description: "Cancel this bot own pending named timer.",
+    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "proactive_hook",
+    description: "Register or replace an event hook for this bot. Matches an existing event source and optional literal text; does not create external subscriptions.",
+    inputSchema: { type: "object", properties: { id: { type: "string" }, source: { type: "string" }, contains: { type: "string" } }, required: ["id", "source"] },
+  },
+  {
+    name: "proactive_get", description: "Read this bot proactive configuration and revision.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "proactive_reset", description: "Reset this bot proactive configuration to defaults; does not reset daily quotas.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "schedule_create",
     description:
       'Create a reminder or recurring job for this bot. Use for "remind me in 10 minutes" or "every morning send a joke". Repeats: cron or every/unit (min 1 minute), optionally from startAt. One-shot: runAt, delayMinutes, or delaySeconds. A repeating job carries out the user\'s lasting request each time, not a copy of what was decided today.',

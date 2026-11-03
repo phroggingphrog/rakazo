@@ -130,6 +130,7 @@ export function createBackgroundJobHandlers(deps: {
       if (execution)
         await deps.executor.continueRun(payload.runId, deps.workerId, execution.onRunStarted);
       else await deps.executor.continueRun(payload.runId, deps.workerId);
+      await deps.proactive?.recordSent(payload.runId);
       // Automatic messaging mirror: once the run's bot messages are durable,
       // copy them into the outbox. Never let mirror failures fail the run.
       if (messagingDeps) {

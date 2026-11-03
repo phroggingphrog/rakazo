@@ -627,7 +627,16 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   const userDevices = userDeviceHub
     ? new UserDevices({ prisma, forwardSecret: userDeviceSecret, hub: userDeviceHub })
     : undefined;
+  const proactive = createProactiveRuntime({
+    prisma,
+    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
+    events,
+    jobs,
+    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
+  });
+
   const executor = createRunExecutor({
+    proactive,
     billingEnabled: modelCreditsEnabled,
     maxUploadSizeBytes: env.maxUploadSizeBytes,
     contextStrategy,
@@ -681,13 +690,6 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   });
 
   // Off until PROACTIVE_WEBHOOK_BOTS names bots (or "*"); then those bots' webhooks use the core.
-  const proactive = createProactiveRuntime({
-    prisma,
-    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
-    events,
-    jobs,
-    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
-  });
   const jobHandlers = createBackgroundJobHandlers({
     proactive,
     executor,
@@ -753,6 +755,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   const stopMcpReprobe = startMcpReprobe({ prisma, mcp, secrets }, mcpOAuth);
 
   const router = createRouter({
+    proactive,
     speechSummary:
       env.voiceSummaryMinChars === undefined
         ? undefined

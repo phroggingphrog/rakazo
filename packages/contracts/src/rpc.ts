@@ -470,6 +470,14 @@ export const appContract = {
       .output(z.object({ ok: z.literal(true) })),
   },
   bots: {
+    proactiveConfigure: oc.input(z.object({
+      botId: Id,
+      config: z.object({
+        fallbackMs: z.number().int().min(300000).max(604800000).optional(),
+        decisionOrder: z.array(z.enum(["steer", "dm", "mention", "timer", "rules", "judge"])).length(6).optional(),
+        hooks: z.array(z.object({ id: z.string().min(1).max(100), source: z.string().min(1).max(200), contains: z.string().max(500).optional() })).max(20).optional(),
+      }),
+    })).output(z.object({ updated: z.boolean() })),
     runtimeProfileGet: oc.input(botId).output(BotRuntimeProfileResponse),
     runtimeProfileValidate: oc
       .input(BotRuntimeProfileValidationInput)

@@ -277,7 +277,16 @@ async function main() {
     jobs,
     accessToken: process.env.EXPO_ACCESS_TOKEN,
   });
+  const proactive = createProactiveRuntime({
+    prisma,
+    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
+    events,
+    jobs,
+    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
+  });
+
   const executor = createRunExecutor({
+    proactive,
     maxUploadSizeBytes: uploadSizeFromEnv(process.env),
     prisma,
     runtime,
@@ -342,13 +351,6 @@ async function main() {
       }),
     );
 
-  const proactive = createProactiveRuntime({
-    prisma,
-    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
-    events,
-    jobs,
-    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
-  });
   const jobHandlers = createBackgroundJobHandlers({
     proactive,
     executor,

@@ -250,6 +250,10 @@ export function botsRoutes(ctx: RouterContext) {
     ctx;
   return {
     bots: {
+      proactiveConfigure: authed.bots.proactiveConfigure.handler(async ({ context, input }) => {
+        if (!deps.proactive) throw new Error("Proactive controls are not configured");
+        return deps.proactive.configure({ ...input, spaceId: context.actor.spaceId, userId: context.actor.userId });
+      }),
       ...botRuntimeProfileRouteEntries(ctx),
       list: authed.bots.list.handler(async ({ context }) => repos.listBots(context.actor)),
       listArchived: authed.bots.listArchived.handler(async ({ context }) =>
