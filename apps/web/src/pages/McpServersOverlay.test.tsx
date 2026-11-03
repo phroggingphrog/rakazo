@@ -2,7 +2,7 @@
 import type { McpServer } from "@rakazo/contracts";
 import { MCP_OAUTH_CLIENT_REQUIRED } from "@rakazo/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactElement, ReactNode } from "react";
+import type { InputHTMLAttributes, ReactElement, ReactNode } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -20,9 +20,9 @@ const api = vi.hoisted(() => ({
   mcp: { servers: mocks, assignments: { all: access.all } },
   bots: { list: access.bots },
 }));
-// One space, so no "Available in" choice appears.
+// Isolate space queries while checking where availability controls appear.
 vi.mock("../components/integrations/space-availability", () => ({
-  AvailabilityControl: () => null,
+  AvailabilityControl: () => <button type="button">Available in</button>,
   AvailabilityLabel: () => null,
   reachesOtherSpaces: () => false,
   useOwnSpaces: () => [],
@@ -77,7 +77,6 @@ vi.mock("@rakazo/ui-web", async () => {
       "Tabs",
       "TabsList",
       "TabsTrigger",
-      "Toggle",
     ].map((name) => [name, container]),
     [
       "Button",
@@ -127,10 +126,26 @@ vi.mock("@rakazo/ui-web", async () => {
           children,
         ),
     ],
+    ["Input", (props: InputHTMLAttributes<HTMLInputElement>) => createElement("input", props)],
     [
-      "Input",
-      ({ id, value, placeholder }: { id?: string; value?: string; placeholder?: string }) =>
-        createElement("input", { id, value, placeholder, readOnly: true }),
+      "Toggle",
+      ({
+        children,
+        pressed,
+        onPressedChange,
+      }: {
+        children: ReactNode;
+        pressed: boolean;
+        onPressedChange: (pressed: boolean) => void;
+      }) =>
+        createElement(
+          "button",
+          {
+            "aria-pressed": pressed,
+            onClick: () => onPressedChange(!pressed),
+          },
+          children,
+        ),
     ],
     ["Textarea", () => null],
     [
@@ -548,13 +563,15 @@ it.each([
   ["still loading", () => new Promise(() => undefined)],
   ["failed", () => Promise.reject(new Error("offline"))],
 ])("keeps agent access unchangeable while assignments are %s", async (state, read) => {
-  mocks.list.mockReset().mockResolvedValue([server("docs")]);
+  mocks.list
+    .mockReset()
+    .mockResolvedValue([{ ...server("docs"), envKeys: [], fileKeys: [], headerKeys: [] }]);
   access.bots.mockResolvedValue([{ id: "bot_1", name: "Ada" }]);
   access.all.mockImplementation(read);
   const host = document.createElement("div");
   const root = createRoot(host);
   try {
-    await act(async () => root.render(overlay()));
+    await act(async () => root.render(overlay("docs")));
     const trigger = () =>
       Array.from(host.querySelectorAll("button")).find((item) => item.textContent === "No bots");
     await vi.waitFor(() => expect(trigger()?.disabled).toBe(true));
@@ -570,7 +587,15 @@ it.each([
 });
 
 it("narrows a server shared with every agent to the ones left selected", async () => {
-  const shared = { ...server("docs"), allBots: true };
+  const shared = {
+    ...server("docs"),
+    allBots: true,
+    command: "docs",
+    envKeys: [],
+    fileKeys: [],
+    headerKeys: [],
+  };
+  mocks.update.mockResolvedValue(shared);
   mocks.list.mockReset().mockResolvedValue([shared]);
   mocks.agents.mockResolvedValue({ server: { ...shared, allBots: false }, assignments: [] });
   access.bots.mockResolvedValue([
@@ -584,6 +609,14 @@ it("narrows a server shared with every agent to the ones left selected", async (
   const root = createRoot(host);
   try {
     await act(async () => root.render(overlay()));
+    await vi.waitFor(() => expect(host.textContent).toContain("docs"));
+    expect(host.textContent).not.toContain("All bots");
+    expect(host.textContent).not.toContain("Available in");
+    await act(async () =>
+      Array.from(host.querySelectorAll("button"))
+        .find((item) => item.textContent === "Edit")!
+        .click(),
+    );
     const option = (name: string) =>
       Array.from(host.querySelectorAll<HTMLButtonElement>("button[aria-checked]")).find(
         (item) => item.textContent === name,
@@ -593,13 +626,67 @@ it("narrows a server shared with every agent to the ones left selected", async (
         (item) => !item.hasAttribute("aria-checked") && item.textContent === "All bots",
       );
     await vi.waitFor(() => expect(trigger()?.disabled).toBe(false));
+    expect(host.textContent).toContain("Available in");
     expect(option("Grace")?.getAttribute("aria-checked")).toBe("true");
     mocks.list.mockResolvedValue([{ ...shared, allBots: false }]);
     await act(async () => option("Ada")!.click());
+    expect(mocks.agents).not.toHaveBeenCalled();
+    expect(option("All bots")?.getAttribute("aria-checked")).toBe("false");
+    await act(async () =>
+      Array.from(host.querySelectorAll("button"))
+        .find((item) => item.textContent === "Save")!
+        .click(),
+    );
     expect(mocks.agents).toHaveBeenCalledWith({ id: "docs", allBots: false, botIds: ["bot_2"] });
-    await vi.waitFor(() => expect(option("All bots")?.getAttribute("aria-checked")).toBe("false"));
-    await act(async () => option("All bots")!.click());
-    expect(mocks.agents).toHaveBeenLastCalledWith({ id: "docs", allBots: true, botIds: [] });
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it("shows filters only above five servers and combines search with attention", async () => {
+  const healthy = { ...server("healthy", "ok"), endpoint: "https://docs.example/mcp" };
+  const failed = server("failed", "error");
+  const reconnect = { ...server("reconnect", "ok"), oauthStatus: "reconnect" };
+  const pending = server("pending", "installing");
+  const unknown = server("unknown");
+  mocks.list.mockReset().mockResolvedValue([healthy, failed, reconnect, pending, unknown]);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(overlay()));
+    await vi.waitFor(() => expect(host.querySelectorAll("li")).toHaveLength(5));
+    expect(host.querySelector('input[type="search"]')).toBeNull();
+    const clientRequired = {
+      ...server("client-required", "ok"),
+      health: { ...server("client-required", "ok").health, code: MCP_OAUTH_CLIENT_REQUIRED },
+    };
+    mocks.list.mockResolvedValue([healthy, failed, reconnect, pending, unknown, clientRequired]);
+    await act(async () => client.invalidateQueries());
+    await vi.waitFor(() => expect(host.querySelector('input[type="search"]')).not.toBeNull());
+    const search = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+    const setSearch = async (value: string) =>
+      act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+          search,
+          value,
+        );
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    const attention = Array.from(host.querySelectorAll("button")).find(
+      (item) => item.textContent === "Needs attention",
+    )!;
+    await act(async () => attention.click());
+    expect(Array.from(host.querySelectorAll("li")).map((item) => item.textContent)).toHaveLength(3);
+    expect(host.querySelector("ul")?.textContent).not.toContain("pending");
+    expect(host.querySelector("ul")?.textContent).not.toContain("unknown");
+    await setSearch("  FAILED  ");
+    expect(host.querySelectorAll("li")).toHaveLength(1);
+    expect(host.querySelector("ul")?.textContent).toContain("failed");
+    await setSearch("docs.example");
+    expect(host.textContent).toContain("No matching servers");
+    await act(async () => attention.click());
+    expect(host.querySelectorAll("li")).toHaveLength(1);
+    expect(host.querySelector("ul")?.textContent).toContain("healthy");
   } finally {
     await act(async () => root.unmount());
   }

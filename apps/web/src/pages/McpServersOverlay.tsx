@@ -106,6 +106,8 @@ export function McpServersOverlay({
   const { t } = useLingui();
   const [editing, setEditing] = useState<McpServer | null>(null);
   const [adding, setAdding] = useState(false);
+  const [search, setSearch] = useState("");
+  const [attentionOnly, setAttentionOnly] = useState(false);
   const [deleting, setDeleting] = useState<McpServer | null>(null);
   const [formAccess, setFormAccess] = useState<AgentAccess>({ allBots: true, botIds: [] });
   const [transport, setTransport] = useState<McpTransport>("streamable_http");
@@ -151,6 +153,20 @@ export function McpServersOverlay({
   const assignmentsOptions = queries.mcp.assignments.all.queryOptions();
   const assignmentsQuery = useQuery(assignmentsOptions);
   const servers = serversQuery.data ?? [];
+  const showFilters = servers.length > 5;
+  const searchTerm = search.trim().toLocaleLowerCase();
+  const visibleServers = showFilters
+    ? servers.filter(
+        (server) =>
+          (!attentionOnly ||
+            server.health.status === "error" ||
+            server.oauthStatus === "reconnect" ||
+            needsOAuthClient(server)) &&
+          [server.name, server.endpoint, server.command, server.slug].some((value) =>
+            value?.toLocaleLowerCase().includes(searchTerm),
+          ),
+      )
+    : servers;
   const spaceCount = useOwnSpaces().length;
   const bots = useMemo(
     () => (botsQuery.data ?? []).filter((bot) => !bot.archivedAt),
@@ -391,25 +407,6 @@ export function McpServersOverlay({
         void refresh().catch(() => undefined);
       }
       setError(errorText(err, t`Could not start OAuth`));
-    }
-  }
-
-  async function setServerAgents(server: McpServer, access: AgentAccess) {
-    if (!assignmentsReady) return;
-    setError(null);
-    try {
-      const updated = await rpc.mcp.servers.agents({ id: server.id, ...access });
-      await Promise.all([
-        writeSaved(queryClient, serversOptions.queryKey, (current) =>
-          (current ?? []).map((item) => (item.id === server.id ? updated.server : item)),
-        ),
-        writeSaved(queryClient, assignmentsOptions.queryKey, (all) => [
-          ...(all ?? []).filter((entry) => entry.serverId !== server.id),
-          ...updated.assignments,
-        ]),
-      ]);
-    } catch (err) {
-      setError(errorText(err, t`Could not update bot access`));
     }
   }
 
@@ -789,6 +786,17 @@ export function McpServersOverlay({
             </div>
           </Disclosure>
         </FieldGroup>
+        {editing && !editing.installId ? (
+          <AvailabilityControl
+            kind="mcpServer"
+            id={editing.id}
+            availability={
+              servers.find((server) => server.id === editing.id)?.availability ??
+              editing.availability
+            }
+            onChanged={() => serversQuery.refetch()}
+          />
+        ) : null}
         <AgentAccessControl
           bots={bots}
           access={formAccess}
@@ -849,20 +857,6 @@ export function McpServersOverlay({
           <McpServerHealthLine health={server.health} checking={testing} />
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {server.installId ? null : (
-            <AvailabilityControl
-              kind="mcpServer"
-              id={server.id}
-              availability={server.availability}
-              onChanged={() => serversQuery.refetch()}
-            />
-          )}
-          <AgentAccessControl
-            bots={bots}
-            access={accessOf(server)}
-            disabled={!assignmentsReady}
-            onChange={(access) => void setServerAgents(server, access)}
-          />
           {signInFirst ? (
             <Button
               type="button"
@@ -954,7 +948,29 @@ export function McpServersOverlay({
           {formOpen ? (
             renderForm()
           ) : (
-            <ul className="-my-3 divide-y divide-border">{servers.map(renderServer)}</ul>
+            <div className="space-y-4">
+              {showFilters ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    type="search"
+                    aria-label={t`Search servers`}
+                    placeholder={t`Search servers`}
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    className="min-w-0 flex-1"
+                  />
+                  <Toggle pressed={attentionOnly} onPressedChange={setAttentionOnly}>
+                    <Trans>Needs attention</Trans>
+                  </Toggle>
+                </div>
+              ) : null}
+              <ul className="-my-3 divide-y divide-border">{visibleServers.map(renderServer)}</ul>
+              {showFilters && visibleServers.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  <Trans>No matching servers</Trans>
+                </p>
+              ) : null}
+            </div>
           )}
         </div>
         {deleting ? (
