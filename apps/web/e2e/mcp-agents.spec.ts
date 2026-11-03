@@ -48,6 +48,11 @@ test("a server the user adds reaches every bot until they pick some", async ({
       body: JSON.stringify({ json: server }),
     });
   });
+  await page
+    .context()
+    .route("**/rpc/mcp/servers/update", (route) =>
+      route.fulfill({ contentType: "application/json", body: JSON.stringify({ json: server }) }),
+    );
   const requests: unknown[] = [];
   await page.context().route("**/rpc/mcp/servers/agents", async (route) => {
     const { json } = route.request().postDataJSON() as {
@@ -76,7 +81,10 @@ test("a server the user adds reaches every bot until they pick some", async ({
   await page.getByLabel("Server URL").fill(server.endpoint!);
   await captureScreenshot(page, testInfo, "mcp-agents-add");
   await page.getByRole("button", { name: "Add server", exact: true }).click();
-  const access = page.getByTestId("mcp-server").getByTestId("agent-access");
+  const row = page.getByTestId("mcp-server");
+  await expect(row.getByTestId("agent-access")).toHaveCount(0);
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
+  const access = page.getByTestId("agent-access");
   await expect(access).toContainText("All bots");
   await captureScreenshot(page, testInfo, "mcp-agents");
 
@@ -87,7 +95,11 @@ test("a server the user adds reaches every bot until they pick some", async ({
   await chief.click();
   await page.keyboard.press("Escape");
   await expect(access).toContainText("Writer");
-  expect(requests).toEqual([{ id: server.id, allBots: false, botIds: [writer.id] }]);
+  expect(requests).toEqual([]);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect
+    .poll(() => requests)
+    .toEqual([{ id: server.id, allBots: false, botIds: [writer.id] }]);
 });
 
 test("shows each server's bots and state with several bots", async ({ page }, testInfo) => {
@@ -179,15 +191,16 @@ test("shows each server's bots and state with several bots", async ({ page }, te
   await openIntegrationsAdd(page, "Manage MCP servers");
   const rows = page.getByTestId("mcp-server");
   await expect(rows).toHaveCount(servers.length);
-  await expect(rows.nth(1).getByTestId("agent-access")).toContainText("Researcher");
-  await expect(rows.nth(3).getByTestId("agent-access")).toContainText("No bots");
-  await expect(rows.nth(4).getByTestId("agent-access")).toContainText("+1");
+  await expect(rows.getByTestId("agent-access")).toHaveCount(0);
   await captureScreenshot(page, testInfo, "mcp-states");
 
-  await rows.nth(1).getByTestId("agent-access").getByRole("button").click();
+  await rows.nth(1).getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(page.getByTestId("agent-access")).toContainText("Researcher");
+  await page.getByTestId("agent-access").getByRole("button").click();
   await expect(page.getByRole("menuitemcheckbox", { name: "Support", exact: true })).toBeVisible();
   await captureScreenshot(page, testInfo, "mcp-states-menu");
   await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await rows.nth(1).getByRole("button", { name: "Actions for Linear" }).click();
   await expect(page.getByRole("menuitem", { name: "Delete" })).toBeVisible();
