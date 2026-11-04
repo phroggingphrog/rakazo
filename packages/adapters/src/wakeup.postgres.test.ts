@@ -26,27 +26,31 @@ afterEach(async () => {
 });
 
 function handlers(overrides: Partial<BackgroundJobHandlers> = {}): BackgroundJobHandlers {
-  return {
-    "run.continue": vi.fn(async () => undefined),
-    "routine.wakeup": vi.fn(async () => undefined),
-    "routine.retry": vi.fn(async () => undefined),
-    "computer.update": vi.fn(async () => undefined),
-    "computer.sleep": vi.fn(async () => undefined),
-    "computer.control-expire": vi.fn(async () => undefined),
-    "skill.teaching-expire": vi.fn(async () => undefined),
-    "call.expire": vi.fn(async () => undefined),
-    "history.compact": vi.fn(async () => undefined),
-    "messaging.deliver": vi.fn(async () => undefined),
-    "messaging.credential-cleanup": vi.fn(async () => undefined),
-    "cloud_agent.poll": vi.fn(async () => undefined),
-    "purchase.poll": vi.fn(async () => undefined),
-    "push.receipt": vi.fn(async () => undefined),
-    "proactive.apply": vi.fn(async () => undefined),
-    "proactive.decide": vi.fn(async () => undefined),
-    "proactive.redeliver": vi.fn(async () => undefined),
-    "proactive.timers": vi.fn(async () => undefined),
-    ...overrides,
-  };
+  // Object.assign keeps the map's keys required, so a spread Partial cannot make one optional.
+  return Object.assign(
+    {
+      "run.continue": vi.fn(async () => undefined),
+      "routine.wakeup": vi.fn(async () => undefined),
+      "routine.retry": vi.fn(async () => undefined),
+      "computer.update": vi.fn(async () => undefined),
+      "computer.sleep": vi.fn(async () => undefined),
+      "computer.control-expire": vi.fn(async () => undefined),
+      "skill.teaching-expire": vi.fn(async () => undefined),
+      "call.expire": vi.fn(async () => undefined),
+      "history.compact": vi.fn(async () => undefined),
+      "messaging.deliver": vi.fn(async () => undefined),
+      "messaging.credential-cleanup": vi.fn(async () => undefined),
+      "cloud_agent.poll": vi.fn(async () => undefined),
+      "purchase.poll": vi.fn(async () => undefined),
+      "push.receipt": vi.fn(async () => undefined),
+      "proactive.apply": vi.fn(async () => undefined),
+      "proactive.decide": vi.fn(async () => undefined),
+      "proactive.redeliver": vi.fn(async () => undefined),
+      "proactive.timers": vi.fn(async () => undefined),
+      "learning.review": vi.fn(async () => undefined),
+    },
+    overrides,
+  );
 }
 
 function deferred() {

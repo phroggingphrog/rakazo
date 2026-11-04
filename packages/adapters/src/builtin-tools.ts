@@ -1210,18 +1210,33 @@ export const builtinAgentTools: ConnectorTool[] = [
   },
   {
     name: "proactive_set_interval",
-    description: "Set this bot fallback patrol interval in milliseconds, between five minutes and seven days.",
-    inputSchema: { type: "object", properties: { fallbackMs: { type: "number" } }, required: ["fallbackMs"] },
+    description:
+      "Set this bot fallback patrol interval in milliseconds, between five minutes and seven days.",
+    inputSchema: {
+      type: "object",
+      properties: { fallbackMs: { type: "number" } },
+      required: ["fallbackMs"],
+    },
   },
   {
     name: "proactive_set_wake",
-    description: "Set your next durable wake. dueAt is epoch milliseconds, at least five minutes ahead; maximum twenty self-set wakes per UTC day.",
-    inputSchema: { type: "object", properties: { dueAt: { type: "number" }, note: { type: "string" } }, required: ["dueAt"] },
+    description:
+      "Set your next durable wake. dueAt is epoch milliseconds, at least five minutes ahead; maximum twenty self-set wakes per UTC day.",
+    inputSchema: {
+      type: "object",
+      properties: { dueAt: { type: "number" }, note: { type: "string" } },
+      required: ["dueAt"],
+    },
   },
   {
     name: "proactive_set_timer",
-    description: "Create a durable named timer for this bot. Use a unique id and dueAt epoch milliseconds at least five minutes ahead.",
-    inputSchema: { type: "object", properties: { id: { type: "string" }, dueAt: { type: "number" }, note: { type: "string" } }, required: ["id", "dueAt"] },
+    description:
+      "Create a durable named timer for this bot. Use a unique id and dueAt epoch milliseconds at least five minutes ahead.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" }, dueAt: { type: "number" }, note: { type: "string" } },
+      required: ["id", "dueAt"],
+    },
   },
   {
     name: "proactive_cancel_timer",
@@ -1230,15 +1245,26 @@ export const builtinAgentTools: ConnectorTool[] = [
   },
   {
     name: "proactive_hook",
-    description: "Register or replace an event hook for this bot. Matches an existing event source and optional literal text; does not create external subscriptions.",
-    inputSchema: { type: "object", properties: { id: { type: "string" }, source: { type: "string" }, contains: { type: "string" } }, required: ["id", "source"] },
+    description:
+      "Register or replace an event hook for this bot. Matches an existing event source and optional literal text; does not create external subscriptions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        source: { type: "string" },
+        contains: { type: "string" },
+      },
+      required: ["id", "source"],
+    },
   },
   {
-    name: "proactive_get", description: "Read this bot proactive configuration and revision.",
+    name: "proactive_get",
+    description: "Read this bot proactive configuration and revision.",
     inputSchema: { type: "object", properties: {} },
   },
   {
-    name: "proactive_reset", description: "Reset this bot proactive configuration to defaults; does not reset daily quotas.",
+    name: "proactive_reset",
+    description: "Reset this bot proactive configuration to defaults; does not reset daily quotas.",
     inputSchema: { type: "object", properties: {} },
   },
   {

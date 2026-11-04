@@ -36,23 +36,62 @@ import {
 
 /** The task catalog, scratchpad, ticket board, schedules and skills. */
 export const taskTools: ToolHandlers = {
-  ...Object.fromEntries(["proactive_set_interval", "proactive_set_wake", "proactive_set_timer", "proactive_cancel_timer", "proactive_hook", "proactive_get", "proactive_reset"].map(name => [name, async (ctx: Parameters<ToolHandlers[string]>[0], call: Parameters<ToolHandlers[string]>[1]) => {
-    const actions = { proactive_set_interval: "interval", proactive_set_wake: "wake", proactive_set_timer: "timer", proactive_cancel_timer: "cancel", proactive_hook: "hook", proactive_get: "get", proactive_reset: "reset" } as const;
-    const runtime = ctx.deps.proactive;
-    if (!runtime) return call.finish({ error: "Proactive controls are not configured" });
-    const args = call.args;
-    try {
-      return call.finish(await runtime.control({
-        botId: ctx.bot.id, spaceId: ctx.run.spaceId, userId: ctx.run.userId,
-        action: actions[name as keyof typeof actions],
-        id: typeof args.id === "string" ? args.id : undefined,
-        dueAt: typeof args.dueAt === "number" ? args.dueAt : undefined,
-        fallbackMs: typeof args.fallbackMs === "number" ? args.fallbackMs : undefined,
-        note: typeof args.note === "string" ? args.note : undefined,
-        hook: typeof args.source === "string" && typeof args.id === "string" ? { id: args.id, source: args.source, ...(typeof args.contains === "string" ? { contains: args.contains } : {}) } : undefined,
-      }));
-    } catch (error) { return call.finish({ error: error instanceof Error ? error.message : "Proactive control failed" }); }
-  }])),
+  ...Object.fromEntries(
+    [
+      "proactive_set_interval",
+      "proactive_set_wake",
+      "proactive_set_timer",
+      "proactive_cancel_timer",
+      "proactive_hook",
+      "proactive_get",
+      "proactive_reset",
+    ].map((name) => [
+      name,
+      async (
+        ctx: Parameters<ToolHandlers[string]>[0],
+        call: Parameters<ToolHandlers[string]>[1],
+      ) => {
+        const actions = {
+          proactive_set_interval: "interval",
+          proactive_set_wake: "wake",
+          proactive_set_timer: "timer",
+          proactive_cancel_timer: "cancel",
+          proactive_hook: "hook",
+          proactive_get: "get",
+          proactive_reset: "reset",
+        } as const;
+        const runtime = ctx.deps.proactive;
+        if (!runtime) return call.finish({ error: "Proactive controls are not configured" });
+        const args = call.args;
+        try {
+          return call.finish(
+            await runtime.control({
+              botId: ctx.bot.id,
+              spaceId: ctx.run.spaceId,
+              userId: ctx.run.userId,
+              action: actions[name as keyof typeof actions],
+              id: typeof args.id === "string" ? args.id : undefined,
+              dueAt: typeof args.dueAt === "number" ? args.dueAt : undefined,
+              fallbackMs: typeof args.fallbackMs === "number" ? args.fallbackMs : undefined,
+              note: typeof args.note === "string" ? args.note : undefined,
+              hook:
+                typeof args.source === "string" && typeof args.id === "string"
+                  ? {
+                      id: args.id,
+                      source: args.source,
+                      ...(typeof args.contains === "string" ? { contains: args.contains } : {}),
+                    }
+                  : undefined,
+            }),
+          );
+        } catch (error) {
+          return call.finish({
+            error: error instanceof Error ? error.message : "Proactive control failed",
+          });
+        }
+      },
+    ]),
+  ),
   async task_catalog(ctx) {
     const { deps, run, bot, thread } = ctx;
     return taskCatalogFromTool(deps, {

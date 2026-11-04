@@ -168,6 +168,7 @@ import { DELEGATED_EMPTY_NOTICE, runAllowsSilentEmpty, runReplyGuidance } from "
 import {
   notifyRoutineRetryAttemptsExhausted,
   retryRoutineRun,
+  startRoutineRun,
   wakeRoutine,
 } from "./run-routines.js";
 import {
@@ -268,6 +269,14 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
     contextStrategy,
     resolveModel: resolveRunModel.bind(undefined, baseDeps),
     wakeRoutine: wakeRoutine.bind(undefined, baseDeps),
+    /**
+     * Starts a routine occurrence the proactive pipeline woke for, skipping the route.
+     * The wake ledger keys on a reference, and the occurrence is what it dedupes on.
+     */
+    startRoutine: async (routineId: string, scheduledFor: string) => {
+      await startRoutineRun(baseDeps, routineId, scheduledFor);
+      return { ref: `routine:${routineId}:${scheduledFor}` };
+    },
     notifyRoutineRetryAttemptsExhausted: notifyRoutineRetryAttemptsExhausted.bind(
       undefined,
       baseDeps,

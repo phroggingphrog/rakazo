@@ -17,6 +17,7 @@ import { sanitizedError } from "@rakazo/logging/monitoring";
 import { protectedComputerLifecycleRefusal } from "./desktop-command-guard.js";
 import type { ExecutorDeps } from "./executor-deps.js";
 import { routineRunModelPin } from "./model-selection.js";
+import { routineSourceFromEnv } from "./proactive.js";
 import { findPendingRoutineTick, routineTimerNonce } from "./routine-coalescing.js";
 import { tickRoutineWatch } from "./routine-watch.js";
 import { isUniqueViolation } from "./run-messages.js";
@@ -112,7 +113,53 @@ async function notifyFailedRoutineRun(
   );
 }
 
+/** Whether scheduled routines reach the bot through the proactive pipeline. */
+function routineSourceEnabled(): boolean {
+  return routineSourceFromEnv(process.env);
+}
+
+/**
+ * Hands a due routine to the proactive pipeline and reports whether it took it. Every
+ * reason to decline — flag off, bot not on the proactive path, routine no longer due, the
+ * event could not be stored — returns false so the caller starts the run the usual way.
+ * A routine is never dropped here.
+ */
+async function routeRoutineThroughProactive(
+  deps: ExecutorDeps,
+  routineId: string,
+  scheduledAt: Date,
+): Promise<boolean> {
+  const proactive = deps.proactive;
+  if (!proactive?.routineSource || !routineSourceEnabled()) return false;
+  try {
+    const routine = await deps.prisma.routine.findUnique({
+      where: { id: routineId },
+      select: { id: true, botId: true, active: true, nextRunAt: true, prompt: true },
+    });
+    if (!routine?.active || routine.nextRunAt?.getTime() !== scheduledAt.getTime()) return true;
+    if (!proactive.enabledFor(routine.botId)) return false;
+    await proactive.receiveRoutine({
+      botId: routine.botId,
+      routineId: routine.id,
+      scheduledFor: scheduledAt.getTime(),
+      text: routine.prompt,
+    });
+    return true;
+  } catch (error) {
+    getLogger().error("routine proactive route", error);
+    return false;
+  }
+}
+
 export async function wakeRoutine(deps: ExecutorDeps, routineId: string, scheduledFor: string) {
+  const scheduledAt = new Date(scheduledFor);
+  if (!Number.isFinite(scheduledAt.getTime())) return;
+  if (await routeRoutineThroughProactive(deps, routineId, scheduledAt)) return;
+  await startRoutineRun(deps, routineId, scheduledFor);
+}
+
+/** Claims a due routine and starts its run. The pipeline calls this for a routine it woke for. */
+export async function startRoutineRun(deps: ExecutorDeps, routineId: string, scheduledFor: string) {
   const scheduledAt = new Date(scheduledFor);
   if (!Number.isFinite(scheduledAt.getTime())) return;
   const routine = await deps.prisma.routine.findUnique({

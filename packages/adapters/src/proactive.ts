@@ -27,7 +27,11 @@ import { PgProactiveStore, ProactiveEngine } from "@rakazo/proactive";
 import { DEFAULT_JEV_MODEL, typesafeApiKey } from "./auto-review.js";
 import { HttpDecisionProvider } from "./http-decisions.js";
 import { JevProactiveJudge } from "./jev-proactive-judge.js";
-import { PgProactiveControls, type BotProactiveConfig, type ProactiveHook } from "./proactive-controls.js";
+import {
+  type BotProactiveConfig,
+  PgProactiveControls,
+  type ProactiveHook,
+} from "./proactive-controls.js";
 
 type ModelPin = { modelProvider: string; modelId: string; thinkingLevel: string | null };
 
@@ -35,6 +39,37 @@ type ModelPin = { modelProvider: string; modelId: string; thinkingLevel: string 
 export interface WebhookEventRaw {
   prompt: string;
   modelPin?: ModelPin;
+}
+
+/** What the routine source puts in `ProactiveEvent.raw`: which routine, and which occurrence. */
+export interface RoutineEventRaw {
+  routineId: string;
+  /** ISO instant of the occurrence the routine is due for. */
+  scheduledFor: string;
+}
+
+/**
+ * The routine occurrence a wake is made of, or null when it is anything else. The routine
+ * runner owns how a routine starts, so the target hands a purely-routine wake back to it
+ * rather than composing a prompt the way it does for webhooks.
+ */
+export function routineWake(events: Wake["events"]): RoutineEventRaw | null {
+  const raws = events.map((event) => (event.raw as RoutineEventRaw | undefined) ?? null);
+  const first = raws[0];
+  if (!first?.routineId || !first.scheduledFor) return null;
+  const uniform = raws.every(
+    (raw) => raw?.routineId === first.routineId && raw?.scheduledFor === first.scheduledFor,
+  );
+  return uniform ? first : null;
+}
+
+/**
+ * Reads the routine-source switch. Off unless explicitly on: the routine runner starts
+ * every routine today and stays the path unless an operator turns the source on.
+ */
+export function routineSourceFromEnv(env: Record<string, string | undefined>): boolean {
+  const value = env.PROACTIVE_ROUTINE_SOURCE?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
 }
 
 /** Scope for everything a bot is woken for. Tenants never share a scope. */
@@ -156,15 +191,22 @@ export class RakazoWakeTarget implements WakeTarget {
       prisma: PrismaClient;
       events: Pick<ThreadEvents, "sendUserMessage">;
       jobs: Pick<JobPublisher, "enqueue">;
+      /** Starts a routine occurrence the way the routine runner does. Absent when no routine source is configured. */
+      startRoutine?: (routineId: string, scheduledFor: string) => Promise<{ ref: string }>;
     },
   ) {}
 
   async isWorking(scope: string): Promise<boolean> {
     const botId = botIdFromScope(scope);
     if (!botId) return false;
-    return runAsSystem("check proactive bot working state", async () => Boolean(await this.deps.prisma.run.findFirst({
-      where: { botId, status: { in: ["queued", "running"] } }, select: { id: true },
-    })));
+    return runAsSystem("check proactive bot working state", async () =>
+      Boolean(
+        await this.deps.prisma.run.findFirst({
+          where: { botId, status: { in: ["queued", "running"] } },
+          select: { id: true },
+        }),
+      ),
+    );
   }
 
   async responsibilities(): Promise<string> {
@@ -172,6 +214,13 @@ export class RakazoWakeTarget implements WakeTarget {
   }
 
   async deliver(wake: Wake): Promise<{ ref: string }> {
+    // A routine occurrence keeps its own start path, so ordering, debounce and steering
+    // change when it runs but never how it runs.
+    const routine = routineWake(wake.events);
+    if (routine) {
+      if (!this.deps.startRoutine) throw new Error("A routine wake needs a routine starter");
+      return this.deps.startRoutine(routine.routineId, routine.scheduledFor);
+    }
     const botId = botIdFromScope(wake.scope);
     const bot = botId
       ? await runAsSystem("find the bot a proactive wake is for", () =>
@@ -216,41 +265,78 @@ export interface ProactiveRuntimeDeps {
   config?: Partial<ProactiveConfig>;
   /** Bot ids that use the proactive path; "*" means all. Empty means none. */
   enabledBots?: string;
+  /**
+   * Whether scheduled routines reach the pipeline as a source. Off unless asked: the
+   * routine runner starts runs itself and that path stays the default.
+   */
+  routineSource?: boolean;
+  /** Starts one routine occurrence. Required once `routineSource` is on. */
+  startRoutine?: (routineId: string, scheduledFor: string) => Promise<{ ref: string }>;
 }
 
 /** Everything the API route and the job handlers need, built from the same parts. */
 export function createProactiveRuntime(deps: ProactiveRuntimeDeps) {
   const controlDb = prismaExecutor(deps.prisma);
   const controls = new PgProactiveControls({
-    query: (text, params) => runAsSystem("read proactive controls", () => controlDb.query(text, params)),
-    transaction: fn => runAsSystem("mutate proactive controls", () => controlDb.transaction(fn)),
+    query: (text, params) =>
+      runAsSystem("read proactive controls", () => controlDb.query(text, params)),
+    transaction: (fn) => runAsSystem("mutate proactive controls", () => controlDb.transaction(fn)),
   });
   const apiKey = typesafeApiKey();
-  const judge = deps.judge ?? (apiKey && deps.enabledBots?.trim() ? new JevProactiveJudge({
-    provider: new HttpDecisionProvider("typesafe", { apiKey }),
-    model: DEFAULT_JEV_MODEL,
-    context: async (scope) => {
-      const botId = botIdFromScope(scope);
-      if (!botId) throw new Error("Invalid proactive bot scope");
-      const bot = await runAsSystem("resolve proactive judge owner", () =>
-        deps.prisma.bot.findUnique({ where: { id: botId, archivedAt: null }, select: { spaceId: true, userId: true } }),
-      );
-      if (!bot) throw new Error("Proactive judge bot not found");
-      return { ...bot, botId, operationId: "proactive-judge", traceId: randomUUID(), signal: new AbortController().signal };
-    },
-  }) : undefined);
+  const judge =
+    deps.judge ??
+    (apiKey && deps.enabledBots?.trim()
+      ? new JevProactiveJudge({
+          provider: new HttpDecisionProvider("typesafe", { apiKey }),
+          model: DEFAULT_JEV_MODEL,
+          context: async (scope) => {
+            const botId = botIdFromScope(scope);
+            if (!botId) throw new Error("Invalid proactive bot scope");
+            const bot = await runAsSystem("resolve proactive judge owner", () =>
+              deps.prisma.bot.findUnique({
+                where: { id: botId, archivedAt: null },
+                select: { spaceId: true, userId: true },
+              }),
+            );
+            if (!bot) throw new Error("Proactive judge bot not found");
+            return {
+              ...bot,
+              botId,
+              operationId: "proactive-judge",
+              traceId: randomUUID(),
+              signal: new AbortController().signal,
+            };
+          },
+        })
+      : undefined);
   const engine = new ProactiveEngine({
     store: new PgProactiveStore(
       prismaExecutor(deps.prisma),
       deps.contentKeys ? new RakazoPayloadCodec(deps.prisma, deps.contentKeys) : undefined,
     ),
     scheduler: new JobScheduler(deps.jobs),
-    target: new RakazoWakeTarget(deps),
+    target: new RakazoWakeTarget({
+      ...deps,
+      ...(deps.startRoutine ? { startRoutine: deps.startRoutine } : {}),
+    }),
     ...(judge ? { judge } : {}),
     config: { fallbackMs: 120 * 60_000, ...deps.config },
-    scopePolicy: async scope => {
+    scopePolicy: async (scope) => {
       const { config } = await controls.get(scope);
-      return { order: config.decisionOrder, fallbackMs: config.fallbackMs, rules: (config.hooks ?? []).map(hook => events => events.some(event => event.source === hook.source && (!hook.contains || event.text?.includes(hook.contains))) ? { name: hook.id } : null) };
+      return {
+        order: config.decisionOrder,
+        fallbackMs: config.fallbackMs,
+        rules: (config.hooks ?? []).map(
+          (hook) => (events) =>
+            events.some(
+              (event) =>
+                event.source === hook.source &&
+                (!hook.contains || event.text?.includes(hook.contains)),
+            )
+              ? { name: hook.id }
+              : null,
+        ),
+      };
     },
     onError: (where, error) => getLogger().error(`proactive ${where}`, error),
     trace: (step, fields) => getLogger().info(`proactive ${step}`, fields),
@@ -305,66 +391,171 @@ export function createProactiveRuntime(deps: ProactiveRuntimeDeps) {
     engine,
     async recordSent(runId: string) {
       return system("record proactive sent feedback", async () => {
-        const run = await deps.prisma.run.findUnique({ where: { id: runId }, select: { botId: true } });
+        const run = await deps.prisma.run.findUnique({
+          where: { id: runId },
+          select: { botId: true },
+        });
         if (!run || (!enabled.has("*") && !enabled.has(run.botId))) return;
-        const messages = await deps.prisma.message.findMany({ where: { runId, role: "bot" }, select: { id: true, createdAt: true } });
-        for (const message of messages) await engine.receive({ source: `sent:${run.botId}`, id: `sent:${message.id}`, kind: "sent", at: message.createdAt.getTime(), scope: botScope(run.botId) });
+        const messages = await deps.prisma.message.findMany({
+          where: { runId, role: "bot" },
+          select: { id: true, createdAt: true },
+        });
+        for (const message of messages)
+          await engine.receive({
+            source: `sent:${run.botId}`,
+            id: `sent:${message.id}`,
+            kind: "sent",
+            at: message.createdAt.getTime(),
+            scope: botScope(run.botId),
+          });
       });
     },
-    async configure(input: { botId: string; spaceId: string; userId: string; config: BotProactiveConfig }) {
-      const bot = await deps.prisma.bot.findFirst({ where: { id: input.botId, spaceId: input.spaceId, userId: input.userId, archivedAt: null }, select: { id: true } });
+    async configure(input: {
+      botId: string;
+      spaceId: string;
+      userId: string;
+      config: BotProactiveConfig;
+    }) {
+      const bot = await deps.prisma.bot.findFirst({
+        where: { id: input.botId, spaceId: input.spaceId, userId: input.userId, archivedAt: null },
+        select: { id: true },
+      });
       if (!bot) throw new Error("Proactive bot not found in this owner scope");
       const scope = botScope(bot.id);
-      const result = await controls.change(scope, input.userId, "configure", { config: input.config }, async (_state, tx) => {
-        await tx.query(`UPDATE "proactive_timers" SET "state"='cancelled' WHERE "scope"=$1 AND "state"='pending' AND "id" LIKE 'fallback:%'`, [scope]);
-        return { config: input.config, result: { updated: true } };
-      });
+      const result = await controls.change(
+        scope,
+        input.userId,
+        "configure",
+        { config: input.config },
+        async (_state, tx) => {
+          await tx.query(
+            `UPDATE "proactive_timers" SET "state"='cancelled' WHERE "scope"=$1 AND "state"='pending' AND "id" LIKE 'fallback:%'`,
+            [scope],
+          );
+          return { config: input.config, result: { updated: true } };
+        },
+      );
       if (enabled.has("*") || enabled.has(bot.id)) await engine.ensureFallback(scope);
       return result;
     },
-    async control(input: { botId: string; spaceId: string; userId: string; action: "wake" | "timer" | "cancel" | "hook" | "interval" | "reset" | "get"; id?: string; dueAt?: number; fallbackMs?: number; note?: string; hook?: ProactiveHook }) {
-      const bot = await deps.prisma.bot.findFirst({ where: { id: input.botId, spaceId: input.spaceId, userId: input.userId, archivedAt: null }, select: { id: true } });
+    async control(input: {
+      botId: string;
+      spaceId: string;
+      userId: string;
+      action: "wake" | "timer" | "cancel" | "hook" | "interval" | "reset" | "get";
+      id?: string;
+      dueAt?: number;
+      fallbackMs?: number;
+      note?: string;
+      hook?: ProactiveHook;
+    }) {
+      const bot = await deps.prisma.bot.findFirst({
+        where: { id: input.botId, spaceId: input.spaceId, userId: input.userId, archivedAt: null },
+        select: { id: true },
+      });
       if (!bot) throw new Error("Proactive bot not found in this owner scope");
-      if (!enabled.has("*") && !enabled.has(bot.id)) throw new Error("Proactive controls are not enabled for this bot");
+      if (!enabled.has("*") && !enabled.has(bot.id))
+        throw new Error("Proactive controls are not enabled for this bot");
       const scope = botScope(bot.id);
       if (input.action === "get") return controls.get(scope);
       const now = Date.now();
-      if ((input.action === "wake" || input.action === "timer") && (!Number.isSafeInteger(input.dueAt) || input.dueAt! < now + 300_000)) throw new Error("Wake must be at least five minutes from now");
+      if (
+        (input.action === "wake" || input.action === "timer") &&
+        (!Number.isSafeInteger(input.dueAt) || input.dueAt! < now + 300_000)
+      )
+        throw new Error("Wake must be at least five minutes from now");
       if ((input.note?.length ?? 0) > 4000) throw new Error("Timer note is too long");
       if (input.action === "timer" || input.action === "cancel") {
-        if (!input.id || !/^[a-zA-Z0-9_-]{1,100}$/.test(input.id)) throw new Error("Invalid timer id");
+        if (!input.id || !/^[a-zA-Z0-9_-]{1,100}$/.test(input.id))
+          throw new Error("Invalid timer id");
       }
-      const result = await controls.change<Record<string, unknown>>(scope, input.userId, input.action, { id: input.id ?? null, dueAt: input.dueAt ?? null }, async (state, tx) => {
-        const store = new PgProactiveStore({ ...tx, transaction: fn => fn(tx) }, deps.contentKeys ? new RakazoPayloadCodec(deps.prisma, deps.contentKeys) : undefined);
-        if (input.action === "wake" || input.action === "timer") {
-          const localId = input.action === "wake" ? `wake_${randomUUID()}` : input.id!;
-          const id = `self:${scope}:${localId}`;
-          const outcome = await store.timerSet({ id, scope, dueAt: input.dueAt!, note: input.note ?? "self-set wake", setBy: bot.id });
-          if (outcome === "exists") throw new Error("Timer id already exists; use a new id");
-          return { result: { id: localId, dueAt: input.dueAt } };
-        }
-        if (input.action === "cancel") return { result: { cancelled: await store.timerCancel(`self:${scope}:${input.id}`) } };
-        const config: BotProactiveConfig = input.action === "reset" ? {} : { ...state.config };
-        if (input.action === "reset") {
-          await tx.query(`UPDATE "proactive_timers" SET "state"='cancelled' WHERE "scope"=$1 AND "state"='pending'`, [scope]);
-        }
-        if (input.action === "interval") {
-          if (input.fallbackMs === undefined) throw new Error("Fallback interval is required");
-          config.fallbackMs = input.fallbackMs;
-          await tx.query(`UPDATE "proactive_timers" SET "state"='cancelled' WHERE "scope"=$1 AND "state"='pending' AND "id" LIKE 'fallback:%'`, [scope]);
-        }
-        if (input.action === "hook") {
-          if (!input.hook) throw new Error("Hook is required");
-          config.hooks = [...(config.hooks ?? []).filter(h => h.id !== input.hook!.id), input.hook];
-        }
-        return { config, result: { updated: true } };
-      }, now);
-      if (input.action === "interval" || input.action === "reset") await engine.ensureFallback(scope);
+      const result = await controls.change<Record<string, unknown>>(
+        scope,
+        input.userId,
+        input.action,
+        { id: input.id ?? null, dueAt: input.dueAt ?? null },
+        async (state, tx) => {
+          const store = new PgProactiveStore(
+            { ...tx, transaction: (fn) => fn(tx) },
+            deps.contentKeys ? new RakazoPayloadCodec(deps.prisma, deps.contentKeys) : undefined,
+          );
+          if (input.action === "wake" || input.action === "timer") {
+            const localId = input.action === "wake" ? `wake_${randomUUID()}` : input.id!;
+            const id = `self:${scope}:${localId}`;
+            const outcome = await store.timerSet({
+              id,
+              scope,
+              dueAt: input.dueAt!,
+              note: input.note ?? "self-set wake",
+              setBy: bot.id,
+            });
+            if (outcome === "exists") throw new Error("Timer id already exists; use a new id");
+            return { result: { id: localId, dueAt: input.dueAt } };
+          }
+          if (input.action === "cancel")
+            return { result: { cancelled: await store.timerCancel(`self:${scope}:${input.id}`) } };
+          const config: BotProactiveConfig = input.action === "reset" ? {} : { ...state.config };
+          if (input.action === "reset") {
+            await tx.query(
+              `UPDATE "proactive_timers" SET "state"='cancelled' WHERE "scope"=$1 AND "state"='pending'`,
+              [scope],
+            );
+          }
+          if (input.action === "interval") {
+            if (input.fallbackMs === undefined) throw new Error("Fallback interval is required");
+            config.fallbackMs = input.fallbackMs;
+            await tx.query(
+              `UPDATE "proactive_timers" SET "state"='cancelled' WHERE "scope"=$1 AND "state"='pending' AND "id" LIKE 'fallback:%'`,
+              [scope],
+            );
+          }
+          if (input.action === "hook") {
+            if (!input.hook) throw new Error("Hook is required");
+            config.hooks = [
+              ...(config.hooks ?? []).filter((h) => h.id !== input.hook!.id),
+              input.hook,
+            ];
+          }
+          return { config, result: { updated: true } };
+        },
+        now,
+      );
+      if (input.action === "interval" || input.action === "reset")
+        await engine.ensureFallback(scope);
       await engine.fireTimers();
       return result;
     },
+    /** Whether scheduled routines reach the pipeline instead of starting a run directly. */
+    routineSource: deps.routineSource === true,
     /** Whether this bot's webhooks go through the proactive core. */
     enabledFor: (botId: string) => enabled.has("*") || enabled.has(botId),
+    /** Routine source adapter: one due occurrence becomes a timer event, so it is decided, not awaited. */
+    async receiveRoutine(input: {
+      botId: string;
+      routineId: string;
+      /** The occurrence, in epoch milliseconds. The same routine and instant is the same event. */
+      scheduledFor: number;
+      text?: string;
+    }) {
+      const raw: RoutineEventRaw = {
+        routineId: input.routineId,
+        scheduledFor: new Date(input.scheduledFor).toISOString(),
+      };
+      return system("store a proactive routine event", async () => ({
+        eventId: `${input.routineId}:${input.scheduledFor}`,
+        ...(await engine.receive({
+          source: `routine:${input.botId}`,
+          id: `${input.routineId}:${input.scheduledFor}`,
+          // A routine is a standing instruction, so it wakes without a judge opinion. The
+          // decision order still lets a steer or an addressed message displace it.
+          kind: "timer",
+          at: Date.now(),
+          scope: botScope(input.botId),
+          text: input.text ?? "A scheduled routine is due.",
+          raw,
+        })),
+      }));
+    },
     /** Webhook source adapter: turn one delivery into an event. */
     async receiveWebhook(input: {
       botId: string;

@@ -75,6 +75,7 @@ import {
   resolveDeploymentModel,
   resolvePiSessionRoot,
   resolveSandboxProvider,
+  routineSourceFromEnv,
   ScriptedAgentRuntime,
   SpaceMemoryProviderResolver,
   sandboxProviderOptionsFromEnv,
@@ -283,6 +284,10 @@ async function main() {
     events,
     jobs,
     enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
+    // A routine reaches the pipeline only when asked; the runner starts runs otherwise.
+    routineSource: routineSourceFromEnv(process.env),
+    // Built before the executor, so the starter is read on first use rather than now.
+    startRoutine: (routineId, scheduledFor) => executor.startRoutine(routineId, scheduledFor),
   });
 
   const executor = createRunExecutor({
