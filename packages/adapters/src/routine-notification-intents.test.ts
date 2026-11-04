@@ -27,6 +27,7 @@ function fixture(options: { noMessage?: boolean; initialStatus?: string } = {}) 
       status: "completed",
       trigger: "routine",
       routineId: "routine",
+      routineNotify: true,
       spaceId: "space",
       userId: "owner",
       botId: "bot",
@@ -119,7 +120,10 @@ function fixture(options: { noMessage?: boolean; initialStatus?: string } = {}) 
     $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
       fn({
         routineNotificationIntent: table,
-        $queryRaw: async () => [{ notifyOnFinish: row.run.bot.notifyOnFinish }],
+        $queryRaw: async (strings: TemplateStringsArray) =>
+          strings.join("").includes("FROM bots")
+            ? [{ notifyOnFinish: row.run.bot.notifyOnFinish }]
+            : [{ notify: row.run.routineNotify }],
       }),
     ),
   } as unknown as PrismaClient;
@@ -232,6 +236,13 @@ describe("routine notification intent recovery", () => {
   it("honors a disabled bot notification preference", async () => {
     const f = fixture();
     f.row.run.bot.notifyOnFinish = false;
+    await reconcileRoutineNotificationIntents(f);
+    expect(f.row.status).toBe("cancelled");
+    expect(f.deliver).not.toHaveBeenCalled();
+  });
+  it("honors a disabled routine notification preference before submission", async () => {
+    const f = fixture();
+    f.row.run.routineNotify = false;
     await reconcileRoutineNotificationIntents(f);
     expect(f.row.status).toBe("cancelled");
     expect(f.deliver).not.toHaveBeenCalled();

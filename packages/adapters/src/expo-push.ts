@@ -197,11 +197,23 @@ export class ExpoPushProvider implements NotificationProvider {
       context.signal,
       true,
     );
-    const [ticket] = expoPushTickets(body);
+    const tickets = expoPushTickets(body);
+    const [ticket] = tickets;
     if (status < 300 && body === undefined) {
       throw new ExpoPushUncertainError("invalid response");
     }
     if (ticket?.details?.error === "DeviceNotRegistered") {
+      const rawData = body && typeof body === "object" ? (body as { data?: unknown }).data : null;
+      if (
+        status < 200 ||
+        status >= 300 ||
+        tickets.length !== 1 ||
+        (Array.isArray(rawData) && rawData.length !== 1) ||
+        ticket.status !== "error" ||
+        ticket.id ||
+        expoRequestErrorList(body).length
+      )
+        throw new ExpoPushUncertainError("contradictory rejection response");
       await this.tokens.remove(context.userId, credentialDigest(token));
       return "undeliverable";
     }
