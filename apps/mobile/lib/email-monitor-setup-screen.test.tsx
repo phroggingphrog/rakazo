@@ -145,6 +145,7 @@ const session = {
   current: vi.fn(),
   load: vi.fn(),
   discover: vi.fn(),
+  grantRead: vi.fn(),
   save: vi.fn(),
   prerequisites: vi.fn(),
   candidates: vi.fn(),
@@ -207,6 +208,7 @@ beforeEach(async () => {
     nextCursor: null,
   });
   session.discover.mockResolvedValue({ status: "ok", revision: 3, tools: [{ name: "read_mail" }] });
+  session.grantRead.mockResolvedValue({ status: "allowed" });
   session.save.mockResolvedValue(plan);
   session.prerequisites.mockResolvedValue(checks);
   session.candidates.mockResolvedValue(candidates);
@@ -240,6 +242,15 @@ afterEach(() => {
 });
 
 describe("native email monitor proposal", () => {
+  it("lets the owner grant only the selected read after preview", async () => {
+    await select("Integration", "server-1");
+    await click("Find read operations");
+    await select("Read operation", "read_mail");
+    expect(session.grantRead).not.toHaveBeenCalled();
+    await click("Allow selected read");
+    expect(session.grantRead).toHaveBeenCalledWith("server-1", 3, "read_mail");
+    expect(container.textContent).toContain("Selected read is allowed in bot settings.");
+  });
   it("resumes polling a restored running test without starting another", async () => {
     const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
     session.load.mockResolvedValue({ servers: [], plans: [configured], nextCursor: null });

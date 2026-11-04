@@ -96,7 +96,7 @@ export interface RouterDeps {
   composio?: ComposioProvider;
   mcpOAuth?: McpOAuthBroker;
   /** Probes MCP server health; without it servers are never probed from here. */
-  mcp?: Pick<McpConnector, "probe" | "discoverMonitorTools">;
+  mcp?: Pick<McpConnector, "probe" | "discoverMonitorTools" | "discoverSetupMonitorTools">;
   connectors: ConnectorRegistry;
   remoteConnectors?: RemoteConnectorDependencies;
   pluginRepoFetcher?: PluginRepoFetcher;

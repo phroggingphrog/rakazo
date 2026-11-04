@@ -27,7 +27,7 @@ import { MenuPicker } from "./menu-picker";
 import { NativeActionButton } from "./native-action-button";
 
 type Frequency = "hourly" | "daily" | "weekdays" | "custom";
-type Catalog = RpcOutput<"mcp/servers/monitorTools">;
+type Catalog = RpcOutput<"setupPlans/previewReads">;
 type Prerequisites = RpcOutput<"setupPlans/prerequisites">;
 type Candidates = RpcOutput<"setupPlans/discoverCandidates">;
 type SourceTestStatus =
@@ -96,6 +96,7 @@ export function EmailMonitorSetup({
   const [timezone, setTimezone] = useState(() => deviceTimeZone() ?? "UTC");
   const [notify, setNotify] = useState(true);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [grantStatus, setGrantStatus] = useState<"allowed" | null>(null);
   const [prerequisites, setPrerequisites] = useState<Prerequisites | null>(null);
   const [candidates, setCandidates] = useState<Candidates | null>(null);
   const [testRunId, setTestRunId] = useState<string | null>(null);
@@ -239,6 +240,7 @@ export function EmailMonitorSetup({
     setTimezone(savedSchedule?.timezone ?? deviceTimeZone() ?? "UTC");
     setNotify(next.draft.notify);
     setCatalog(null);
+    setGrantStatus(null);
     clearCheck();
   }
 
@@ -260,6 +262,7 @@ export function EmailMonitorSetup({
     setTimezone(deviceTimeZone() ?? "UTC");
     setNotify(true);
     setCatalog(null);
+    setGrantStatus(null);
     clearCheck();
   }
 
@@ -330,9 +333,18 @@ export function EmailMonitorSetup({
     const result = await session.discover(serverId);
     if (!mounted.current || !session.current()) return;
     setCatalog(result);
+    setGrantStatus(null);
     setSourceRevision(result.revision);
     setToolName("");
     setArgumentText("");
+    clearCheck();
+  }
+
+  async function grantRead() {
+    if (!session || !serverId || sourceRevision === null || !toolName) return;
+    const result = await session.grantRead(serverId, sourceRevision, toolName);
+    if (!mounted.current || !session.current()) return;
+    setGrantStatus(result.status);
     clearCheck();
   }
 
@@ -545,6 +557,7 @@ export function EmailMonitorSetup({
               setToolName("");
               setArgumentText("");
               setCatalog(null);
+              setGrantStatus(null);
               clearCheck();
             }}
           />
@@ -572,10 +585,29 @@ export function EmailMonitorSetup({
               value={toolName}
               onChange={(name) => {
                 setToolName(name);
+                setGrantStatus(null);
                 setArgumentText("");
                 clearCheck();
               }}
             />
+          ) : null}
+          {catalog?.status === "ok" && toolName && editable ? (
+            <>
+              <Text style={styles.secondary}>
+                {t("Allow the selected read operation without changing other bot access.")}
+              </Text>
+              <NativeActionButton
+                label={t("Allow selected read")}
+                disabled={busy}
+                prominence="secondary"
+                onPress={() => void perform(grantRead)}
+              />
+              {grantStatus ? (
+                <Text accessibilityLiveRegion="polite" style={styles.secondary}>
+                  {t("Selected read is allowed in bot settings.")}
+                </Text>
+              ) : null}
+            </>
           ) : null}
           {toolName ? (
             <View>

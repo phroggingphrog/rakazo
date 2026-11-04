@@ -79,6 +79,8 @@ const rpc = {
   me: vi.fn(),
   mcp: { servers: { list: vi.fn(), monitorTools: vi.fn() } },
   setupPlans: {
+    previewReads: vi.fn(),
+    grantRead: vi.fn(),
     list: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
@@ -127,7 +129,8 @@ beforeEach(() => {
   rpc.routines.history.mockResolvedValue({ runs: [], nextCursor: null });
   rpc.routines.list.mockResolvedValue([{ id: "routine-1", active: false }]);
   rpc.routines.update.mockImplementation(async ({ active }) => ({ id: "routine-1", active }));
-  rpc.mcp.servers.monitorTools.mockResolvedValue(catalog);
+  rpc.setupPlans.previewReads.mockResolvedValue(catalog);
+  rpc.setupPlans.grantRead.mockResolvedValue({ status: "allowed" });
   rpc.setupPlans.list.mockResolvedValue({ plans: [], nextCursor: null });
   rpc.setupPlans.create.mockResolvedValue(plan);
   rpc.setupPlans.update.mockResolvedValue({ ...plan, revision: 2 });
@@ -155,6 +158,31 @@ afterEach(() => {
 });
 
 describe("email monitor setup", () => {
+  it("grants the selected read only after the owner chooses it", async () => {
+    await click("Set up email monitor");
+    await act(async () =>
+      change(
+        container.querySelector<HTMLSelectElement>('select[aria-label="Integration"]')!,
+        "server-1",
+      ),
+    );
+    await click("Find read operations");
+    await act(async () =>
+      change(
+        container.querySelector<HTMLSelectElement>('select[aria-label="Read operation"]')!,
+        "read_mail",
+      ),
+    );
+    expect(rpc.setupPlans.grantRead).not.toHaveBeenCalled();
+    await click("Allow selected read");
+    expect(rpc.setupPlans.grantRead).toHaveBeenCalledWith({
+      botId: "bot-1",
+      serverId: "server-1",
+      revision: 3,
+      toolName: "read_mail",
+    });
+    expect(container.textContent).toContain("Selected read is allowed in bot settings.");
+  });
   it("stops automatic retries after a minute and permits manual refresh", async () => {
     rpc.setupPlans.list.mockResolvedValue({
       plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
@@ -518,7 +546,10 @@ describe("email monitor setup", () => {
       change(container.querySelector("select")!, "server-1");
     });
     await click("Find read operations");
-    expect(rpc.mcp.servers.monitorTools).toHaveBeenCalledWith({ id: "server-1", botId: "bot-1" });
+    expect(rpc.setupPlans.previewReads).toHaveBeenCalledWith({
+      serverId: "server-1",
+      botId: "bot-1",
+    });
     await act(async () => {
       change(container.querySelectorAll("select")[1]!, "read_mail");
     });
@@ -547,7 +578,7 @@ describe("email monitor setup", () => {
   });
 
   it("accepts reviewed argument JSON and rejects malformed input before saving", async () => {
-    rpc.mcp.servers.monitorTools.mockResolvedValue({
+    rpc.setupPlans.previewReads.mockResolvedValue({
       ...catalog,
       tools: [
         {
