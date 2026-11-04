@@ -57,6 +57,18 @@ const TABLES: TableSpec[] = [
   },
 
   {
+    model: "SetupPlan",
+    delegate: "setupPlan",
+    column: "configuredPrompt",
+    json: false,
+    updatedAt: true,
+    scan: (cursor, limit) => Prisma.sql`
+      SELECT id, "configuredPrompt" AS value, "spaceId", "userId" AS owner FROM setup_plans
+      WHERE id > ${cursor} AND "configuredPrompt" IS NOT NULL ORDER BY id LIMIT ${limit}`,
+    writePlaintext: (id, value) =>
+      Prisma.sql`UPDATE setup_plans SET "configuredPrompt" = ${value as string} WHERE id = ${id}`,
+  },
+  {
     model: "Message",
     delegate: "message",
     column: "blocks",
@@ -331,7 +343,7 @@ export async function contentEncryptionStatus(
     UNION ALL
     SELECT 'memory_revisions', count(*), count(*) FILTER (WHERE content NOT LIKE 'rkz1:%') FROM memory_revisions
     UNION ALL
-    SELECT 'setup_plans', count(*), count(*) FILTER (WHERE NOT (jsonb_exists(draft, '$sealed') AND jsonb_exists("requestPayload", '$sealed'))) FROM setup_plans
+    SELECT 'setup_plans', count(*), count(*) FILTER (WHERE NOT (jsonb_exists(draft, '$sealed') AND jsonb_exists("requestPayload", '$sealed') AND ("configuredPrompt" IS NULL OR "configuredPrompt" LIKE 'rkz1:%'))) FROM setup_plans
     UNION ALL
     SELECT 'threads', count(*) FILTER (WHERE "historyCompactionSummary" IS NOT NULL),
       count(*) FILTER (WHERE "historyCompactionSummary" NOT LIKE 'rkz1:%') FROM threads

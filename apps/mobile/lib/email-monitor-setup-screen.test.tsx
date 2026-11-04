@@ -154,6 +154,7 @@ const session = {
   prepareTest: vi.fn(),
   runTest: vi.fn(),
   testStatus: vi.fn(),
+  latestSourceTest: vi.fn(),
   routineState: vi.fn(),
   setRoutineActive: vi.fn(),
 };
@@ -197,6 +198,7 @@ beforeEach(async () => {
   session.preparedTest.mockResolvedValue(null);
   session.runTest.mockResolvedValue({ runId: "run-1" });
   session.testStatus.mockResolvedValue({ runStatus: "completed", sourceTest: "unavailable" });
+  session.latestSourceTest.mockResolvedValue(null);
   session.routineState.mockResolvedValue(false);
   session.setRoutineActive.mockImplementation(async (_plan, active) => active);
   session.load.mockResolvedValue({
@@ -237,6 +239,45 @@ afterEach(() => {
 });
 
 describe("native email monitor proposal", () => {
+  it("shows a previous source test as historical and ignores a stale session", async () => {
+    const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
+    session.load.mockResolvedValue({ servers: [], plans: [configured], nextCursor: null });
+    session.latestSourceTest.mockResolvedValue({
+      runId: "old",
+      runStatus: "completed",
+      sourceTest: "succeeded",
+    });
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(
+        <EmailMonitorSetup
+          botId="bot-1"
+          botName="Scout"
+          onClose={close}
+          onOpenIntegrations={openIntegrations}
+        />,
+      );
+    });
+    await select("Saved proposals", "plan-1");
+    expect(container.textContent).toContain("Source test: Succeeded");
+    expect(container.textContent).toContain("It reflects the setup when that test ran.");
+    expect(session.runTest).not.toHaveBeenCalled();
+    let resolve!: (value: { runId: string; runStatus: string; sourceTest: string }) => void;
+    session.latestSourceTest.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    );
+    await click("New proposal");
+    await select("Saved proposals", "plan-1");
+    session.current.mockReturnValue(false);
+    await act(async () =>
+      resolve({ runId: "stale", runStatus: "completed", sourceTest: "succeeded" }),
+    );
+    expect(container.textContent).not.toContain("Source test: Succeeded");
+  });
   it("lets the owner activate and pause without requiring a test", async () => {
     const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
     session.load.mockResolvedValue({ servers: [], plans: [configured], nextCursor: null });
@@ -321,6 +362,7 @@ describe("native email monitor proposal", () => {
     ["succeeded", "Succeeded"],
     ["failed", "Failed"],
     ["uncertain", "Uncertain"],
+    ["unbound", "Setup changed; source not verified"],
   ])("shows source-test state %s separately from the run", async (sourceTest, label) => {
     const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
     session.load.mockResolvedValue({
@@ -346,6 +388,10 @@ describe("native email monitor proposal", () => {
     await click("Refresh status");
     expect(container.textContent).toContain("Run status: completed");
     expect(container.textContent).toContain(`Source test: ${label}`);
+    if (sourceTest === "failed")
+      expect(container.textContent).toContain(
+        "If the integration changed, choose New proposal and set it up again.",
+      );
     expect(container.textContent).toContain(
       "Arguments are not validated against the operation schema here",
     );

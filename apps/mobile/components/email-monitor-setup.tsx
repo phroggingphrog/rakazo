@@ -30,7 +30,11 @@ type Frequency = "hourly" | "daily" | "weekdays" | "custom";
 type Catalog = RpcOutput<"mcp/servers/monitorTools">;
 type Prerequisites = RpcOutput<"setupPlans/prerequisites">;
 type Candidates = RpcOutput<"setupPlans/discoverCandidates">;
-type SourceTestStatus = NonNullable<RoutineRun["sourceTest"]> | "not_checked" | "unavailable";
+type SourceTestStatus =
+  | NonNullable<RoutineRun["sourceTest"]>
+  | "not_checked"
+  | "unavailable"
+  | "unbound";
 
 function initialTime(hour = 9, minute = 0): Date {
   const time = new Date();
@@ -73,6 +77,7 @@ export function EmailMonitorSetup({
   const styles = useThemedStyles(createStyles);
   const mounted = useRef(true);
   const pending = useRef(false);
+  const testReadGeneration = useRef(0);
   const [session, setSession] = useState<MonitorSetupSession | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +101,8 @@ export function EmailMonitorSetup({
   const [testRunId, setTestRunId] = useState<string | null>(null);
   const [testStatus, setTestStatus] = useState<string | null>(null);
   const [sourceTestStatus, setSourceTestStatus] = useState<SourceTestStatus>("not_checked");
+  const [restoredTest, setRestoredTest] = useState(false);
+  const [planSelection, setPlanSelection] = useState(0);
   const [routineActive, setRoutineActive] = useState<boolean | null>(null);
   const [routineStateError, setRoutineStateError] = useState(false);
 
@@ -146,6 +153,31 @@ export function EmailMonitorSetup({
     };
   }, [session, plan?.id, plan?.routineId, plan?.status]);
 
+  useEffect(() => {
+    const generation = ++testReadGeneration.current;
+    if (session && plan?.status === "configured" && plan.routineId) {
+      void session.latestSourceTest(plan).then(
+        (latest) => {
+          if (
+            !mounted.current ||
+            !session.current() ||
+            testReadGeneration.current !== generation ||
+            !latest
+          )
+            return;
+          setTestRunId(latest.runId);
+          setTestStatus(latest.runStatus);
+          setSourceTestStatus(latest.sourceTest);
+          setRestoredTest(true);
+        },
+        () => undefined,
+      );
+    }
+    return () => {
+      if (testReadGeneration.current === generation) testReadGeneration.current += 1;
+    };
+  }, [session, plan?.id, plan?.revision, plan?.routineId, plan?.status, planSelection]);
+
   function clearCheck() {
     setPrerequisites(null);
     setCandidates(null);
@@ -153,9 +185,12 @@ export function EmailMonitorSetup({
   }
 
   function loadPlan(next: MonitorPlan) {
+    testReadGeneration.current += 1;
+    setPlanSelection((value) => value + 1);
     setTestRunId(null);
     setTestStatus(null);
     setSourceTestStatus("not_checked");
+    setRestoredTest(false);
     const savedSchedule = next.draft.schedule;
     const parsed = savedSchedule
       ? parseSchedule(savedSchedule.cron)
@@ -178,10 +213,12 @@ export function EmailMonitorSetup({
   }
 
   function newProposal() {
+    testReadGeneration.current += 1;
     setPlan(null);
     setTestRunId(null);
     setTestStatus(null);
     setSourceTestStatus("not_checked");
+    setRestoredTest(false);
     setPurpose("");
     setServerId("");
     setSourceRevision(null);
@@ -323,18 +360,21 @@ export function EmailMonitorSetup({
 
   async function runTest() {
     if (!session || !plan || plan.status !== "configured" || !plan.routineId) return;
+    const generation = ++testReadGeneration.current;
     const result = await session.runTest(plan);
-    if (mounted.current && session.current()) {
+    if (mounted.current && session.current() && testReadGeneration.current === generation) {
       setTestRunId(result.runId);
       setTestStatus("not checked");
       setSourceTestStatus("not_checked");
+      setRestoredTest(false);
     }
   }
 
   async function refreshTest() {
     if (!session || !plan || !testRunId) return;
+    const generation = ++testReadGeneration.current;
     const status = await session.testStatus(plan, testRunId);
-    if (mounted.current && session.current()) {
+    if (mounted.current && session.current() && testReadGeneration.current === generation) {
       setTestStatus(status.runStatus);
       setSourceTestStatus(status.sourceTest);
     }
@@ -726,9 +766,23 @@ export function EmailMonitorSetup({
                       ) : null}
                       {testRunId ? (
                         <View accessibilityLiveRegion="polite" style={styles.readiness}>
+                          {restoredTest ? (
+                            <Text style={styles.secondary}>
+                              {t(
+                                "Most recent source test for this routine. It reflects the setup when that test ran.",
+                              )}
+                            </Text>
+                          ) : null}
                           <Text style={styles.secondary}>
                             {t("Run status:")} {testStatus}
                           </Text>
+                          {sourceTestStatus === "failed" ? (
+                            <Text style={styles.secondary}>
+                              {t(
+                                "If the integration changed, choose New proposal and set it up again.",
+                              )}
+                            </Text>
+                          ) : null}
                           <Text style={styles.secondary}>
                             {t("Source test:")}{" "}
                             {sourceTestStatus === "not_started"
@@ -743,9 +797,11 @@ export function EmailMonitorSetup({
                                       ? t("Failed")
                                       : sourceTestStatus === "uncertain"
                                         ? t("Uncertain")
-                                        : sourceTestStatus === "unavailable"
-                                          ? t("Unavailable for this run")
-                                          : t("Not checked")}
+                                        : sourceTestStatus === "unbound"
+                                          ? t("Setup changed; source not verified")
+                                          : sourceTestStatus === "unavailable"
+                                            ? t("Unavailable for this run")
+                                            : t("Not checked")}
                           </Text>
                           <Text style={styles.secondary}>
                             {t("Open routine history for the result and notification status.")}

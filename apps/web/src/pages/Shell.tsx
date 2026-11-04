@@ -1186,7 +1186,7 @@ function SpaceShell() {
           <>
             {active ? (
               <EmailMonitorSetup
-                key={`${shellSpaceId}:${active.id}`}
+                key={`${userId ?? "signed-out"}:${shellSpaceId}:${active.id}`}
                 botId={active.id}
                 botName={active.name}
                 rpc={rpc}

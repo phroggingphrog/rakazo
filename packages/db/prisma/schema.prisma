@@ -1247,6 +1247,7 @@ model SetupPlan {
   routine                Routine? @relation(fields: [routineId], references: [id], onDelete: SetNull)
   configureRequestKey    String?
   configuredFromRevision Int?
+  configuredPrompt       String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 

@@ -3,7 +3,9 @@ import { TimeZoneSchema } from "./domain.js";
 import { Id } from "./ids.js";
 
 export const SETUP_SOURCE_TEST_KIND = "setup_source_test";
+export const SETUP_SOURCE_UNBOUND_KIND = "setup_source_unbound";
 export const setupSourceTestKey = (runId: string) => `setup-source-test:${runId}`;
+export const setupSourceUnboundKey = (runId: string) => `setup-source-unbound:${runId}`;
 
 /** Revisions are stored as signed PostgreSQL integers. */
 export const SetupPlanRevisionSchema = z.number().int().positive().max(2_147_483_647);
@@ -84,6 +86,62 @@ export const SetupPlanDraftSchema = z
     notify: z.boolean(),
   })
   .strict();
+
+export function setupRoutinePrompt(input: {
+  purpose: string;
+  integration: { name: string; id: string; slug: string };
+  toolName: string;
+  operationArguments?: unknown;
+}) {
+  const { purpose, integration, toolName, operationArguments } = input;
+  return [
+    purpose,
+    `Use the selected integration ${JSON.stringify(integration.name)} (ID ${JSON.stringify(integration.id)}, tool prefix ${JSON.stringify(`mcp__${integration.slug}__`)}) and read operation ${JSON.stringify(toolName)} for this monitor.`,
+    ...(operationArguments === undefined
+      ? []
+      : [`Use these reviewed operation arguments: ${JSON.stringify(operationArguments)}`]),
+  ].join("\n\n");
+}
+
+/** Recognize legacy plans only from the exact generated prompt and matching structured arguments. */
+export function setupSourceForRoutine(
+  prompt: string,
+  value: unknown,
+  botId: string,
+  configuredPrompt: string | null,
+  legacyIntegration?: { id: string; name: string; slug: string } | null,
+) {
+  const parsed = SetupPlanDraftSchema.safeParse(value);
+  if (!parsed.success || !parsed.data.source || parsed.data.botId !== botId) return undefined;
+  const draft = parsed.data;
+  const source = parsed.data.source;
+  if (configuredPrompt !== null) return prompt === configuredPrompt ? draft : undefined;
+  if (!legacyIntegration || legacyIntegration.id !== source.serverId) return undefined;
+  const base = setupRoutinePrompt({
+    purpose: draft.purpose,
+    integration: legacyIntegration,
+    toolName: source.toolName,
+  });
+  if (draft.arguments === undefined) return prompt === base ? draft : undefined;
+  const prefix = `${base}\n\nUse these reviewed operation arguments: `;
+  if (!prompt.startsWith(prefix)) return undefined;
+  try {
+    const canonical = (item: unknown): string => {
+      if (Array.isArray(item)) return `[${item.map(canonical).join(",")}]`;
+      if (item && typeof item === "object")
+        return `{${Object.entries(item)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, val]) => `${JSON.stringify(key)}:${canonical(val)}`)
+          .join(",")}}`;
+      return JSON.stringify(item) ?? "null";
+    };
+    return canonical(draft.arguments) === canonical(JSON.parse(prompt.slice(prefix.length)))
+      ? draft
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export const SetupPlanSchema = z
   .object({

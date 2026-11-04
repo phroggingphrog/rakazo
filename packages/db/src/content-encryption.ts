@@ -51,7 +51,11 @@ interface ModelSpec {
 export const ENCRYPTED_MODELS: Record<string, ModelSpec> = {
   SetupPlan: {
     table: "setup_plans",
-    fields: { draft: { plainKeys: new Set() }, requestPayload: { plainKeys: new Set() } },
+    fields: {
+      draft: { plainKeys: new Set() },
+      requestPayload: { plainKeys: new Set() },
+      configuredPrompt: {},
+    },
     space: { column: "spaceId" },
     ownerRelation: "user",
   },

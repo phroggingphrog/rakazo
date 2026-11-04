@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { CreateRoutineInput, SetupPlanDraftSchema } from "@rakazo/contracts";
+import { CreateRoutineInput, SetupPlanDraftSchema, setupRoutinePrompt } from "@rakazo/contracts";
 import type { Prisma } from "@rakazo/db";
 import { availableInSpace } from "@rakazo/db";
 import { discoverMonitorTools } from "../monitor-tool-discovery.js";
@@ -45,21 +45,7 @@ async function lockSetupReferences(
   return server;
 }
 
-export function setupRoutinePrompt(input: {
-  purpose: string;
-  integration: { name: string; id: string; slug: string };
-  toolName: string;
-  operationArguments?: unknown;
-}) {
-  const { purpose, integration, toolName, operationArguments } = input;
-  return [
-    purpose,
-    `Use the selected integration ${JSON.stringify(integration.name)} (ID ${JSON.stringify(integration.id)}, tool prefix ${JSON.stringify(`mcp__${integration.slug}__`)}) and read operation ${JSON.stringify(toolName)} for this monitor.`,
-    ...(operationArguments === undefined
-      ? []
-      : [`Use these reviewed operation arguments: ${JSON.stringify(operationArguments)}`]),
-  ].join("\n\n");
-}
+export { setupRoutinePrompt } from "@rakazo/contracts";
 
 function dto(row: {
   id: string;
@@ -391,6 +377,7 @@ export function setupPlansRoutes({ deps, authed }: RouterContext) {
               routineId: row.id,
               configureRequestKey: input.requestKey,
               configuredFromRevision: input.expectedRevision,
+              configuredPrompt: inputRoutine.prompt,
             },
           });
           if (changed.count !== 1)

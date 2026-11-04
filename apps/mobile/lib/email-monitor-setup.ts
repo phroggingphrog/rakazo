@@ -216,8 +216,28 @@ export async function openMonitorSetup(botId: string) {
       const run = history.runs.find((item) => item.id === runId);
       return {
         runStatus: run?.status ?? "unknown",
-        sourceTest: run?.sourceTest ?? ("unavailable" as const),
+        sourceTest: run?.sourceUnbound
+          ? ("unbound" as const)
+          : (run?.sourceTest ?? ("unavailable" as const)),
       };
+    },
+    async latestSourceTest(plan: MonitorPlan) {
+      assertCurrent();
+      if (!plan.routineId) throw new Error("The routine is unavailable.");
+      const history = await rpc(
+        "routines/history",
+        { routineId: plan.routineId, limit: 20 },
+        options,
+      );
+      assertCurrent();
+      const run = history.runs.find((item) => item.sourceTest !== undefined);
+      return run?.sourceTest === undefined
+        ? null
+        : {
+            runId: run.id,
+            runStatus: run.status,
+            sourceTest: run.sourceUnbound ? ("unbound" as const) : run.sourceTest,
+          };
     },
     async routineState(plan: MonitorPlan) {
       assertCurrent();

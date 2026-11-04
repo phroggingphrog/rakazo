@@ -4,6 +4,7 @@ import {
   ROUTINE_HISTORY_PAGE_SIZE,
   ROUTINE_NOTIFICATION_PRE_SUBMIT_MAX_FAILURES,
   SETUP_SOURCE_TEST_KIND,
+  SETUP_SOURCE_UNBOUND_KIND,
 } from "@rakazo/contracts";
 import { runFailureError } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
@@ -34,9 +35,10 @@ function notificationStatus(
 }
 
 function sourceTestStatus(
-  effect: { status: string; result: unknown },
+  effect: { kind: string; status: string; result: unknown },
   runStatus: string,
 ): NonNullable<RoutineRun["sourceTest"]> {
+  if (effect.kind === SETUP_SOURCE_UNBOUND_KIND) return "not_started";
   const terminal = ["completed", "failed", "cancelled"].includes(runStatus);
   if (effect.status === "intended") return terminal ? "not_started" : "pending";
   if (effect.status === "executing") return terminal ? "uncertain" : "running";
@@ -102,8 +104,8 @@ export async function listRoutineRuns(
         select: { status: true, receiptStatus: true, preSubmitFailures: true },
       },
       effects: {
-        where: { kind: SETUP_SOURCE_TEST_KIND },
-        select: { status: true, result: true },
+        where: { kind: { in: [SETUP_SOURCE_TEST_KIND, SETUP_SOURCE_UNBOUND_KIND] } },
+        select: { kind: true, status: true, result: true },
         take: 1,
       },
     },
@@ -133,7 +135,12 @@ export async function listRoutineRuns(
     nextCursor,
     runs: runs.map((run) => ({
       id: run.id,
-      ...(run.effects[0] ? { sourceTest: sourceTestStatus(run.effects[0], run.status) } : {}),
+      ...(run.effects[0]
+        ? {
+            sourceTest: sourceTestStatus(run.effects[0], run.status),
+            ...(run.effects[0].kind === SETUP_SOURCE_UNBOUND_KIND ? { sourceUnbound: true } : {}),
+          }
+        : {}),
       notification: notificationStatus(run.routineNotification),
       notificationRetryExhausted:
         run.routineNotification?.status === "blocked" &&

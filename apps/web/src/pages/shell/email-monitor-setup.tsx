@@ -15,7 +15,11 @@ type Draft = Plan["draft"];
 type Prerequisites = Awaited<ReturnType<Client["setupPlans"]["prerequisites"]>>;
 type Candidates = Awaited<ReturnType<Client["setupPlans"]["discoverCandidates"]>>;
 type Catalog = Awaited<ReturnType<Client["mcp"]["servers"]["monitorTools"]>>;
-type SourceTestStatus = NonNullable<RoutineRun["sourceTest"]> | "not_checked" | "unavailable";
+type SourceTestStatus =
+  | NonNullable<RoutineRun["sourceTest"]>
+  | "not_checked"
+  | "unavailable"
+  | "unbound";
 function testKey(owner: string, space: string, plan: Plan): { storageKey: string; key: string } {
   const storageKey = `rakazo:monitor-test:${JSON.stringify([owner, space, plan.id, plan.revision])}`;
   const saved = window.localStorage.getItem(storageKey);
@@ -72,6 +76,7 @@ export function EmailMonitorSetup({
   const mounted = useRef(true);
   const createAttempt = useRef<{ key: string; payload: string } | null>(null);
   const configureAttempt = useRef<{ id: string; revision: number; key: string } | null>(null);
+  const testReadGeneration = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [servers, setServers] = useState<McpServer[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -91,6 +96,8 @@ export function EmailMonitorSetup({
   const [testRunId, setTestRunId] = useState<string | null>(null);
   const [testStatus, setTestStatus] = useState<string | null>(null);
   const [sourceTestStatus, setSourceTestStatus] = useState<SourceTestStatus>("not_checked");
+  const [restoredTest, setRestoredTest] = useState(false);
+  const [planSelection, setPlanSelection] = useState(0);
   const [routineActive, setRoutineActive] = useState<boolean | null>(null);
   const [routineStateError, setRoutineStateError] = useState(false);
 
@@ -123,6 +130,27 @@ export function EmailMonitorSetup({
     };
   }, [rpc, botId, plan?.id, plan?.routineId, plan?.status]);
 
+  useEffect(() => {
+    const generation = ++testReadGeneration.current;
+    if (plan?.status === "configured" && plan.routineId) {
+      void rpc.routines.history({ routineId: plan.routineId, limit: 20 }).then(
+        (history) => {
+          if (!mounted.current || testReadGeneration.current !== generation) return;
+          const latest = history.runs.find((run) => run.sourceTest !== undefined);
+          if (!latest) return;
+          setTestRunId(latest.id);
+          setTestStatus(latest.status);
+          setSourceTestStatus(latest.sourceUnbound ? "unbound" : latest.sourceTest!);
+          setRestoredTest(true);
+        },
+        () => undefined,
+      );
+    }
+    return () => {
+      if (testReadGeneration.current === generation) testReadGeneration.current += 1;
+    };
+  }, [rpc, botId, plan?.id, plan?.revision, plan?.routineId, plan?.status, planSelection]);
+
   function clearCheck() {
     setPrerequisites(null);
     setCandidates(null);
@@ -130,10 +158,13 @@ export function EmailMonitorSetup({
   }
 
   function loadPlan(next: Plan) {
+    testReadGeneration.current += 1;
+    setPlanSelection((value) => value + 1);
     setPlan(next);
     setTestRunId(null);
     setTestStatus(null);
     setSourceTestStatus("not_checked");
+    setRestoredTest(false);
     setPurpose(next.draft.purpose);
     setServerId(next.draft.source?.serverId ?? "");
     setSourceRevision(next.draft.source?.revision ?? null);
@@ -152,10 +183,12 @@ export function EmailMonitorSetup({
   }
 
   function newProposal() {
+    testReadGeneration.current += 1;
     setPlan(null);
     setTestRunId(null);
     setTestStatus(null);
     setSourceTestStatus("not_checked");
+    setRestoredTest(false);
     setPurpose("");
     setServerId("");
     setSourceRevision(null);
@@ -347,7 +380,9 @@ export function EmailMonitorSetup({
 
   async function runTest() {
     if (plan?.status !== "configured" || !plan.routineId) return;
+    const generation = ++testReadGeneration.current;
     const me = await rpc.me();
+    if (!mounted.current || testReadGeneration.current !== generation) return;
     const { storageKey, key } = testKey(me.userId, me.spaceId, plan);
     const result = await rpc.routines.testRun({ routineId: plan.routineId, clientNonce: key });
     try {
@@ -356,20 +391,22 @@ export function EmailMonitorSetup({
     } catch {
       /* The confirmed run remains available in routine history. */
     }
-    if (mounted.current) {
+    if (mounted.current && testReadGeneration.current === generation) {
       setTestRunId(result.runId);
       setTestStatus("not checked");
       setSourceTestStatus("not_checked");
+      setRestoredTest(false);
     }
   }
 
   async function refreshTest() {
     if (!plan?.routineId || !testRunId) return;
+    const generation = ++testReadGeneration.current;
     const history = await rpc.routines.history({ routineId: plan.routineId, limit: 20 });
     const run = history.runs.find((item) => item.id === testRunId);
-    if (mounted.current) {
+    if (mounted.current && testReadGeneration.current === generation) {
       setTestStatus(run?.status ?? "unknown");
-      setSourceTestStatus(run?.sourceTest ?? "unavailable");
+      setSourceTestStatus(run?.sourceUnbound ? "unbound" : (run?.sourceTest ?? "unavailable"));
     }
   }
 
@@ -706,6 +743,14 @@ export function EmailMonitorSetup({
                   ) : null}
                   {testRunId ? (
                     <div role="status" className="space-y-2">
+                      {restoredTest ? (
+                        <p>
+                          <Trans>
+                            Most recent source test for this routine. It reflects the setup when
+                            that test ran.
+                          </Trans>
+                        </p>
+                      ) : null}
                       <p>
                         <Trans>Run status:</Trans> {testStatus}
                       </p>
@@ -723,12 +768,21 @@ export function EmailMonitorSetup({
                           <Trans>Failed</Trans>
                         ) : sourceTestStatus === "uncertain" ? (
                           <Trans>Uncertain</Trans>
+                        ) : sourceTestStatus === "unbound" ? (
+                          <Trans>Setup changed; source not verified</Trans>
                         ) : sourceTestStatus === "unavailable" ? (
                           <Trans>Unavailable for this run</Trans>
                         ) : (
                           <Trans>Not checked</Trans>
                         )}
                       </p>
+                      {sourceTestStatus === "failed" ? (
+                        <p>
+                          <Trans>
+                            If the integration changed, choose New proposal and set it up again.
+                          </Trans>
+                        </p>
+                      ) : null}
                       <p>
                         <Trans>Open routine history for the result and notification status.</Trans>
                       </p>

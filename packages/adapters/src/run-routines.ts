@@ -22,6 +22,7 @@ import { findPendingRoutineTick, routineTimerNonce } from "./routine-coalescing.
 import { tickRoutineWatch } from "./routine-watch.js";
 import { isUniqueViolation } from "./run-messages.js";
 import { notifyRun } from "./run-notifications.js";
+import { resolveSetupSourceBinding, storeSetupSourceBinding } from "./setup-source-binding.js";
 import { listAgentSkillRecords } from "./skill-tools.js";
 
 /** A routine run stopped by a transient model error gets one more try this much later. */
@@ -186,9 +187,6 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
     spaceId: routine.spaceId,
     userId: routine.userId,
   });
-  const routinePrompt =
-    expandSkillReferencesInPrompt(routine.prompt, skillRecords) +
-    (watchTick?.run ? watchTick.note : "");
   const claimed = await deps.prisma.$transaction(async (tx) => {
     const updated = await tx.routine.updateMany({
       where: {
@@ -208,9 +206,20 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
     // The claim locks the row, so this is the model that was committed when it fired.
     const currentModel = await tx.routine.findUnique({
       where: { id: routine.id },
-      select: { modelProvider: true, modelId: true, thinkingLevel: true },
+      select: { modelProvider: true, modelId: true, thinkingLevel: true, prompt: true },
     });
     if (!currentModel) return null;
+    const currentPrompt = currentModel.prompt ?? routine.prompt;
+    const routinePrompt =
+      expandSkillReferencesInPrompt(currentPrompt, skillRecords) +
+      (watchTick?.run ? watchTick.note : "");
+    const sourceBinding = await resolveSetupSourceBinding(tx, {
+      routineId: routine.id,
+      spaceId: routine.spaceId,
+      userId: routine.userId,
+      botId: bot.id,
+      prompt: currentPrompt,
+    });
     const timerTick = routine.watch == null && !isOneShotRoutineCrons(routine.crons);
     const timerNonce = timerTick ? routineTimerNonce(routine.id, scheduledFor) : undefined;
     if (timerNonce) {
@@ -221,6 +230,7 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
         userId: routine.userId,
         threadId: thread.id,
         prompt: routinePrompt,
+        ...(sourceBinding ? { sourceBinding } : {}),
         ...routineRunModelPin(currentModel),
       });
       if (pending) return { ...pending, coalesced: true };
@@ -255,6 +265,7 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
         ...routineRunModelPin(currentModel),
       },
     });
+    await storeSetupSourceBinding(tx, routine.spaceId, run.id, sourceBinding);
     return { ...run, coalesced: false };
   });
   if (!claimed) return;

@@ -23,3 +23,58 @@ describe("setup routine instruction", () => {
     expect(second).not.toContain("server-one");
   });
 });
+
+it("keeps the source bound only while the saved intent still matches the routine", async () => {
+  const { setupSourceForRoutine } = await import("@rakazo/contracts");
+  const source = { serverId: "server-1", revision: 1, toolName: "read" };
+  const draft = {
+    kind: "email_monitor",
+    purpose: "Find updates",
+    botId: "bot-1",
+    source,
+    arguments: { b: 2, a: 1 },
+    schedule: { cron: "0 9 * * *", timezone: "UTC" },
+    notify: true,
+  };
+  const prompt = setupRoutinePrompt({
+    purpose: draft.purpose,
+    integration: { name: "Mail", id: "server-1", slug: "mail" },
+    toolName: source.toolName,
+    operationArguments: { a: 1, b: 2 },
+  });
+  expect(
+    setupSourceForRoutine(prompt, draft, "bot-1", null, {
+      name: "Mail",
+      id: "server-1",
+      slug: "mail",
+    }),
+  ).toEqual(draft);
+  expect(
+    setupSourceForRoutine(`${prompt}\n\nOwner changed the instructions`, draft, "bot-1", null, {
+      name: "Mail",
+      id: "server-1",
+      slug: "mail",
+    }),
+  ).toBeUndefined();
+  expect(
+    setupSourceForRoutine(prompt.replace('"server-1"', '"server-2"'), draft, "bot-1", null, {
+      name: "Mail",
+      id: "server-1",
+      slug: "mail",
+    }),
+  ).toBeUndefined();
+  expect(
+    setupSourceForRoutine(prompt, { ...draft, arguments: { a: 2, b: 2 } }, "bot-1", null, {
+      name: "Mail",
+      id: "server-1",
+      slug: "mail",
+    }),
+  ).toBeUndefined();
+  expect(
+    setupSourceForRoutine(prompt, draft, "another-bot", null, {
+      name: "Mail",
+      id: "server-1",
+      slug: "mail",
+    }),
+  ).toBeUndefined();
+});

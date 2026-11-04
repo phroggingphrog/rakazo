@@ -63,6 +63,63 @@ beforeEach(() => {
 });
 
 describe("mobile monitor setup scope and idempotency", () => {
+  it("interprets the backward-compatible unbound flag for latest and selected runs", async () => {
+    state.rpc.mockImplementation(async (path: string) => {
+      if (path === "me") return { userId: "user-a", spaceId: "space-a" };
+      if (path === "routines/history")
+        return {
+          runs: [
+            { id: "test", status: "completed", sourceTest: "not_started", sourceUnbound: true },
+          ],
+          nextCursor: null,
+        };
+      throw new Error(`Unexpected path: ${path}`);
+    });
+    const opened = await openMonitorSetup("bot-1");
+    const configured = { ...plan, status: "configured" as const, routineId: "routine-1" };
+    await expect(opened.latestSourceTest(configured)).resolves.toEqual({
+      runId: "test",
+      runStatus: "completed",
+      sourceTest: "unbound",
+    });
+    await expect(opened.testStatus(configured, "test")).resolves.toEqual({
+      runStatus: "completed",
+      sourceTest: "unbound",
+    });
+  });
+  it("reads only the latest explicitly recorded source test and rejects stale scope", async () => {
+    let resolve!: (value: unknown) => void;
+    state.rpc.mockImplementation(async (path: string) => {
+      if (path === "me") return { userId: "user-a", spaceId: "space-a" };
+      if (path === "routines/history")
+        return new Promise((r) => {
+          resolve = r;
+        });
+      throw new Error(`Unexpected path: ${path}`);
+    });
+    const opened = await openMonitorSetup("bot-1");
+    const configured = { ...plan, status: "configured" as const, routineId: "routine-1" };
+    const first = opened.latestSourceTest(configured);
+    resolve({
+      runs: [
+        { id: "normal", status: "completed" },
+        { id: "test", status: "failed", sourceTest: "uncertain" },
+      ],
+      nextCursor: null,
+    });
+    await expect(first).resolves.toEqual({
+      runId: "test",
+      runStatus: "failed",
+      sourceTest: "uncertain",
+    });
+    const stale = opened.latestSourceTest(configured);
+    state.selection += 1;
+    resolve({
+      runs: [{ id: "test", status: "completed", sourceTest: "succeeded" }],
+      nextCursor: null,
+    });
+    await expect(stale).rejects.toThrow();
+  });
   it("uses only the matching run's explicit source-test state", async () => {
     state.rpc.mockImplementation(async (path: string) => {
       if (path === "me") return { userId: "user-a", spaceId: "space-a" };

@@ -71,6 +71,7 @@ export const RoutineRunSchema = z.object({
   sourceTest: z
     .enum(["not_started", "pending", "running", "succeeded", "failed", "uncertain"])
     .optional(),
+  sourceUnbound: z.boolean().optional(),
   notification: z
     .enum([
       "unknown",

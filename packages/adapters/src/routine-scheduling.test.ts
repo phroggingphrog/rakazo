@@ -45,6 +45,7 @@ function pendingTimerFixture(reuse = true) {
     updatedAt: scheduledAt,
   };
   const tx = {
+    setupPlan: { findFirst: vi.fn(async () => null) },
     computerExecutionLease: { findMany: vi.fn(async () => []) },
     computer: { findMany: vi.fn(async () => []) },
     routine: {

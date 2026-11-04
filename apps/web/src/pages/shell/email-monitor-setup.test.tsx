@@ -154,6 +154,96 @@ afterEach(() => {
 });
 
 describe("email monitor setup", () => {
+  it("restores a flagged unbound source without claiming the source was verified", async () => {
+    rpc.setupPlans.list.mockResolvedValue({
+      plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
+      nextCursor: null,
+    });
+    rpc.routines.history.mockResolvedValue({
+      runs: [{ id: "old", status: "completed", sourceTest: "not_started", sourceUnbound: true }],
+      nextCursor: null,
+    });
+    await click("Set up email monitor");
+    await click("Find appointment updatesConfigured");
+    expect(container.textContent).toContain("Source test: Setup changed; source not verified");
+    expect(rpc.routines.testRun).not.toHaveBeenCalled();
+  });
+  it("restores the latest explicit source test as historical, without starting a test", async () => {
+    rpc.setupPlans.list.mockResolvedValue({
+      plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
+      nextCursor: null,
+    });
+    rpc.routines.history.mockResolvedValue({
+      runs: [
+        { id: "normal", status: "completed" },
+        { id: "old-test", status: "completed", sourceTest: "succeeded" },
+      ],
+      nextCursor: null,
+    });
+    await click("Set up email monitor");
+    await click("Find appointment updatesConfigured");
+    expect(rpc.routines.history).toHaveBeenCalledWith({ routineId: "routine-1", limit: 20 });
+    expect(container.textContent).toContain("Source test: Succeeded");
+    expect(container.textContent).toContain("It reflects the setup when that test ran.");
+    expect(rpc.routines.testRun).not.toHaveBeenCalled();
+    await click("Find appointment updatesConfigured");
+    expect(container.textContent).toContain("Source test: Succeeded");
+    expect(rpc.routines.history).toHaveBeenCalledTimes(2);
+  });
+  it("does not display an old history response after a new test starts", async () => {
+    rpc.setupPlans.list.mockResolvedValue({
+      plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
+      nextCursor: null,
+    });
+    let resolve!: (value: {
+      runs: { id: string; status: string; sourceTest: string }[];
+      nextCursor: null;
+    }) => void;
+    rpc.routines.history.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    );
+    await click("Set up email monitor");
+    await click("Find appointment updatesConfigured");
+    await click("Run test");
+    await act(async () =>
+      resolve({
+        runs: [{ id: "old", status: "completed", sourceTest: "succeeded" }],
+        nextCursor: null,
+      }),
+    );
+    expect(container.textContent).toContain("Source test: Not checked");
+    expect(container.textContent).not.toContain("Source test: Succeeded");
+  });
+  it("ignores a previous plan's history after starting a new proposal", async () => {
+    rpc.setupPlans.list.mockResolvedValue({
+      plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
+      nextCursor: null,
+    });
+    let resolve!: (value: {
+      runs: { id: string; status: string; sourceTest: string }[];
+      nextCursor: null;
+    }) => void;
+    rpc.routines.history.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    );
+    await click("Set up email monitor");
+    await click("Find appointment updatesConfigured");
+    await click("New proposal");
+    await act(async () =>
+      resolve({
+        runs: [{ id: "old", status: "completed", sourceTest: "succeeded" }],
+        nextCursor: null,
+      }),
+    );
+    expect(container.textContent).not.toContain("Source test: Succeeded");
+    expect(rpc.routines.testRun).not.toHaveBeenCalled();
+  });
   it("offers enabled local integrations for setup", async () => {
     rpc.mcp.servers.list.mockResolvedValue([
       { ...server, id: "local-1", name: "Local mail", transport: "stdio" },
@@ -227,12 +317,20 @@ describe("email monitor setup", () => {
     ["succeeded", "Succeeded"],
     ["failed", "Failed"],
     ["uncertain", "Uncertain"],
+    ["unbound", "Setup changed; source not verified"],
     [undefined, "Unavailable for this run"],
   ])("shows the source-test state %s separately from the run", async (sourceTest, label) => {
     const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
     rpc.setupPlans.list.mockResolvedValue({ plans: [configured], nextCursor: null });
     rpc.routines.history.mockResolvedValue({
-      runs: [{ id: "run-1", status: "completed", sourceTest }],
+      runs: [
+        {
+          id: "run-1",
+          status: "completed",
+          sourceTest: sourceTest === "unbound" ? "not_started" : sourceTest,
+          sourceUnbound: sourceTest === "unbound",
+        },
+      ],
       nextCursor: null,
     });
     await click("Set up email monitor");
@@ -241,6 +339,10 @@ describe("email monitor setup", () => {
     await click("Refresh status");
     expect(container.textContent).toContain("Run status: completed");
     expect(container.textContent).toContain(`Source test: ${label}`);
+    if (sourceTest === "failed")
+      expect(container.textContent).toContain(
+        "If the integration changed, choose New proposal and set it up again.",
+      );
     expect(container.textContent).toContain(
       "Arguments are not validated against the operation schema here",
     );

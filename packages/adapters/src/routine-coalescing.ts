@@ -30,6 +30,7 @@ export async function findPendingRoutineTick(
     userId: string;
     threadId: string;
     prompt: string;
+    sourceBinding?: { kind: string; status: string; request: Prisma.InputJsonValue };
     modelProvider?: string;
     modelId?: string;
     thinkingLevel?: string | null;
@@ -60,7 +61,21 @@ export async function findPendingRoutineTick(
     thinkingLevel: config.thinkingLevel ?? null,
     modelPinned: config.modelPinned ?? false,
     attempts: { none: {} },
-    effects: { none: {} },
+    effects:
+      config.sourceBinding === undefined
+        ? { none: {} }
+        : {
+            some: {
+              kind: config.sourceBinding.kind,
+              status: config.sourceBinding.status,
+              request: { equals: config.sourceBinding.request },
+            },
+            every: {
+              kind: config.sourceBinding.kind,
+              status: config.sourceBinding.status,
+              request: { equals: config.sourceBinding.request },
+            },
+          },
     steeringMessages: { none: {} },
     task: { status: "queued", prompt: config.prompt },
   };
