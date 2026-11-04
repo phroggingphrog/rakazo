@@ -15,6 +15,7 @@ export function ChatHeader({
   panelOpen,
   onOpenNavigation,
   onTogglePanel,
+  onOpenRoutines,
   onCall,
 }: {
   inGroup: boolean;
@@ -26,6 +27,7 @@ export function ChatHeader({
   panelOpen: boolean;
   onOpenNavigation: () => void;
   onTogglePanel: () => void;
+  onOpenRoutines: () => void;
   onCall: (bot: Bot) => void;
 }) {
   const { t } = useLingui();
@@ -69,6 +71,17 @@ export function ChatHeader({
         </span>
       </Button>
       <div className="flex items-center justify-self-end gap-2">
+        {!inGroup && active && !active.archivedAt ? (
+          <Button
+            variant="floating"
+            size="sm"
+            aria-label={t`Routines`}
+            onClick={onOpenRoutines}
+            className="app-no-drag"
+          >
+            {t`Routines`}
+          </Button>
+        ) : null}
         {phoneCallsEnabled && !inGroup && active ? (
           <IconTooltip label={inCall ? t`Open call` : t`Call`}>
             <Button
