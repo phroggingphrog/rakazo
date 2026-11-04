@@ -32,7 +32,9 @@ function fixture() {
   const prisma = {
     externalEffect: { findUnique: vi.fn(async () => ({ ...effect })) },
     mcpServer: {
-      findFirst: vi.fn(async () => (state.server ? { id: "server", allBots: false } : null)),
+      findFirst: vi.fn(async () =>
+        state.server ? { id: "server", slug: "mail", allBots: false } : null,
+      ),
     },
     botMcpServer: {
       findFirst: vi.fn(async () =>
@@ -65,6 +67,8 @@ function fixture() {
     botId: "bot",
     signal: AbortSignal.timeout(10000),
   };
+  const finish = vi.fn(async () => true);
+  const authorize = vi.fn(async () => ({ state: "allowed" as const, finish }));
   const run = () =>
     executeSetupSourceTest({
       prisma: prisma as never,
@@ -74,8 +78,9 @@ function fixture() {
       workerId: "worker",
       fence: 1,
       secrets: ["secret-value"],
+      authorize,
     });
-  return { state, effect, prisma, calls, run };
+  return { state, effect, prisma, calls, run, authorize, finish };
 }
 
 describe("setup source execution", () => {
@@ -114,6 +119,42 @@ describe("setup source execution", () => {
     late.state.liveLease = true;
     expect((await late.run())?.state).toBe("uncertain");
     expect(late.state.calls).toBe(1);
+  });
+  it("leaves the source unclaimed while approval is pending, then dispatches once after approval", async () => {
+    const f = fixture();
+    f.authorize.mockResolvedValueOnce({ state: "paused" } as never);
+    f.state.events = [{ type: "result", data: { value: "synthetic" } }];
+    expect(await f.run()).toEqual({ state: "paused" });
+    expect(f.effect.status).toBe("intended");
+    expect(f.state.calls).toBe(0);
+    expect((await f.run())?.state).toBe("succeeded");
+    expect(f.state.calls).toBe(1);
+    expect(f.finish).toHaveBeenCalledWith("succeeded");
+  });
+  it("records a denied source without dispatch or later replay", async () => {
+    const f = fixture();
+    f.authorize.mockResolvedValueOnce({ state: "denied" } as never);
+    expect(await f.run()).toEqual({ state: "failed" });
+    expect(f.effect.status).toBe("completed");
+    expect((await f.run())?.state).toBe("failed");
+    expect(f.state.calls).toBe(0);
+  });
+  it("does not replay an interrupted source claim", async () => {
+    const f = fixture();
+    f.effect.status = "executing";
+    expect(await f.run()).toEqual({ state: "uncertain" });
+    expect(f.authorize).not.toHaveBeenCalled();
+    expect(f.state.calls).toBe(0);
+  });
+  it("returns uncertainty if the gate cannot settle after the source result", async () => {
+    const f = fixture();
+    f.state.events = [{ type: "result", data: { value: "synthetic" } }];
+    f.finish.mockResolvedValueOnce(false);
+    expect(await f.run()).toEqual({ state: "uncertain" });
+    expect(f.effect.status).toBe("uncertain");
+    expect(f.state.calls).toBe(1);
+    expect((await f.run())?.state).toBe("uncertain");
+    expect(f.state.calls).toBe(1);
   });
   it("never labels absent, failed, changed or malformed results successful", async () => {
     const absent = fixture();

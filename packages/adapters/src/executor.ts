@@ -190,6 +190,7 @@ import {
 } from "./run-turn-images.js";
 import { loadAgentScratchpadContext } from "./scratchpad-context.js";
 import { inferScript } from "./scripted-runtime.js";
+import { authorizeSetupSource } from "./setup-source-authorization.js";
 import { executeSetupSourceTest, setupSourceTestInstruction } from "./setup-source-test.js";
 import { listAgentSkillRecords } from "./skill-tools.js";
 import {
@@ -1455,13 +1456,6 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
             id: runModelId,
           });
         }
-        const approvalContinuation = turnCheckpoint
-          ? undefined
-          : buildApprovalContinuation(
-              approvedEffects,
-              (request) => redactSecrets(JSON.stringify(request), runSecrets),
-              { exposedToolNames: new Set(partitionTools(tools).listed.map((tool) => tool.name)) },
-            );
         const replyContext = await loadReplyContext(deps.prisma, thread.id, run.sourceMessageId);
         let userTimeZone: string | null | undefined;
         try {
@@ -1487,6 +1481,7 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
             // Lateness is optional context; a lookup failure must not prevent a run.
           }
         }
+        let sourceApprovalKey: string | undefined;
         const sourceTest = await executeSetupSourceTest({
           prisma: deps.prisma,
           connector: deps.connector,
@@ -1495,7 +1490,13 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
           workerId,
           fence,
           secrets: runSecrets,
+          authorize: async (source) => {
+            const result = await authorizeSetupSource(ctx, source);
+            sourceApprovalKey = result.consumedApprovalKey;
+            return result.admission;
+          },
         });
+        if (sourceTest?.state === "paused") return;
         if (sourceTest && sourceTest.state !== "succeeded") {
           await failRun(
             ctx,
@@ -1512,6 +1513,13 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
           return;
         }
         if (sourceTest?.state === "succeeded") ctx.state.tainted = true;
+        const approvalContinuation = turnCheckpoint
+          ? undefined
+          : buildApprovalContinuation(
+              approvedEffects.filter((effect) => effect.idempotencyKey !== sourceApprovalKey),
+              (request) => redactSecrets(JSON.stringify(request), runSecrets),
+              { exposedToolNames: new Set(partitionTools(tools).listed.map((tool) => tool.name)) },
+            );
         const prompt = [
           setupSourceTestInstruction(sourceTest),
           replyContext,

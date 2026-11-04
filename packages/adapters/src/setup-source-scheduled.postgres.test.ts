@@ -243,6 +243,7 @@ describeDatabase("scheduled setup source binding (PostgreSQL)", () => {
             workerId,
             fence: 1,
             secrets: [],
+            authorize: async () => ({ state: "allowed", finish: async () => true }),
           }),
         )
       )?.state,

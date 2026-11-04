@@ -8,6 +8,7 @@ import {
   commandWatchFromTool,
   compactScheduleInput,
   createScheduleFromTool,
+  findSourceScheduleReplay,
   isScheduleValueProvided,
   listSchedulesFromTool,
   updateScheduleFromTool,
@@ -36,23 +37,62 @@ import {
 
 /** The task catalog, scratchpad, ticket board, schedules and skills. */
 export const taskTools: ToolHandlers = {
-  ...Object.fromEntries(["proactive_set_interval", "proactive_set_wake", "proactive_set_timer", "proactive_cancel_timer", "proactive_hook", "proactive_get", "proactive_reset"].map(name => [name, async (ctx: Parameters<ToolHandlers[string]>[0], call: Parameters<ToolHandlers[string]>[1]) => {
-    const actions = { proactive_set_interval: "interval", proactive_set_wake: "wake", proactive_set_timer: "timer", proactive_cancel_timer: "cancel", proactive_hook: "hook", proactive_get: "get", proactive_reset: "reset" } as const;
-    const runtime = ctx.deps.proactive;
-    if (!runtime) return call.finish({ error: "Proactive controls are not configured" });
-    const args = call.args;
-    try {
-      return call.finish(await runtime.control({
-        botId: ctx.bot.id, spaceId: ctx.run.spaceId, userId: ctx.run.userId,
-        action: actions[name as keyof typeof actions],
-        id: typeof args.id === "string" ? args.id : undefined,
-        dueAt: typeof args.dueAt === "number" ? args.dueAt : undefined,
-        fallbackMs: typeof args.fallbackMs === "number" ? args.fallbackMs : undefined,
-        note: typeof args.note === "string" ? args.note : undefined,
-        hook: typeof args.source === "string" && typeof args.id === "string" ? { id: args.id, source: args.source, ...(typeof args.contains === "string" ? { contains: args.contains } : {}) } : undefined,
-      }));
-    } catch (error) { return call.finish({ error: error instanceof Error ? error.message : "Proactive control failed" }); }
-  }])),
+  ...Object.fromEntries(
+    [
+      "proactive_set_interval",
+      "proactive_set_wake",
+      "proactive_set_timer",
+      "proactive_cancel_timer",
+      "proactive_hook",
+      "proactive_get",
+      "proactive_reset",
+    ].map((name) => [
+      name,
+      async (
+        ctx: Parameters<ToolHandlers[string]>[0],
+        call: Parameters<ToolHandlers[string]>[1],
+      ) => {
+        const actions = {
+          proactive_set_interval: "interval",
+          proactive_set_wake: "wake",
+          proactive_set_timer: "timer",
+          proactive_cancel_timer: "cancel",
+          proactive_hook: "hook",
+          proactive_get: "get",
+          proactive_reset: "reset",
+        } as const;
+        const runtime = ctx.deps.proactive;
+        if (!runtime) return call.finish({ error: "Proactive controls are not configured" });
+        const args = call.args;
+        try {
+          return call.finish(
+            await runtime.control({
+              botId: ctx.bot.id,
+              spaceId: ctx.run.spaceId,
+              userId: ctx.run.userId,
+              action: actions[name as keyof typeof actions],
+              id: typeof args.id === "string" ? args.id : undefined,
+              dueAt: typeof args.dueAt === "number" ? args.dueAt : undefined,
+              fallbackMs: typeof args.fallbackMs === "number" ? args.fallbackMs : undefined,
+              note: typeof args.note === "string" ? args.note : undefined,
+              hook:
+                typeof args.source === "string" && typeof args.id === "string"
+                  ? {
+                      id: args.id,
+                      source: args.source,
+                      ...(typeof args.contains === "string" ? { contains: args.contains } : {}),
+                    }
+                  : undefined,
+            }),
+          );
+        } catch (error) {
+          return call.finish({
+            error: error instanceof Error ? error.message : "Proactive control failed",
+          });
+        }
+      },
+    ]),
+  ),
   async task_catalog(ctx) {
     const { deps, run, bot, thread } = ctx;
     return taskCatalogFromTool(deps, {
@@ -195,6 +235,68 @@ export const taskTools: ToolHandlers = {
     const refusal = command === undefined ? undefined : protectedComputerLifecycleRefusal(command);
     if (ctx.computer.graphical && refusal)
       return call.finish({ error: desktopProtectionGuardMessage(refusal) });
+    let source: Parameters<typeof createScheduleFromTool>[1]["source"];
+    if (args.source !== undefined && args.source !== null) {
+      const replay = await findSourceScheduleReplay(deps, {
+        spaceId: run.spaceId,
+        userId: run.userId,
+        botId: bot.id,
+        effectKey: call.effectKey,
+      });
+      if (replay) return call.finish(replay);
+      const raw = args.source;
+      if (typeof raw !== "object" || Array.isArray(raw))
+        return call.finish({ error: "source must include a tool and arguments object." });
+      const selected = raw as Record<string, unknown>;
+      if (
+        typeof selected.tool !== "string" ||
+        !selected.arguments ||
+        typeof selected.arguments !== "object" ||
+        Array.isArray(selected.arguments)
+      )
+        return call.finish({ error: "source must include a tool and arguments object." });
+      if (ctx.tools.disabled.has(selected.tool))
+        return call.finish({
+          error: "The selected integration operation is disabled for this bot.",
+        });
+      let tool = ctx.tools.connector.get(selected.tool);
+      if (!tool && deps.connector?.resolveCall) {
+        try {
+          tool = (
+            await deps.connector.resolveCall(
+              {
+                tool: selected.tool,
+                args: selected.arguments as Record<string, unknown>,
+                executionId: call.executionId,
+              },
+              ctx.context,
+            )
+          )?.tool;
+        } catch {
+          return call.finish({
+            error: "Could not resolve the selected integration operation or its arguments.",
+          });
+        }
+      }
+      const route = tool?.route;
+      if (
+        tool?.readOnly !== true ||
+        tool.batch ||
+        route?.connectorId !== "mcp" ||
+        !route.resourceId ||
+        typeof route.resourceRevision !== "number" ||
+        route.toolName.startsWith("__rakazo_")
+      )
+        return call.finish({
+          error:
+            "The selected integration operation is unavailable or is not declared read-only. Choose a declared read, or create an ordinary schedule without source; an ordinary schedule does not guarantee this exact operation.",
+        });
+      source = {
+        route,
+        arguments: selected.arguments as Record<string, unknown>,
+        requestKey: call.effectKey,
+      };
+    }
     const created = await createScheduleFromTool(deps, {
       spaceId: run.spaceId,
       botId: bot.id,
@@ -203,6 +305,7 @@ export const taskTools: ToolHandlers = {
       name: String(args.name ?? ""),
       prompt: String(args.prompt ?? ""),
       timezone: args.timezone ? String(args.timezone) : undefined,
+      source,
       schedule: compactScheduleInput({
         cron: args.cron,
         every: args.every,

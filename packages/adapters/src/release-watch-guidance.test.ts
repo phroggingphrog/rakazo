@@ -52,6 +52,39 @@ describe("release-watch guidance", () => {
     }
   });
 
+  it("exposes and validates an explicit source on timed schedules", () => {
+    const tool = builtinAgentTools.find((entry) => entry.name === "schedule_create");
+    const schema = tool?.inputSchema ?? {};
+    const source = { tool: "mcp__mail__search", arguments: { query: "booking" } };
+    expect(
+      parseConnectorToolArgs(schema, {
+        name: "Booking updates",
+        prompt: "Check for updates",
+        cron: "0 9 * * *",
+        source,
+      }),
+    ).toMatchObject({ source });
+    expect(() =>
+      parseConnectorToolArgs(schema, {
+        name: "Booking updates",
+        prompt: "Check for updates",
+        cron: "0 9 * * *",
+        source: { tool: source.tool },
+      }),
+    ).toThrow(/invalid/i);
+    expect(() =>
+      parseConnectorToolArgs(schema, {
+        name: "Booking updates",
+        prompt: "Check for updates",
+        cron: "0 9 * * *",
+        source: { ...source, extra: true },
+      }),
+    ).toThrow(/invalid/i);
+    const wire = normalizeOpenAiToolParameters(schema);
+    expect(JSON.stringify(wire.properties)).toContain('"source"');
+    expect(JSON.stringify(wire.properties)).toContain('"arguments"');
+  });
+
   it("exposes a read-only task catalog", () => {
     const tool = builtinAgentTools.find((entry) => entry.name === "task_catalog");
     expect(tool?.readOnly).toBe(true);

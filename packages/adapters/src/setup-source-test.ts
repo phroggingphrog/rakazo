@@ -12,6 +12,16 @@ import { toolResultError } from "./tool-result-error.js";
 type SourceOutcome =
   | { state: "succeeded"; data: unknown }
   | { state: "failed" }
+  | { state: "uncertain" }
+  | { state: "paused" };
+
+export type SourceAdmission =
+  | {
+      state: "allowed";
+      finish: (outcome: "succeeded" | "failed" | "uncertain") => Promise<boolean>;
+    }
+  | { state: "denied" }
+  | { state: "paused" }
   | { state: "uncertain" };
 
 function validOutcome(value: unknown): SourceOutcome {
@@ -42,6 +52,14 @@ export async function executeSetupSourceTest(input: {
   workerId: string;
   fence: number;
   secrets: string[];
+  authorize: (input: {
+    serverId: string;
+    serverSlug: string;
+    revision: number;
+    toolName: string;
+    args: Record<string, unknown>;
+    executionId: string;
+  }) => Promise<SourceAdmission>;
 }): Promise<SourceOutcome | undefined> {
   const { prisma, connector, context, runId, workerId, fence, secrets } = input;
   const effect = await prisma.externalEffect.findUnique({
@@ -88,13 +106,28 @@ export async function executeSetupSourceTest(input: {
         enabled: true,
         ...availableInSpace(context),
       },
-      select: { id: true },
+      select: { id: true, slug: true },
     }));
   if (!selected || !source || !connector) {
     return (await transition("intended", "completed", { state: "failed" })) === 1
       ? { state: "failed" }
       : { state: "uncertain" };
   }
+  const admission = await input.authorize({
+    serverId: source.serverId,
+    serverSlug: selected.slug,
+    revision: source.revision,
+    toolName: source.toolName,
+    args: draft.arguments ?? {},
+    executionId: setupSourceTestKey(runId),
+  });
+  if (admission.state === "paused") return { state: "paused" };
+  if (admission.state === "denied") {
+    return (await transition("intended", "completed", { state: "failed" })) === 1
+      ? { state: "failed" }
+      : { state: "uncertain" };
+  }
+  if (admission.state === "uncertain") return { state: "uncertain" };
   if ((await transition("intended", "executing")) !== 1) return { state: "uncertain" };
   let outcome: SourceOutcome = { state: "uncertain" };
   try {
@@ -164,6 +197,11 @@ export async function executeSetupSourceTest(input: {
           assignment.allowedTools.includes(source.toolName))
       : current?.allBots;
     if (!allowed) outcome = { state: "uncertain" };
+  }
+  const finished = await admission.finish(outcome.state);
+  if (!finished) {
+    await transition("executing", "uncertain", { state: "uncertain" });
+    return { state: "uncertain" };
   }
   const committed = await transition(
     "executing",

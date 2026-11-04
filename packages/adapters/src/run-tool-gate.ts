@@ -153,7 +153,14 @@ export async function gateToolCall(
   // check look at each action, never the batch tool. An entry naming no action asks.
   const batch = connectorTool?.batch ? batchActions(connectorTool.batch, args) : undefined;
   const unidentifiedAction = Boolean(batch && !batch.complete);
-  const approvalToolNames = batch?.actions.length ? batch.actions : [name];
+  const source =
+    name === "schedule_create" && args.source && typeof args.source === "object"
+      ? (args.source as Record<string, unknown>)
+      : undefined;
+  const selectedSourceTool = typeof source?.tool === "string" ? source.tool : undefined;
+  const approvalToolNames = batch?.actions.length
+    ? batch.actions
+    : [name, ...(selectedSourceTool ? [selectedSourceTool] : [])];
   // A batch tool declared as a write makes each of its actions one.
   const declaredReadOnlyFor = (toolName: string) =>
     toolName === name || declaredReadOnly === false
@@ -165,7 +172,7 @@ export async function gateToolCall(
       unattendedTriggerToolRequiresApproval(
         run.trigger,
         toolName,
-        viaConnector,
+        viaConnector || toolName === selectedSourceTool,
         declaredReadOnlyFor(toolName),
       ),
     );
@@ -203,7 +210,7 @@ export async function gateToolCall(
       : "allow";
   const watch = name === "schedule_create" ? watchFromTool(args.watch) : undefined;
   // A tool watch repeats its read unattended, so it passes the read check that call would now.
-  const watchedTool = watch?.kind === "tool" ? watch.tool : undefined;
+  const watchedTool = watch?.kind === "tool" ? watch.tool : selectedSourceTool;
   const readTrusts = watchedTool
     ? connectorTrustKeys(
         undefined,
@@ -246,7 +253,11 @@ export async function gateToolCall(
     siteGate === "new" ||
     unidentifiedAction ||
     approvalToolNames.some((toolName) =>
-      toolRequiresApproval(toolName, viaConnector, declaredReadOnlyFor(toolName)),
+      toolRequiresApproval(
+        toolName,
+        viaConnector || toolName === selectedSourceTool,
+        declaredReadOnlyFor(toolName),
+      ),
     );
   // A gated read still fails closed when its review errors, and keeps its approval key.
   const gated = requiresApprovalByDefault || connectorReadGated;

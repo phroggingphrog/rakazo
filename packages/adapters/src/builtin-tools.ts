@@ -103,7 +103,7 @@ const scheduleCreateProperties = {
   prompt: {
     type: "string",
     description:
-      'Concrete steps for when the schedule fires: what to use, what to extract, and how to report. Name the connected plugin tools to call when one covers the data (e.g. GITHUB_LIST_RELEASES for owner/repo), preferring them over the computer browser or web search; for a website without one, describe the pages and actions to take in the computer\'s browser. This prompt is all a future run knows, and it runs in new circumstances: write the user\'s lasting request in full, keeping every standing item and preference, including their swap and skip rules. A decision that only fit this time, such as an item swapped or skipped because it was out of stock or anything the user said "this week" or "this time" about, becomes a condition, never a permanent change ("skip sourdough if it is out of stock", not "skip sourdough").',
+      'Describe what to use, extract, and report. Prefer named connected tools (e.g. GITHUB_LIST_RELEASES for owner/repo) over browser or search; otherwise describe browser pages and actions. Each future run sees only this prompt: include the full lasting request and standing preferences, including swap and skip rules. Turn one-time choices into conditions, not permanent changes (e.g. "skip sourdough if out of stock").',
   },
   timezone: { type: "string", description: "IANA timezone (default: the user's timezone)." },
 };
@@ -200,11 +200,20 @@ function scheduleCreateBranch(
 /** Exactly one timing method. Null or blank leftovers stay valid so callers can ignore them. */
 const scheduleCreateInputSchema = {
   oneOf: [
-    scheduleCreateBranch(["cron"]),
-    scheduleCreateBranch(["every", "unit"]),
-    scheduleCreateBranch(["runAt"]),
-    scheduleCreateBranch(["delayMinutes"]),
-    scheduleCreateBranch(["delaySeconds"]),
+    ...[["cron"], ["every", "unit"], ["runAt"], ["delayMinutes"], ["delaySeconds"]].map((timing) =>
+      scheduleCreateBranch(timing as (keyof typeof scheduleTimingSpecs)[], {
+        source: {
+          type: "object",
+          description: "Optional exact MCP read; access remains unverified until a run succeeds.",
+          properties: {
+            tool: { type: "string", description: "Full discovered MCP tool name." },
+            arguments: { type: "object", additionalProperties: true },
+          },
+          required: ["tool", "arguments"],
+          additionalProperties: false,
+        },
+      }),
+    ),
     scheduleCreateBranch(["watch"]),
   ],
 };
@@ -1270,7 +1279,7 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "schedule_create",
     description:
-      'Create a reminder or recurring job for this bot. Use for "remind me in 10 minutes" or "every morning send a joke". Repeats: cron or every/unit (min 1 minute), optionally from startAt. One-shot: runAt, delayMinutes, or delaySeconds. A repeating job carries out the user\'s lasting request each time, not a copy of what was decided today.',
+      'Create a reminder or recurring job for this bot. Use for "remind me in 10 minutes" or "every morning send a joke". Repeats: cron or every/unit (min 1 minute), optionally from startAt. One-shot: runAt, delayMinutes, or delaySeconds. A repeating job carries out the user\'s lasting request each time, not a copy of what was decided today. To attempt an exact integration read each run, supply source with the discovered tool and explicit arguments. Access is unverified until a run succeeds.',
     inputSchema: scheduleCreateInputSchema,
   },
   {
