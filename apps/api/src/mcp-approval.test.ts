@@ -175,6 +175,49 @@ describe("resolveMcpApprovalCards", () => {
     });
   });
 
+  it("reports whether a resolved card was for an existing integration", async () => {
+    const blocks = [
+      {
+        kind: "mcp_approval",
+        name: "A",
+        serverId: "srv-a",
+        status: "pending",
+        assignmentOnly: true,
+      },
+    ];
+    const { deps, actor, tx } = fixture(blocks);
+    const effect = vi.fn(async () => "saved");
+    await resolveMcpApprovalCards(
+      deps,
+      actor,
+      { botId: "bot", serverId: "srv-a", status: "connected", threadId: "group-thread" },
+      effect,
+    );
+    expect(effect).toHaveBeenCalledWith(tx, { assign: true, resolved: true, assignmentOnly: true });
+  });
+
+  it("does not inherit an assignment-only flag from a dismissed card", async () => {
+    const blocks = [
+      {
+        kind: "mcp_approval",
+        name: "A",
+        serverId: "srv-a",
+        status: "dismissed",
+        assignmentOnly: true,
+      },
+      { kind: "mcp_approval", name: "A", serverId: "srv-a", status: "pending" },
+    ];
+    const { deps, actor, tx } = fixture(blocks);
+    const effect = vi.fn(async () => "saved");
+    await resolveMcpApprovalCards(
+      deps,
+      actor,
+      { botId: "bot", serverId: "srv-a", status: "connected", threadId: "group-thread" },
+      effect,
+    );
+    expect(effect).toHaveBeenCalledWith(tx, { assign: true, resolved: true });
+  });
+
   it("does not assign when a dismissed card already won", async () => {
     const blocks = [{ kind: "mcp_approval", name: "A", serverId: "srv-a", status: "dismissed" }];
     const { deps, actor, tx } = fixture(blocks);
@@ -344,7 +387,7 @@ describe("queueMcpConnectedRun", () => {
         create: vi.fn(async () => ({ id: "run" })),
       },
       mcpServer: { findFirst: vi.fn(async () => ({ name: "Axiom" })) },
-      task: { create: vi.fn(async () => ({ id: "task" })) },
+      task: { create: vi.fn(async (_args: { data: { prompt: string } }) => ({ id: "task" })) },
     };
     return tx as typeof tx & Parameters<typeof queueMcpConnectedRun>[0];
   }
@@ -363,6 +406,35 @@ describe("queueMcpConnectedRun", () => {
       data: expect.objectContaining({ taskId: "task", trigger: "user", status: "queued" }),
       select: { id: true },
     });
+  });
+
+  it("does not claim a newly assigned existing integration is ready", async () => {
+    const tx = connectedFixture();
+    await expect(
+      queueMcpConnectedRun(tx, actor, { ...input, assignmentOnly: true, allowAllTools: true }),
+    ).resolves.toBe("run");
+    const prompt = tx.task.create.mock.calls[0]![0].data.prompt;
+    expect(prompt).toContain("assignment was saved");
+    expect(prompt).toContain("provider sign-in and tool availability have not been verified");
+    expect(prompt).not.toContain("tools are available now");
+  });
+
+  it("tells the bot when the actual existing assignment is restricted", async () => {
+    const tx = connectedFixture();
+    await expect(
+      queueMcpConnectedRun(tx, actor, { ...input, assignmentOnly: true, allowAllTools: false }),
+    ).resolves.toBe("run");
+    const prompt = tx.task.create.mock.calls[0]![0].data.prompt;
+    expect(prompt).toContain("restricted to its allowed tools");
+    expect(prompt).toContain("have not been verified");
+  });
+
+  it("also describes restricted assignments on legacy cards without claiming all tools are available", async () => {
+    const tx = connectedFixture();
+    await queueMcpConnectedRun(tx, actor, { ...input, allowAllTools: false });
+    const prompt = tx.task.create.mock.calls[0]![0].data.prompt;
+    expect(prompt).toContain("restricted to its allowed tools");
+    expect(prompt).not.toContain("tools are available now");
   });
 
   it("does not queue while the bot is still busy in that chat", async () => {

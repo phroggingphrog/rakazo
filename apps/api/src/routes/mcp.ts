@@ -811,6 +811,8 @@ export function mcpRoutes(ctx: RouterContext) {
                       botId: bot.id,
                       serverId: server.id,
                       threadId: input.threadId,
+                      assignmentOnly: decision.assignmentOnly,
+                      allowAllTools: assignment.allowAllTools,
                     })
                   : null;
               return { assignment, runId };
