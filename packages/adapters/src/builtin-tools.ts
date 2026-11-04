@@ -1210,7 +1210,7 @@ export const builtinAgentTools: ConnectorTool[] = [
   },
   {
     name: "proactive_set_interval",
-    description: "Set this bot fallback patrol interval in milliseconds, between five minutes and seven days.",
+    description: "Set this bot's fallback patrol interval in milliseconds. Use 0 to turn fallback patrol off; otherwise use five minutes to seven days. Other timers are unaffected.",
     inputSchema: { type: "object", properties: { fallbackMs: { type: "number" } }, required: ["fallbackMs"] },
   },
   {

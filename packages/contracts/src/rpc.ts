@@ -473,7 +473,7 @@ export const appContract = {
     proactiveConfigure: oc.input(z.object({
       botId: Id,
       config: z.object({
-        fallbackMs: z.number().int().min(300000).max(604800000).optional(),
+        fallbackMs: z.union([z.literal(0), z.number().int().min(300000).max(604800000)]).optional(),
         decisionOrder: z.array(z.enum(["steer", "dm", "mention", "timer", "rules", "judge"])).length(6).optional(),
         hooks: z.array(z.object({ id: z.string().min(1).max(100), source: z.string().min(1).max(200), contains: z.string().max(500).optional() })).max(20).optional(),
       }),

@@ -153,6 +153,10 @@ export class ProactiveEngine {
     events = events.filter(event => event.kind !== "sent");
     if (!events.length) return { kind: "drop", reason: "heard" };
     const policy = await this.scopePolicy?.(scope);
+    if ((policy?.fallbackMs ?? this.config.fallbackMs) <= 0) {
+      events = events.filter(event => !(event.source === "timer" && event.id.startsWith(`fallback:${scope}:`)));
+      if (!events.length) return { kind: "drop", reason: "heard" };
+    }
     for (const stage of policy?.order ?? ["steer", "dm", "mention", "timer", "rules", "judge"]) {
       if (stage === "steer" && await this.target.isWorking(scope)) return { kind: "wake", reason: "steer" };
       if (stage === "dm" && events.some(e => e.addressed === "dm")) return { kind: "wake", reason: "dm" };

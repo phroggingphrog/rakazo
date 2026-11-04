@@ -11,7 +11,7 @@ export interface BotProactiveConfig {
 export interface ControlState { revision: number; config: BotProactiveConfig }
 
 export function validateProactiveConfig(config: BotProactiveConfig): void {
-  if (config.fallbackMs !== undefined && (!Number.isSafeInteger(config.fallbackMs) || config.fallbackMs < 300_000 || config.fallbackMs > 7 * 86_400_000)) throw new Error("Fallback interval must be between five minutes and seven days");
+  if (config.fallbackMs !== undefined && (!Number.isSafeInteger(config.fallbackMs) || (config.fallbackMs !== 0 && (config.fallbackMs < 300_000 || config.fallbackMs > 7 * 86_400_000)))) throw new Error("Fallback interval must be zero (off), or between five minutes and seven days");
   if (config.decisionOrder && (config.decisionOrder.length !== DEFAULT_POLICY_ORDER.length || new Set(config.decisionOrder).size !== DEFAULT_POLICY_ORDER.length || config.decisionOrder.some(stage => !DEFAULT_POLICY_ORDER.includes(stage)))) throw new Error("Decision order must contain every policy stage exactly once");
   if (config.hooks && (config.hooks.length > 20 || new Set(config.hooks.map(hook => hook.id)).size !== config.hooks.length || config.hooks.some(hook => !hook.id || hook.id.length > 100 || !hook.source || hook.source.length > 200 || (hook.contains?.length ?? 0) > 500))) throw new Error("Invalid hooks: at most twenty unique bounded hooks are allowed");
 }

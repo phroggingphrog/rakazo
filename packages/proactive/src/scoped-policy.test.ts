@@ -49,4 +49,11 @@ describe("scoped proactive policy", () => {
     expect(await store.nextTimerDue()).toBe(clock.now() + 300_000);
     expect(await store.hasPendingTimer(event.scope, "fallback:")).toBe(true);
   });
+  it("ignores an already-queued fallback when patrol was disabled, while keeping explicit timers", async () => {
+    const { engine } = setup(async () => ({ fallbackMs: 0 }));
+    const stale = { ...event, source: "timer", kind: "timer", id: `fallback:${event.scope}:1` };
+    expect(await engine.policy(event.scope, [stale])).toEqual({ kind: "drop", reason: "heard" });
+    const requested = { ...stale, id: `self:${event.scope}:requested` };
+    expect(await engine.policy(event.scope, [requested])).toEqual({ kind: "wake", reason: "timer" });
+  });
 });

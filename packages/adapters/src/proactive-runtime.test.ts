@@ -10,6 +10,39 @@ function fixture() {
   return { prisma, runtime: createProactiveRuntime(deps), deps };
 }
 describe("proactive runtime trusted identity", () => {
+  it("turns off only this bot's fallback timers and preserves its other configuration", async () => {
+    const scope = "bot:one";
+    let config = { fallbackMs: 10800000, hooks: [{ id: "keep", source: "webhook" }] };
+    let revision = 1;
+    const timers = [
+      { scope, id: `fallback:${scope}:a`, state: "pending" },
+      { scope, id: `fallback:${scope}:b`, state: "pending" },
+      { scope, id: `self:${scope}:keep`, state: "pending" },
+      { scope: "bot:other", id: "fallback:bot:other:x", state: "pending" },
+    ];
+    const query = vi.fn(async (sql: string, ...args: unknown[]) => {
+      if (sql.startsWith('SELECT "revision", "config"')) return [{ revision, config }];
+      if (sql.startsWith('UPDATE "proactive_timers"')) {
+        const fallbackOnly = sql.includes('"id" LIKE \'fallback:%\'');
+        for (const timer of timers) if (timer.scope === args[0] && timer.state === "pending" && (!fallbackOnly || timer.id.startsWith("fallback:"))) timer.state = "cancelled";
+      }
+      if (sql.startsWith('UPDATE "proactive_controls" SET "revision"')) {
+        revision = Number(args[1]);
+        config = JSON.parse(String(args[2]));
+      }
+      if (sql.startsWith('SELECT MIN("dueAt")')) return [{ next: null }];
+      return [];
+    });
+    const prisma = {
+      bot: { findFirst: vi.fn().mockResolvedValue({ id: "one" }) },
+      $queryRawUnsafe: query,
+      $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({ $queryRawUnsafe: query }),
+    };
+    const runtime = createProactiveRuntime({ prisma, jobs: { enqueue: vi.fn(), cancel: vi.fn() }, events: { sendUserMessage: vi.fn() }, enabledBots: "one", judge: { version: "test", judge: vi.fn() } } as never);
+    await expect(runtime.control({ botId: "one", spaceId: "space", userId: "owner", action: "interval", fallbackMs: 0 })).resolves.toEqual({ updated: true });
+    expect(config).toEqual({ fallbackMs: 0, hooks: [{ id: "keep", source: "webhook" }] });
+    expect(timers.map((timer) => timer.state)).toEqual(["cancelled", "cancelled", "pending", "pending"]);
+  });
   it("rejects controls and owner configuration outside authenticated ownership", async () => {
     const { runtime, prisma } = fixture();
     const identity = { botId: "one", spaceId: "space", userId: "owner" };

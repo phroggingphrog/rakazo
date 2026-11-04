@@ -24,6 +24,7 @@ describe("proactive configuration", () => {
     expect(() => validateProactiveConfig({ decisionOrder: [...DEFAULT_POLICY_ORDER].reverse() })).not.toThrow();
     expect(() => validateProactiveConfig({ decisionOrder: ["judge"] })).toThrow("every policy stage");
     expect(() => validateProactiveConfig({ fallbackMs: 299999 })).toThrow("five minutes");
+    expect(() => validateProactiveConfig({ fallbackMs: 0 })).not.toThrow();
     expect(() => validateProactiveConfig({ hooks: Array.from({length: 21}, (_, i) => ({ id: String(i), source: "test" })) })).toThrow("twenty");
   });
   it("versions and audits mutations atomically", async () => {
