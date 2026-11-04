@@ -10,6 +10,8 @@ import type { PoolClient } from "pg";
 import { returnBotMessageOutcome } from "./bot-messages.js";
 import { reconcileCallRequests } from "./call-request.js";
 import { scheduleComputerControlExpiry } from "./computer-control.js";
+import type { McpContinuationCursor } from "./mcp-approval-continuations.js";
+import { reconcileMcpApprovalContinuations } from "./mcp-approval-continuations.js";
 import { findRunRecoveryBlockers } from "./run-recovery.js";
 import { reconcileStuckWork } from "./stuck-work.js";
 import { isLoopGuardStopText } from "./tool-loop.js";
@@ -140,6 +142,7 @@ export function createJobReconciler(
   let reconciling: Promise<void> | undefined;
   let lastCompletedAt = Date.now();
   let stuckCursor: Cursor | undefined;
+  let mcpContinuationCursor: McpContinuationCursor | undefined;
   let runCursor: Cursor | undefined;
   let routineCursor: Cursor | undefined;
   let controlCursor: ControlCursor | undefined;
@@ -172,6 +175,16 @@ export function createJobReconciler(
       for (const result of auxiliary) {
         if (result.status === "rejected")
           getLogger().error("auxiliary reconciliation", result.reason);
+      }
+
+      try {
+        mcpContinuationCursor = await reconcileMcpApprovalContinuations(
+          deps.prisma,
+          batchSize,
+          mcpContinuationCursor,
+        );
+      } catch (error) {
+        getLogger().error("MCP approval continuation scan", error);
       }
 
       const now = new Date();

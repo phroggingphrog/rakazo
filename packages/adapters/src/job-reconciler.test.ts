@@ -39,6 +39,7 @@ function fakePrisma(
 ) {
   return {
     computerExecutionLease: { findMany: vi.fn(async () => []) },
+    mcpApprovalContinuation: { findMany: vi.fn(async () => []) },
     message: { findMany: vi.fn(async () => []) },
     run: { findMany: vi.fn(async () => runs) },
     routine: { findMany: vi.fn(async () => routines) },
@@ -77,6 +78,7 @@ describe("createJobReconciler", () => {
     expect(reconcileCloudAgents).toHaveBeenCalledOnce();
     expect(reconcileComputerUpdates).toHaveBeenCalledOnce();
     expect(prisma.run.findMany).toHaveBeenCalled();
+    expect(prisma.mcpApprovalContinuation.findMany).toHaveBeenCalledOnce();
     expect(prisma.routine.findMany).toHaveBeenCalled();
     expect(prisma.computer.findMany).toHaveBeenCalled();
     expect(prisma.messagingOutbound.findFirst).toHaveBeenCalled();

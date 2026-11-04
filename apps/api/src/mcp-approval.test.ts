@@ -32,6 +32,8 @@ type MessageQuery = { where?: { blocks?: { array_contains?: unknown } } };
 
 function fixture(blocks: unknown[]) {
   const tx = {
+    $queryRaw: vi.fn(async () => [{ id: "group-thread" }]),
+    mcpApprovalContinuation: { updateMany: vi.fn(async () => ({ count: 0 })) },
     message: {
       findMany: vi.fn(
         async (_query: MessageQuery): Promise<unknown[]> => [
@@ -193,7 +195,52 @@ describe("resolveMcpApprovalCards", () => {
       { botId: "bot", serverId: "srv-a", status: "connected", threadId: "group-thread" },
       effect,
     );
-    expect(effect).toHaveBeenCalledWith(tx, { assign: true, resolved: true, assignmentOnly: true });
+    expect(effect).toHaveBeenCalledWith(tx, {
+      assign: true,
+      resolved: true,
+      assignmentOnly: true,
+      messageId: "card-message",
+      decisionSeq: 1,
+    });
+  });
+
+  it("does not infer an author for an unattributed legacy group card", async () => {
+    const blocks = [{ kind: "mcp_approval", name: "A", serverId: "srv-a", status: "pending" }];
+    const { deps, actor, tx } = fixture(blocks);
+    tx.message.findMany.mockResolvedValue([{ id: "legacy", botId: null, blocks }]);
+    vi.mocked(deps.prisma.thread.findMany).mockResolvedValue([
+      { id: "group-thread", botId: null },
+    ] as never);
+    const effect = vi.fn(async () => "saved");
+    await resolveMcpApprovalCards(
+      deps,
+      actor,
+      { botId: "bot", serverId: "srv-a", status: "connected", threadId: "group-thread" },
+      effect,
+    );
+    expect(effect).toHaveBeenCalledWith(tx, { assign: true, resolved: true });
+  });
+
+  it("attributes an unattributed legacy card in a direct bot thread", async () => {
+    const blocks = [{ kind: "mcp_approval", name: "A", serverId: "srv-a", status: "pending" }];
+    const { deps, actor, tx } = fixture(blocks);
+    tx.message.findMany.mockResolvedValue([{ id: "legacy", botId: null, blocks }]);
+    vi.mocked(deps.prisma.thread.findMany).mockResolvedValue([
+      { id: "direct-thread", botId: "bot" },
+    ] as never);
+    const effect = vi.fn(async () => "saved");
+    await resolveMcpApprovalCards(
+      deps,
+      actor,
+      { botId: "bot", serverId: "srv-a", status: "connected", threadId: "direct-thread" },
+      effect,
+    );
+    expect(effect).toHaveBeenCalledWith(tx, {
+      assign: true,
+      resolved: true,
+      messageId: "legacy",
+      decisionSeq: 1,
+    });
   });
 
   it("does not inherit an assignment-only flag from a dismissed card", async () => {
@@ -215,7 +262,12 @@ describe("resolveMcpApprovalCards", () => {
       { botId: "bot", serverId: "srv-a", status: "connected", threadId: "group-thread" },
       effect,
     );
-    expect(effect).toHaveBeenCalledWith(tx, { assign: true, resolved: true });
+    expect(effect).toHaveBeenCalledWith(tx, {
+      assign: true,
+      resolved: true,
+      messageId: "card-message",
+      decisionSeq: 1,
+    });
   });
 
   it("does not assign when a dismissed card already won", async () => {
@@ -276,6 +328,16 @@ describe("resolveMcpApprovalCards", () => {
       data: {
         blocks: [{ ...blocks[0], status: "pending" }, blocks[1], blocks[2]],
       },
+    });
+    expect(tx.mcpApprovalContinuation.updateMany).toHaveBeenCalledWith({
+      where: {
+        spaceId: "space",
+        userId: "user",
+        botId: "bot",
+        serverId: "srv-a",
+        status: "pending",
+      },
+      data: { status: "cancelled", cancelledAt: expect.any(Date) },
     });
   });
 

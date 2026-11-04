@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { ORPCError } from "@orpc/server";
-import { runContinueJob } from "@rakazo/adapter-kit";
 import {
   createPluginMarketplace,
   isTransientFetchError,
@@ -35,7 +34,7 @@ import {
 } from "../availability.js";
 import { searchIntegrationCatalog } from "../integration-catalog.js";
 import {
-  queueMcpConnectedRun,
+  createMcpApprovalContinuation,
   resolveMcpApprovalCards,
   revertConnectedMcpApprovals,
 } from "../mcp-approval.js";
@@ -805,26 +804,24 @@ export function mcpRoutes(ctx: RouterContext) {
                 },
                 update: {},
               });
-              const runId =
-                input.threadId && decision.resolved
-                  ? await queueMcpConnectedRun(tx, context.actor, {
-                      botId: bot.id,
-                      serverId: server.id,
-                      threadId: input.threadId,
-                      assignmentOnly: decision.assignmentOnly,
-                      allowAllTools: assignment.allowAllTools,
-                    })
-                  : null;
-              return { assignment, runId };
+              if (
+                input.threadId &&
+                decision.resolved &&
+                decision.messageId &&
+                decision.decisionSeq !== undefined
+              )
+                await createMcpApprovalContinuation(tx, context.actor, {
+                  botId: bot.id,
+                  serverId: server.id,
+                  threadId: input.threadId,
+                  messageId: decision.messageId,
+                  decisionSeq: decision.decisionSeq,
+                  assignmentOnly: decision.assignmentOnly,
+                });
+              return { assignment };
             },
           );
           if (!row) throw new IsolationError();
-          if (row.runId) {
-            // The queued run is durable; a missed wake is repaired by the reconciler.
-            await deps.jobs.enqueue(runContinueJob(row.runId)).catch((error) => {
-              getLogger().error("mcp connected enqueue", error);
-            });
-          }
           return mcpAssignmentDto(row.assignment);
         }),
         dismiss: authed.mcp.assignments.dismiss.handler(async ({ context, input }) => {

@@ -3731,6 +3731,7 @@ describe("stopThreadRuns", () => {
         findUnique: vi.fn().mockResolvedValue({ status: "cancelled" }),
       },
       steeringMessage: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      mcpApprovalContinuation: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
       secret: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
       computer: {
         // Production team ownership is lease-only: Computer.executionRunId stays null.
@@ -3805,6 +3806,15 @@ describe("stopThreadRuns", () => {
       where: { runId: { in: ["run-a", "run-b"] } },
       select: { computerId: true, botId: true, runId: true, fence: true },
     });
+    expect(transaction.mcpApprovalContinuation.updateMany).toHaveBeenCalledWith({
+      where: {
+        spaceId: "workspace-1",
+        userId: "user-1",
+        threadId: "thread-1",
+        status: "pending",
+      },
+      data: { status: "cancelled", cancelledAt: expect.any(Date) },
+    });
     expect(execute).toHaveBeenCalledTimes(2);
     expect(execute).toHaveBeenCalledWith(
       expect.objectContaining({ providerRef: "computer-team" }),
@@ -3871,6 +3881,7 @@ describe("stopThreadRuns", () => {
         findUnique: vi.fn().mockResolvedValue({ status: "cancelled" }),
       },
       steeringMessage: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      mcpApprovalContinuation: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
       secret: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
       computer: {
         // Selected via lease for cancelled run A, but legacy columns still name
@@ -3989,6 +4000,7 @@ describe("stopThreadRuns", () => {
         findUnique: vi.fn().mockResolvedValue({ status: "cancelled" }),
       },
       steeringMessage: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      mcpApprovalContinuation: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
       secret: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
       computer: { findMany: vi.fn().mockResolvedValue([]) },
       computerExecutionLease: { findMany: vi.fn().mockResolvedValue([]) },
@@ -4094,6 +4106,7 @@ describe("stopThreadRuns", () => {
         findUnique: vi.fn(),
       },
       steeringMessage: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      mcpApprovalContinuation: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
       secret: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
       computer: { findMany: vi.fn() },
       computerExecutionLease: { findMany: vi.fn() },

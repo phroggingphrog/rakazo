@@ -1,5 +1,5 @@
 import type { Actor, MessageBlock } from "@rakazo/contracts";
-import { QUEUE_HOLDING_RUN_STATUSES } from "@rakazo/core";
+import { mcpConnectedPrompt, QUEUE_HOLDING_RUN_STATUSES } from "@rakazo/core";
 import type { Prisma, PrismaClient, ThreadEvents } from "@rakazo/db";
 import {
   appendEventInTransaction,
@@ -29,6 +29,9 @@ export type McpApprovalDecision = {
   resolved: boolean;
   /** At least one resolved card describes an assignment to an existing integration. */
   assignmentOnly?: true;
+  /** An unambiguous newly resolved card in this chat, when one exists. */
+  messageId?: string;
+  decisionSeq?: number;
 };
 
 export type ThreadSeq = {
@@ -110,17 +113,21 @@ async function rewriteCards(
   dismissed: boolean;
   connected: boolean;
   assignmentOnly: boolean;
+  messageId?: string;
+  decisionSeq?: number;
 }> {
   const seqs: ThreadSeq[] = [];
   let flipped = 0;
   let dismissed = false;
   let connected = false;
   let assignmentOnly = false;
+  let messageId: string | undefined;
+  let decisionSeq: number | undefined;
   for (const thread of threads) {
     const messages = await tx.message.findMany({
       where: { threadId: thread.id },
       select: { id: true, botId: true, blocks: true },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 100,
     });
     for (const message of messages) {
@@ -135,6 +142,9 @@ async function rewriteCards(
         else if (block.status === "connected") connected = true;
       }
       if (!matching.some(selectable)) continue;
+      const useForContinuation =
+        !messageId &&
+        (message.botId === input.botId || (!message.botId && thread.botId === input.botId));
       if (matching.some((block) => selectable(block) && block.assignmentOnly === true))
         assignmentOnly = true;
       const next = blocks.map((block) =>
@@ -154,9 +164,13 @@ async function rewriteCards(
         payload: { messageId: message.id, role: "bot", blocks: next },
       });
       seqs.push({ threadId: thread.id, seq: event.seq });
+      if (useForContinuation) {
+        messageId = message.id;
+        decisionSeq = event.seq;
+      }
     }
   }
-  return { seqs, flipped, dismissed, connected, assignmentOnly };
+  return { seqs, flipped, dismissed, connected, assignmentOnly, messageId, decisionSeq };
 }
 
 /** Flip every open mcp_approval card for this server. The read, the writes,
@@ -174,6 +188,8 @@ export async function resolveMcpApprovalCards<T>(
   const committed = await withTransactionRetry(() =>
     deps.prisma.$transaction(
       async (tx) => {
+        if (input.threadId && input.status === "connected")
+          await tx.$queryRaw`SELECT id FROM threads WHERE id = ${input.threadId} AND "spaceId" = ${actor.spaceId} AND "userId" = ${actor.userId} FOR UPDATE`;
         const selectable =
           input.threadId === undefined
             ? (block: ApprovalBlock) => block.status !== "connected"
@@ -191,6 +207,10 @@ export async function resolveMcpApprovalCards<T>(
               assign,
               resolved,
               ...(painted.assignmentOnly ? { assignmentOnly: true as const } : {}),
+              ...(input.threadId && painted.messageId ? { messageId: painted.messageId } : {}),
+              ...(input.threadId && painted.decisionSeq !== undefined
+                ? { decisionSeq: painted.decisionSeq }
+                : {}),
             })
           : undefined;
         return { seqs: painted.seqs, value };
@@ -200,6 +220,61 @@ export async function resolveMcpApprovalCards<T>(
   );
   for (const event of committed.seqs) await deps.events.notify(event.threadId, event.seq);
   return committed.value;
+}
+
+/** Persist an approved card as a durable intent without starting another chat run yet. */
+export async function createMcpApprovalContinuation(
+  tx: Prisma.TransactionClient,
+  actor: Actor,
+  input: {
+    botId: string;
+    serverId: string;
+    threadId: string;
+    messageId: string;
+    decisionSeq: number;
+    assignmentOnly?: boolean;
+  },
+): Promise<void> {
+  const [thread, bot] = await Promise.all([
+    tx.thread.findFirst({
+      where: {
+        id: input.threadId,
+        spaceId: actor.spaceId,
+        userId: actor.userId,
+        OR: [
+          { botId: input.botId },
+          { group: { archivedAt: null, members: { some: { botId: input.botId } } } },
+        ],
+      },
+      select: { id: true },
+    }),
+    tx.bot.findFirst({
+      where: { id: input.botId, spaceId: actor.spaceId, userId: actor.userId, archivedAt: null },
+      select: { id: true },
+    }),
+  ]);
+  if (!thread || !bot) return;
+  await tx.mcpApprovalContinuation.upsert({
+    where: {
+      messageId_botId_serverId_decisionSeq: {
+        messageId: input.messageId,
+        botId: input.botId,
+        serverId: input.serverId,
+        decisionSeq: input.decisionSeq,
+      },
+    },
+    create: {
+      spaceId: actor.spaceId,
+      userId: actor.userId,
+      threadId: input.threadId,
+      botId: input.botId,
+      serverId: input.serverId,
+      messageId: input.messageId,
+      assignmentOnly: input.assignmentOnly === true,
+      decisionSeq: input.decisionSeq,
+    },
+    update: {},
+  });
 }
 
 /** A removed assignment must not leave its card saying the server is connected.
@@ -213,8 +288,20 @@ export async function revertConnectedMcpApprovals(
 ): Promise<ThreadSeq[]> {
   const selectable = (block: ApprovalBlock) =>
     input.status === "dismissed" ? block.status !== "dismissed" : block.status === "connected";
-  const paint = (client: Prisma.TransactionClient, threads: ApprovalThread[]) =>
-    rewriteCards(client, actor, threads, input, selectable).then((painted) => painted.seqs);
+  const paint = async (client: Prisma.TransactionClient, threads: ApprovalThread[]) => {
+    const painted = await rewriteCards(client, actor, threads, input, selectable);
+    await client.mcpApprovalContinuation.updateMany({
+      where: {
+        spaceId: actor.spaceId,
+        userId: actor.userId,
+        botId: input.botId,
+        serverId: input.serverId,
+        status: "pending",
+      },
+      data: { status: "cancelled", cancelledAt: new Date() },
+    });
+    return painted.seqs;
+  };
   if (tx) return paint(tx, await threadsForBot(tx, actor, input.botId));
   const threads = await threadsForBot(deps.prisma, actor, input.botId);
   const seqs = await withTransactionRetry(() =>
@@ -267,6 +354,10 @@ async function closeServerCards(
     });
     seqs.push({ threadId: message.threadId, seq: event.seq });
   }
+  await client.mcpApprovalContinuation.updateMany({
+    where: { spaceId: actor.spaceId, userId: actor.userId, serverId, status: "pending" },
+    data: { status: "cancelled", cancelledAt: new Date() },
+  });
   return seqs;
 }
 
@@ -286,20 +377,6 @@ export async function dismissMcpServerApprovals(
   );
   for (const event of seqs) await deps.events.notify(event.threadId, event.seq);
   return seqs;
-}
-
-function mcpConnectedPrompt(
-  name: string,
-  input: { assignmentOnly?: boolean; allowAllTools?: boolean },
-): string {
-  if (input.assignmentOnly || input.allowAllTools === false) {
-    const restricted =
-      input.allowAllTools === false
-        ? " The existing assignment is restricted to its allowed tools."
-        : "";
-    return `The user approved the MCP server ${JSON.stringify(name)} for this bot.${restricted} The assignment was saved, but provider sign-in and tool availability have not been verified. Continue with the user's request and check what is available before claiming the integration works.`;
-  }
-  return `The user just connected the MCP server ${JSON.stringify(name)} from its approval card, so its tools are available now. Carry on with what they asked for. If nothing is left to do, confirm in one short sentence.`;
 }
 
 /** Approving a card in a chat is the user's turn: queue a hidden-prompt run (like

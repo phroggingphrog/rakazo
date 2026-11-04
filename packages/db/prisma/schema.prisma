@@ -896,6 +896,7 @@ model Message {
   externalTranscriptFor  ExternalMessage?
   steeringMessages SteeringMessage[]
   routineNotification RoutineNotificationIntent?
+  mcpApprovalContinuations McpApprovalContinuation[]
   createdAt        DateTime  @default(now())
 
   @@unique([threadId, seq])
@@ -992,6 +993,7 @@ model Run {
   steeringMessages     SteeringMessage[]
   externalMessage      ExternalMessage?
   routineNotification  RoutineNotificationIntent?
+  mcpApprovalContinuation McpApprovalContinuation?
 
   @@unique([spaceId, clientNonce])
   @@index([status, wakeAt])
@@ -1037,6 +1039,33 @@ model RoutineNotificationIntent {
   @@index([spaceId, userId])
   @@index([receiptStatus, receiptCheckAt])
   @@map("routine_notification_intents")
+}
+
+/// An approved connection waiting for its chat's current work to finish.
+model McpApprovalContinuation {
+  id             String   @id @default(cuid())
+  spaceId        String
+  userId         String
+  threadId       String
+  botId          String
+  serverId       String
+  messageId      String
+  message        Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  assignmentOnly Boolean  @default(false)
+  decisionSeq    Int      @default(0)
+  status         String   @default("pending")
+  runId          String?  @unique
+  run            Run?     @relation(fields: [runId], references: [id], onDelete: SetNull)
+  materializedAt DateTime?
+  cancelledAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([messageId, botId, serverId, decisionSeq], map: "mcp_approval_continuations_occurrence_key")
+  @@index([status, createdAt, id], map: "mcp_approval_continuations_status_created_id_idx")
+  @@index([spaceId, userId, threadId, botId, status], map: "mcp_approval_continuations_owner_thread_bot_status_idx")
+  @@index([threadId, botId, status, decisionSeq, id], map: "mcp_approval_continuations_thread_order_idx")
+  @@map("mcp_approval_continuations")
 }
 
 model SteeringMessage {

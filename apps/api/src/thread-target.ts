@@ -1466,6 +1466,15 @@ export async function stopThreadRuns(
         message: { threadId: target.threadId },
       },
     });
+    await tx.mcpApprovalContinuation.updateMany({
+      where: {
+        spaceId: actor.spaceId,
+        userId: actor.userId,
+        threadId: target.threadId,
+        status: "pending",
+      },
+      data: { status: "cancelled", cancelledAt: new Date() },
+    });
     // Snapshot teardown coordinates before commit. Once cancellation becomes
     // visible, a worker can release its lease / execution columns immediately; a
     // later lookup would then miss the sandbox work this request must stop.

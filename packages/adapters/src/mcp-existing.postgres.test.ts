@@ -5,6 +5,11 @@ import { MessageBlock } from "@rakazo/contracts";
 import { createDb, runAsSystem, runAsTenant } from "@rakazo/db";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  createMcpApprovalContinuation,
+  resolveMcpApprovalCards,
+  revertConnectedMcpApprovals,
+} from "../../../apps/api/src/mcp-approval.js";
 import type { ExecutorDeps } from "./executor-deps.js";
 import { connectExistingMcpFromTool } from "./mcp-server-tool.js";
 
@@ -80,6 +85,7 @@ describeDatabase("existing integration tenant authorization (PostgreSQL)", () =>
     const id = randomUUID();
     const scope = { userId: `existing-user-${id}`, spaceId: `existing-space-${id}` };
     const other = { userId: `existing-other-${id}`, spaceId: `existing-other-space-${id}` };
+    const movedSpaceId = `existing-moved-space-${id}`;
     const botId = randomUUID(),
       threadId = randomUUID(),
       serverId = randomUUID(),
@@ -104,6 +110,13 @@ describeDatabase("existing integration tenant authorization (PostgreSQL)", () =>
           data: { id: item.spaceId, organizationId, name: "Synthetic", isDefault: true },
         });
       }
+      await db.prisma.space.create({
+        data: {
+          id: movedSpaceId,
+          organizationId: `existing-org-${scope.userId}`,
+          name: "Synthetic moved",
+        },
+      });
     });
     await runAsTenant(scope, async () => {
       await db.prisma.bot.create({
@@ -236,6 +249,134 @@ describeDatabase("existing integration tenant authorization (PostgreSQL)", () =>
           }),
         ).toEqual(before);
       }
+      const actor = {
+        ...scope,
+        email: `${scope.userId}@example.invalid`,
+        isDeploymentOwner: false,
+      };
+      const approvalDeps = {
+        prisma: db.prisma,
+        events: { notify: vi.fn(async () => undefined) },
+      } as never;
+      const approve = (fail: boolean) =>
+        resolveMcpApprovalCards(
+          approvalDeps,
+          actor,
+          { botId, serverId, threadId, status: "connected" },
+          async (tx, decision) => {
+            await tx.botMcpServer.upsert({
+              where: { botId_serverId: { botId, serverId } },
+              create: { ...scope, botId, serverId, allowAllTools: true, allowedTools: [] },
+              update: {},
+            });
+            if (decision.resolved && decision.messageId && decision.decisionSeq !== undefined)
+              await createMcpApprovalContinuation(tx, actor, {
+                botId,
+                serverId,
+                threadId,
+                messageId: decision.messageId,
+                decisionSeq: decision.decisionSeq,
+                assignmentOnly: decision.assignmentOnly,
+              });
+            if (fail) throw new Error("synthetic rollback");
+          },
+        );
+      await expect(approve(true)).rejects.toThrow("synthetic rollback");
+      expect(await db.prisma.mcpApprovalContinuation.count({ where: { ...scope, serverId } })).toBe(
+        0,
+      );
+      expect(await db.prisma.botMcpServer.count({ where: { ...scope, botId, serverId } })).toBe(0);
+      expect(
+        (await db.prisma.message.findUniqueOrThrow({ where: { id: messages[0]!.id } })).blocks,
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "mcp_approval", status: "pending" }),
+        ]),
+      );
+      await approve(false);
+      const produced = await db.prisma.mcpApprovalContinuation.findMany({
+        where: { ...scope, serverId },
+      });
+      expect(produced).toHaveLength(1);
+      const approvedEvent = await db.prisma.event.findFirstOrThrow({
+        where: { threadId, seq: produced[0]!.decisionSeq },
+      });
+      expect(approvedEvent.type).toBe("thread.message.updated");
+      await approve(false);
+      expect(await db.prisma.mcpApprovalContinuation.count({ where: { ...scope, serverId } })).toBe(
+        1,
+      );
+      await revertConnectedMcpApprovals(approvalDeps, actor, {
+        botId,
+        serverId,
+        status: "pending",
+      });
+      expect(
+        (
+          await db.prisma.mcpApprovalContinuation.findUniqueOrThrow({
+            where: { id: produced[0]!.id },
+          })
+        ).status,
+      ).toBe("cancelled");
+      await approve(false);
+      const reapproved = await db.prisma.mcpApprovalContinuation.findMany({
+        where: { ...scope, serverId },
+        orderBy: { decisionSeq: "asc" },
+      });
+      expect(reapproved).toHaveLength(2);
+      expect(reapproved[1]!.messageId).toBe(produced[0]!.messageId);
+      expect(reapproved[1]!.decisionSeq).toBeGreaterThan(produced[0]!.decisionSeq);
+      expect(reapproved[1]!.status).toBe("pending");
+      await approve(false);
+      expect(await db.prisma.mcpApprovalContinuation.count({ where: { ...scope, serverId } })).toBe(
+        2,
+      );
+      const intent = reapproved[1]!;
+      const secondCard = await db.prisma.message.findFirstOrThrow({
+        where: { threadId, runId, id: { not: intent.messageId } },
+      });
+      const removedBotIntent = await db.prisma.mcpApprovalContinuation.create({
+        data: {
+          ...scope,
+          threadId,
+          botId,
+          serverId,
+          messageId: secondCard.id,
+          assignmentOnly: true,
+        },
+      });
+      const wrongOwner = await runAsTenant(other, () =>
+        db.prisma.mcpApprovalContinuation.updateMany({
+          where: { id: intent.id },
+          data: { status: "cancelled", cancelledAt: new Date() },
+        }),
+      );
+      expect(wrongOwner.count).toBe(0);
+      await runAsSystem("move synthetic integration out of the approval space", () =>
+        db.prisma.mcpServer.update({ where: { id: serverId }, data: { spaceId: movedSpaceId } }),
+      );
+      expect(
+        await db.prisma.mcpServer.findFirst({ where: { id: serverId, spaceId: scope.spaceId } }),
+      ).toBeNull();
+      const cancelled = await db.prisma.mcpApprovalContinuation.updateMany({
+        where: { id: intent.id, ...scope, threadId, botId, status: "pending" },
+        data: { status: "cancelled", cancelledAt: new Date() },
+      });
+      expect(cancelled.count).toBe(1);
+      await expect(
+        db.prisma.mcpApprovalContinuation.update({
+          where: { id: intent.id },
+          data: { status: "pending", cancelledAt: null },
+        }),
+      ).rejects.toThrow();
+      await runAsSystem("change a synthetic bot identity to simulate a missing original bot", () =>
+        db.prisma.bot.update({ where: { id: botId }, data: { id: `moved-${id}` } }),
+      );
+      const afterBotRemoved = await db.prisma.mcpApprovalContinuation.updateMany({
+        where: { id: removedBotIntent.id, ...scope, threadId, status: "pending" },
+        data: { status: "cancelled", cancelledAt: new Date() },
+      });
+      expect(afterBotRemoved.count).toBe(1);
     });
   });
 });
