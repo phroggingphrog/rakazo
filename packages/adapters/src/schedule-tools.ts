@@ -273,6 +273,37 @@ export async function userTimeZone(prisma: PrismaClient, userId: string): Promis
 /** Each routine is an unattended model run, so a looping bot must not stack them. */
 export const MAX_ACTIVE_ROUTINES_PER_BOT = 50;
 
+/** Serialize all chat-created schedules for the same bot before checking name and capacity. */
+async function createRoutineWithBotLock(
+  deps: Pick<ScheduleToolDeps, "prisma">,
+  data: Prisma.RoutineUncheckedCreateInput,
+) {
+  return deps.prisma.$transaction(async (tx) => {
+    const bots = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM bots WHERE id = ${data.botId} AND "spaceId" = ${data.spaceId}
+        AND "userId" = ${data.userId} AND "archivedAt" IS NULL FOR UPDATE`;
+    if (!bots.length) return { error: "Bot not found." } as const;
+    const active = await tx.routine.findMany({
+      where: { spaceId: data.spaceId, botId: data.botId, active: true },
+      select: { id: true, name: true, threadId: true },
+    });
+    const sameName = active.find(
+      (row) =>
+        row.threadId === data.threadId &&
+        row.name.trim().toLowerCase() === data.name.trim().toLowerCase(),
+    );
+    if (sameName)
+      return {
+        error: `An active routine named "${sameName.name}" already exists (${sameName.id}). Update or cancel it instead.`,
+      } as const;
+    if (active.length >= MAX_ACTIVE_ROUTINES_PER_BOT)
+      return {
+        error: `This bot already has ${MAX_ACTIVE_ROUTINES_PER_BOT} active routines. Cancel one before adding another.`,
+      } as const;
+    return { row: await tx.routine.create({ data }) } as const;
+  });
+}
+
 function sourceRequestKey(effectKey: string): string {
   return createHash("sha256").update(`chat-source:${effectKey}`).digest("hex");
 }
@@ -362,21 +393,21 @@ export async function createScheduleFromTool(
   const resolved = resolveScheduleTiming(input.schedule, timezone);
   if (!resolved.ok) return { error: resolved.error };
 
-  const row = await deps.prisma.routine.create({
-    data: {
-      spaceId: input.spaceId,
-      botId: routineBotId,
-      userId: input.userId,
-      threadId: routineThreadId,
-      name,
-      prompt,
-      crons: [resolved.cron],
-      timezone,
-      notify: true,
-      active: true,
-      nextRunAt: resolved.nextRunAt,
-    },
+  const created = await createRoutineWithBotLock(deps, {
+    spaceId: input.spaceId,
+    botId: routineBotId,
+    userId: input.userId,
+    threadId: routineThreadId,
+    name,
+    prompt,
+    crons: [resolved.cron],
+    timezone,
+    notify: true,
+    active: true,
+    nextRunAt: resolved.nextRunAt,
   });
+  if ("error" in created) return created;
+  const row = created.row;
 
   try {
     await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
@@ -656,22 +687,22 @@ async function createWatchFromTool(
     return { error: error instanceof Error ? error.message : "Invalid change trigger." };
   }
   const nextRunAt = new Date(Date.now() + 2_000);
-  const row = await deps.prisma.routine.create({
-    data: {
-      spaceId: input.spaceId,
-      botId: input.botId,
-      userId: input.userId,
-      threadId: input.threadId,
-      name: input.name,
-      prompt: input.prompt,
-      crons: [],
-      timezone: input.timezone,
-      notify: true,
-      active: true,
-      watch: parsed.data as Prisma.InputJsonValue,
-      nextRunAt,
-    },
+  const created = await createRoutineWithBotLock(deps, {
+    spaceId: input.spaceId,
+    botId: input.botId,
+    userId: input.userId,
+    threadId: input.threadId,
+    name: input.name,
+    prompt: input.prompt,
+    crons: [],
+    timezone: input.timezone,
+    notify: true,
+    active: true,
+    watch: parsed.data as Prisma.InputJsonValue,
+    nextRunAt,
   });
+  if ("error" in created) return created;
+  const row = created.row;
   try {
     await deps.jobs.enqueue(routineWakeupJob(row.id, nextRunAt));
   } catch {

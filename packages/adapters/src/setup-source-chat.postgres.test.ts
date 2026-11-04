@@ -69,7 +69,7 @@ describeDatabase("scheduled setup source binding (PostgreSQL)", () => {
       } as typeof pg.Pool.prototype.connect);
       restorePool = () => connect.mockRestore();
     }
-    db = createDb(url!, { encryptContent: false, poolMax: 2 });
+    db = createDb(url!, { encryptContent: false, poolMax: 4 });
   });
 
   afterAll(async () => {
@@ -374,5 +374,122 @@ describeDatabase("scheduled setup source binding (PostgreSQL)", () => {
     await tick(due4);
     expect(await scheduled()).toHaveLength(2);
     expect(calls).toHaveLength(1);
+
+    // An ordinary schedule and a source-bound schedule compete under the same bot lock.
+    const { source: _source, ...ordinaryArgs } = call.args;
+    const competeWhileBotLocked = async (ordinary: unknown, source: unknown) => {
+      let release!: () => void;
+      let locked!: () => void;
+      let started!: () => void;
+      const lockReady = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const unlock = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const bothTransactions = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const holder = runAsTenant(scope, () =>
+        db.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT id FROM bots WHERE id = ${botId} FOR UPDATE`;
+          locked();
+          await unlock;
+        }),
+      );
+      await lockReady;
+      let transactions = 0;
+      const prisma = new Proxy(db.prisma, {
+        get(target, key, receiver) {
+          if (key === "$transaction")
+            return (...args: unknown[]) => {
+              if (++transactions === 2) started();
+              return Reflect.apply(target.$transaction, target, args);
+            };
+          const value = Reflect.get(target, key, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const raceCtx = { ...ctx, deps: { ...deps, prisma } };
+      const pending = Promise.all([
+        runAsTenant(scope, () => taskTools.schedule_create!(raceCtx as never, ordinary as never)),
+        runAsTenant(scope, () => taskTools.schedule_create!(raceCtx as never, source as never)),
+      ]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          bothTransactions,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("Both creations must reach the bot lock")),
+              3000,
+            );
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+        release();
+      }
+      await holder;
+      return pending;
+    };
+    const crossPath = await competeWhileBotLocked(
+      {
+        ...call,
+        effectKey: `ordinary-${suffix}`,
+        args: { ...ordinaryArgs, name: "Cross-path name" },
+      },
+      { ...call, effectKey: `source-${suffix}`, args: { ...call.args, name: "Cross-path name" } },
+    );
+    expect(crossPath.filter((result) => (result as { ok?: boolean }).ok)).toHaveLength(1);
+    expect(
+      crossPath.filter((result) =>
+        (result as { error?: string }).error?.includes("already exists"),
+      ),
+    ).toHaveLength(1);
+    expect(
+      await runAsTenant(scope, () =>
+        db.prisma.routine.count({
+          where: { ...scope, botId, name: "Cross-path name", active: true },
+        }),
+      ),
+    ).toBe(1);
+
+    const activeCount = await runAsTenant(scope, () =>
+      db.prisma.routine.count({ where: { ...scope, botId, active: true } }),
+    );
+    await runAsTenant(scope, () =>
+      db.prisma.routine.createMany({
+        data: Array.from({ length: 49 - activeCount }, (_, index) => ({
+          ...scope,
+          botId,
+          threadId,
+          name: `Capacity filler ${index}`,
+          prompt: "Synthetic",
+          crons: ["0 9 * * *"],
+          timezone: "UTC",
+          active: true,
+        })),
+      }),
+    );
+    const capacity = await competeWhileBotLocked(
+      {
+        ...call,
+        effectKey: `ordinary-limit-${suffix}`,
+        args: { ...ordinaryArgs, name: "Ordinary at limit" },
+      },
+      {
+        ...call,
+        effectKey: `source-limit-${suffix}`,
+        args: { ...call.args, name: "Source at limit" },
+      },
+    );
+    expect(capacity.filter((result) => (result as { ok?: boolean }).ok)).toHaveLength(1);
+    expect(capacity.filter((result) => (result as { error?: string }).error)).toHaveLength(1);
+    expect(
+      await runAsTenant(scope, () =>
+        db.prisma.routine.count({ where: { ...scope, botId, active: true } }),
+      ),
+    ).toBe(50);
   });
 });
