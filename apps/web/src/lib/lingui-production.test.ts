@@ -98,7 +98,7 @@ describe("production Lingui fallback", () => {
         expect(found, `missing production descriptor for ${message}`).toBeDefined();
         return found!;
       };
-      const heading = descriptor("Set up email monitor");
+      const heading = descriptor("Set up source monitor");
       const state = descriptor("Setup changed; source not verified");
       const assignment = descriptor("Assignment saved");
       const name = descriptor("Assign MCP server “{name}”");
@@ -134,7 +134,7 @@ describe("production Lingui fallback", () => {
           renderToStaticMarkup(
             createElement(I18nProvider, { i18n }, createElement(Trans, { id: heading.id })),
           ),
-        ).toContain("Set up email monitor");
+        ).toContain("Set up source monitor");
       }
     } finally {
       vi.unstubAllEnvs();
@@ -149,10 +149,10 @@ describe("production Lingui fallback", () => {
     } as unknown as Parameters<typeof setCatalogLoadersForTests>[0]);
     try {
       const heading = productionDescriptors("../pages/shell/email-monitor-setup.tsx").find(
-        (entry) => entry.message === "Set up email monitor",
+        (entry) => entry.message === "Set up source monitor",
       )!;
       expect(await activateUiLocale("de")).toBe("de");
-      expect(appI18n._({ id: heading.id })).toBe("Set up email monitor");
+      expect(appI18n._({ id: heading.id })).toBe("Set up source monitor");
       expect(appI18n._({ id: "translated" })).toBe("Übersetzt");
     } finally {
       setCatalogLoadersForTests(null);

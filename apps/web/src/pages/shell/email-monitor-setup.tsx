@@ -483,7 +483,7 @@ export function EmailMonitorSetup({
           void perform(load);
         }}
       >
-        <Trans>Set up email monitor</Trans>
+        <Trans>Set up source monitor</Trans>
       </Button>
     );
   }
@@ -493,7 +493,7 @@ export function EmailMonitorSetup({
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 id={`${id}-title`} className="text-base font-medium">
-            <Trans>Email monitor</Trans>
+            <Trans>Source monitor</Trans>
           </h3>
           <p className="mt-1 text-sm text-muted-foreground">{botName}</p>
         </div>
@@ -505,7 +505,7 @@ export function EmailMonitorSetup({
         {plan?.status === "configured" ? (
           <Trans>This setup is saved. Its routine status and available actions appear below.</Trans>
         ) : (
-          <Trans>This saves a proposal. It does not start a routine or check your mailbox.</Trans>
+          <Trans>Saving a proposal does not start a routine or read the source.</Trans>
         )}
       </p>
 
@@ -939,7 +939,7 @@ export function EmailMonitorSetup({
               ) : null}
               <p>
                 <Trans>
-                  Mailbox access and permissions have not been verified. No read was performed.
+                  Source access and permissions have not been verified. No read was performed.
                 </Trans>
               </p>
             </div>

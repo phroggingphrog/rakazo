@@ -1,4 +1,10 @@
 export const NL_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "Bronmonitor instellen",
+  "Source monitor": "Bronmonitor",
+  "Saving a proposal does not start a routine or read the source.":
+    "Een voorstel opslaan start geen routine en leest de bron niet.",
+  "Source access and permissions have not been verified. No read was performed.":
+    "Toegang tot de bron en machtigingen zijn niet gecontroleerd. Er is niets gelezen.",
   "Declared required fields:": "Als verplicht opgegeven velden:",
   "Enter a valid JSON object up to 8 KB.": "Voer een geldig JSON-object van maximaal 8 KB in.",
   "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":

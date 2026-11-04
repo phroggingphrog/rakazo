@@ -1,4 +1,10 @@
 export const RU_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "Настроить монитор источника",
+  "Source monitor": "Монитор источника",
+  "Saving a proposal does not start a routine or read the source.":
+    "Сохранение предложения не запускает задачу и не считывает данные источника.",
+  "Source access and permissions have not been verified. No read was performed.":
+    "Доступ к источнику и разрешения не проверены. Данные не считывались.",
   "Declared required fields:": "Поля, указанные как обязательные:",
   "Enter a valid JSON object up to 8 KB.": "Введите корректный объект JSON размером до 8 КБ.",
   "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":

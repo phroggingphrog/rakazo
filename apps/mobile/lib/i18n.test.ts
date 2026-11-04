@@ -58,6 +58,26 @@ describe("mobile i18n", () => {
     expect(t("Not a real string")).toBe("Not a real string");
   });
 
+  it("shows readable source-monitor copy in every mobile locale", async () => {
+    const { resetI18nForTests, t } = await import("./i18n");
+    const { UI_LOCALES } = await import("./ui-locale");
+    const messages = [
+      "Set up source monitor",
+      "Source monitor",
+      "Saving a proposal does not start a routine or read the source.",
+      "Source access and permissions have not been verified. No read was performed.",
+    ];
+    for (const locale of UI_LOCALES) {
+      resetI18nForTests(locale);
+      for (const message of messages) {
+        const translated = t(message);
+        expect(translated.trim()).toBeTruthy();
+        if (locale === "en") expect(translated).toBe(message);
+        else expect(translated).not.toBe(message);
+      }
+    }
+  });
+
   it("translates seeded Chinese chrome and keeps interpolations", async () => {
     const { resetI18nForTests, t } = await import("./i18n");
     resetI18nForTests("zh-CN");

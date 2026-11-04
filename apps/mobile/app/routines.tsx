@@ -40,7 +40,7 @@ export default function Routines() {
   const setupLauncher =
     botId && (Platform.OS === "ios" || Platform.OS === "android") ? (
       <NativeActionButton
-        label={t("Set up email monitor")}
+        label={t("Set up source monitor")}
         prominence="secondary"
         onPress={() => setSetupOpen(true)}
       />

@@ -1,4 +1,10 @@
 export const ZH_TW_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "設定資料來源監控",
+  "Source monitor": "資料來源監控",
+  "Saving a proposal does not start a routine or read the source.":
+    "儲存提案不會啟動例行工作或讀取資料來源。",
+  "Source access and permissions have not been verified. No read was performed.":
+    "尚未驗證資料來源存取權限，且未執行讀取。",
   "Declared required fields:": "宣告的必填欄位：",
   "Enter a valid JSON object up to 8 KB.": "請輸入不超過 8 KB 的有效 JSON 物件。",
   "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":

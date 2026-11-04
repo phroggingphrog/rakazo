@@ -437,7 +437,7 @@ export function setupPlansRoutes({ deps, authed }: RouterContext) {
           const integration = await lockSetupReferences(tx, scope, botId, source);
           const inputRoutine = CreateRoutineInput.parse({
             botId,
-            name: "Email monitor",
+            name: "Source monitor",
             prompt: setupRoutinePrompt({
               purpose,
               integration,

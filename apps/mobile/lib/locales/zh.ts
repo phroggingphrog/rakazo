@@ -1,4 +1,10 @@
 export const ZH_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "设置数据源监控",
+  "Source monitor": "数据源监控",
+  "Saving a proposal does not start a routine or read the source.":
+    "保存提案不会启动例程或读取数据源。",
+  "Source access and permissions have not been verified. No read was performed.":
+    "尚未验证数据源访问权限。未执行读取。",
   "Declared required fields:": "声明的必填字段：",
   "Enter a valid JSON object up to 8 KB.": "请输入不超过 8 KB 的有效 JSON 对象。",
   "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
