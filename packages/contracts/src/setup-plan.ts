@@ -31,13 +31,9 @@ export const SetupOperationArgumentsSchema = z
       visited.add(item);
       if (Array.isArray(item)) return item.every((entry) => valid(entry, depth + 1));
       return Object.entries(item).every(([key, entry]) => {
-        const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
         return (
           key.length <= 100 &&
           !/^(?:__proto__|prototype|constructor)$/i.test(key) &&
-          !/(?:password|passwd|passphrase|token|secret|credential|credentials|privatekey|apikey|authorization)$/.test(
-            normalized,
-          ) &&
           valid(entry, depth + 1)
         );
       });

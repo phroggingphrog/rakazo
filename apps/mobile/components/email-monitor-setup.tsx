@@ -261,8 +261,13 @@ export function EmailMonitorSetup({
       invalidArguments = true;
     }
   }
-  const argumentFields = catalog?.tools.find((tool) => tool.name === toolName)?.inputSchema
-    ?.properties;
+  const argumentSchema = catalog?.tools.find((tool) => tool.name === toolName)?.inputSchema;
+  const argumentFields = argumentSchema?.properties;
+  const requiredFields = Array.isArray(argumentSchema?.required)
+    ? argumentSchema.required
+        .filter((field): field is string => typeof field === "string")
+        .slice(0, 20)
+    : [];
   const draft: MonitorDraft = {
     kind: "email_monitor",
     purpose: purpose.trim(),
@@ -304,7 +309,7 @@ export function EmailMonitorSetup({
   async function save() {
     if (!session) return;
     if (invalidArguments) {
-      setError(t("Enter a JSON object up to 8 KB without credential fields."));
+      setError(t("Enter a valid JSON object up to 8 KB."));
       return;
     }
     if (!draft.purpose) {
@@ -547,7 +552,7 @@ export function EmailMonitorSetup({
               <Text style={styles.label}>{t("Operation arguments (JSON object)")}</Text>
               <Text style={styles.secondary}>
                 {t(
-                  "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not validated against the operation schema here.",
+                  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.",
                 )}
               </Text>
               <TextInput
@@ -569,6 +574,11 @@ export function EmailMonitorSetup({
                 <Text style={styles.secondary}>
                   {t("Declared fields:")}{" "}
                   {Object.keys(argumentFields).slice(0, 20).join(", ") || "—"}
+                </Text>
+              ) : null}
+              {requiredFields.length ? (
+                <Text style={styles.secondary}>
+                  {t("Declared required fields:")} {requiredFields.join(", ")}
                 </Text>
               ) : null}
             </View>
@@ -739,7 +749,7 @@ export function EmailMonitorSetup({
                 <View style={styles.readiness}>
                   <Text style={styles.secondary}>
                     {t(
-                      "The selected operation and arguments are instructions to the bot, not a guarantee. Review run activity to see what was used. A test does not confirm notification delivery.",
+                      "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.",
                     )}
                   </Text>
                   {plan.routineId ? (

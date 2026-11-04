@@ -459,6 +459,16 @@ describe("email monitor setup", () => {
   });
 
   it("accepts reviewed argument JSON and rejects malformed input before saving", async () => {
+    rpc.mcp.servers.monitorTools.mockResolvedValue({
+      ...catalog,
+      tools: [
+        {
+          name: "read_mail",
+          description: "Read",
+          inputSchema: { properties: { pageToken: { type: "string" } }, required: ["pageToken"] },
+        },
+      ],
+    });
     await click("Set up email monitor");
     await act(async () => {
       change(container.querySelector("textarea")!, draft.purpose);
@@ -470,6 +480,7 @@ describe("email monitor setup", () => {
     await act(async () => {
       change(container.querySelectorAll("select")[1]!, "read_mail");
     });
+    expect(container.textContent).toContain("Declared required fields: pageToken");
     const input = container.querySelector<HTMLTextAreaElement>('textarea[id$="-arguments"]')!;
     await act(async () => {
       change(input, "[");
@@ -477,12 +488,12 @@ describe("email monitor setup", () => {
     await click("Save draft");
     expect(rpc.setupPlans.create).not.toHaveBeenCalled();
     await act(async () => {
-      change(input, '{"query":"example"}');
+      change(input, '{"pageToken":"cursor"}');
     });
     await click("Save draft");
     expect(rpc.setupPlans.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        draft: expect.objectContaining({ arguments: { query: "example" } }),
+        draft: expect.objectContaining({ arguments: { pageToken: "cursor" } }),
       }),
     );
   });
@@ -557,7 +568,7 @@ describe("email monitor setup", () => {
     });
     expect(container.textContent).toContain("Paused");
     expect(container.textContent).toContain(
-      "The selected operation and arguments are instructions to the bot",
+      "When setup matches the routine, a source check attempts the selected operation",
     );
     expect(container.textContent).not.toContain("Active");
     await click("New proposal");

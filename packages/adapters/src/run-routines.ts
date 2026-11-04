@@ -36,7 +36,7 @@ export async function deferFutureRoutine(
   routineId: string,
   scheduledAt: Date,
 ): Promise<boolean> {
-  if (scheduledAt.getTime() <= Date.now() + 1_000) return false;
+  if (scheduledAt.getTime() <= Date.now()) return false;
   await jobs.enqueue(routineWakeupJob(routineId, scheduledAt));
   return true;
 }
@@ -193,6 +193,8 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
         id: routine.id,
         active: true,
         nextRunAt: scheduledAt,
+        crons: { equals: routine.crons },
+        timezone: routine.timezone,
         bot: { archivedAt: null },
       },
       data: {
@@ -268,7 +270,18 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
     await storeSetupSourceBinding(tx, routine.spaceId, run.id, sourceBinding);
     return { ...run, coalesced: false };
   });
-  if (!claimed) return;
+  if (!claimed) {
+    const current = await deps.prisma.routine.findUnique({ where: { id: routineId } });
+    if (
+      current?.active &&
+      current.nextRunAt?.getTime() === scheduledAt.getTime() &&
+      (current.timezone !== routine.timezone ||
+        JSON.stringify(current.crons) !== JSON.stringify(routine.crons))
+    ) {
+      await deps.jobs.enqueue(routineWakeupJob(routine.id, scheduledAt));
+    }
+    return;
+  }
   if (claimed === "fired") {
     if (nextRunAt) await deps.jobs.enqueue(routineWakeupJob(routine.id, nextRunAt));
     return;

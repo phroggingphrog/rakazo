@@ -301,12 +301,23 @@ describe("native email monitor proposal", () => {
     expect(session.setRoutineActive).toHaveBeenLastCalledWith(configured, false);
   });
   it("validates and saves reviewed argument JSON", async () => {
+    session.discover.mockResolvedValue({
+      status: "ok",
+      revision: 3,
+      tools: [
+        {
+          name: "read_mail",
+          inputSchema: { properties: { pageToken: { type: "string" } }, required: ["pageToken"] },
+        },
+      ],
+    });
     await act(async () => {
       input(container.querySelector("textarea")!, "Find updates");
     });
     await select("Integration", "server-1");
     await click("Find read operations");
     await select("Read operation", "read_mail");
+    expect(container.textContent).toContain("Declared required fields: pageToken");
     const args = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Operation arguments (JSON object)"]',
     )!;
@@ -316,11 +327,11 @@ describe("native email monitor proposal", () => {
     await click("Save draft");
     expect(session.save).not.toHaveBeenCalled();
     await act(async () => {
-      input(args, '{"query":"example"}');
+      input(args, '{"pageToken":"cursor"}');
     });
     await click("Save draft");
     expect(session.save).toHaveBeenCalledWith(
-      expect.objectContaining({ arguments: { query: "example" } }),
+      expect.objectContaining({ arguments: { pageToken: "cursor" } }),
       null,
     );
   });
@@ -569,7 +580,7 @@ describe("native email monitor proposal", () => {
       "This saves a proposal. It does not start a routine",
     );
     expect(container.textContent).toContain(
-      "The selected operation and arguments are instructions to the bot",
+      "When setup matches the routine, a source check attempts the selected operation",
     );
     expect(container.textContent).not.toContain("Active");
   });

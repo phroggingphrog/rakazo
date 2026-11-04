@@ -22,6 +22,23 @@ describe("routine scheduling", () => {
       replaceKey: "routine:routine-1",
     });
   });
+
+  it("defers an occurrence even when it is less than one second away", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const enqueue = vi.fn(async (_job: BackgroundJob) => undefined);
+    try {
+      expect(
+        await deferFutureRoutine(
+          { enqueue, cancel: vi.fn(), close: vi.fn() },
+          "routine-1",
+          new Date(1_000_500),
+        ),
+      ).toBe(true);
+      expect(enqueue).toHaveBeenCalledOnce();
+    } finally {
+      clock.mockRestore();
+    }
+  });
 });
 
 function pendingTimerFixture(reuse = true) {
@@ -77,10 +94,63 @@ function pendingTimerFixture(reuse = true) {
     jobs: { enqueue, cancel: vi.fn(), close: vi.fn() },
     events: { append },
   } as unknown as Parameters<typeof createRunExecutor>[0]);
-  return { executor, tx, enqueue, append, scheduledAt };
+  return { executor, prisma, routine, tx, enqueue, append, scheduledAt };
 }
 
 describe("recurring routine catch-up", () => {
+  it.each([
+    { before: ["* * * * *"], crons: ["0 9 * * *"], timezone: "UTC" },
+    { before: ["* * * * *"], crons: ["* * * * *"], timezone: "Australia/Melbourne" },
+    { before: ["* * * * *"], crons: ["@once"], timezone: "UTC" },
+    { before: ["@once"], crons: ["0 9 * * *"], timezone: "UTC" },
+  ])(
+    "does not overwrite a concurrent schedule edit: $before to $crons in $timezone",
+    async (edit) => {
+      const { executor, prisma, routine, tx, enqueue, scheduledAt } = pendingTimerFixture(false);
+      routine.crons = edit.before;
+      prisma.routine.findUnique.mockImplementationOnce(async () => ({ ...routine }));
+      prisma.agentSkill.findMany.mockImplementationOnce(async () => {
+        routine.crons = edit.crons;
+        routine.timezone = edit.timezone;
+        return [];
+      });
+      tx.routine.updateMany.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as { where: { crons?: { equals: string[] }; timezone?: string } };
+        const cronMatches =
+          !input.where.crons ||
+          JSON.stringify(input.where.crons.equals) === JSON.stringify(routine.crons);
+        const timezoneMatches = !input.where.timezone || input.where.timezone === routine.timezone;
+        return { count: cronMatches && timezoneMatches ? 1 : 0 };
+      });
+
+      await executor.wakeRoutine("routine-1", scheduledAt.toISOString());
+
+      expect(tx.task.create).not.toHaveBeenCalled();
+      expect(tx.run.create).not.toHaveBeenCalled();
+      expect(routine.crons).toEqual(edit.crons);
+      expect(routine.timezone).toBe(edit.timezone);
+      expect(enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "routine.wakeup",
+          payload: { routineId: "routine-1", scheduledFor: scheduledAt.toISOString() },
+        }),
+      );
+    },
+  );
+  it("does not republish a failed claim if the schedule was paused", async () => {
+    const { executor, prisma, routine, tx, enqueue, scheduledAt } = pendingTimerFixture(false);
+    prisma.routine.findUnique.mockImplementationOnce(async () => ({ ...routine }));
+    prisma.agentSkill.findMany.mockImplementationOnce(async () => {
+      routine.active = false;
+      return [];
+    });
+    tx.routine.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await executor.wakeRoutine("routine-1", scheduledAt.toISOString());
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(tx.run.create).not.toHaveBeenCalled();
+  });
   it("keeps one pending run and advances the next tick without a duplicate firing event", async () => {
     const { executor, tx, enqueue, append, scheduledAt } = pendingTimerFixture();
     await executor.wakeRoutine("routine-1", scheduledAt.toISOString());

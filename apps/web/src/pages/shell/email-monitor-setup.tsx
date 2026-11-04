@@ -250,8 +250,13 @@ export function EmailMonitorSetup({
       invalidArguments = true;
     }
   }
-  const argumentFields = catalog?.tools.find((tool) => tool.name === toolName)?.inputSchema
-    ?.properties;
+  const argumentSchema = catalog?.tools.find((tool) => tool.name === toolName)?.inputSchema;
+  const argumentFields = argumentSchema?.properties;
+  const requiredFields = Array.isArray(argumentSchema?.required)
+    ? argumentSchema.required
+        .filter((field): field is string => typeof field === "string")
+        .slice(0, 20)
+    : [];
   const draft: Draft = {
     kind: "email_monitor",
     purpose: purpose.trim(),
@@ -291,7 +296,7 @@ export function EmailMonitorSetup({
 
   async function saveDraft() {
     if (invalidArguments) {
-      setError(t`Enter a JSON object up to 8 KB without credential fields.`);
+      setError(t`Enter a valid JSON object up to 8 KB.`);
       return;
     }
     if (!draft.purpose) {
@@ -619,9 +624,8 @@ export function EmailMonitorSetup({
             </label>
             <p className="mt-1 text-muted-foreground">
               <Trans>
-                Review the fields required by the selected operation. Do not enter passwords, tokens
-                or other secrets; configure authentication in the integration. Arguments are not
-                validated against the operation schema here.
+                Use the integration settings for API keys and passwords. Pagination tokens can be
+                entered here. Arguments are not validated against the operation schema here.
               </Trans>
             </p>
             <Textarea
@@ -641,6 +645,11 @@ export function EmailMonitorSetup({
               <p className="mt-1 text-muted-foreground">
                 <Trans>Declared fields:</Trans>{" "}
                 {Object.keys(argumentFields).slice(0, 20).join(", ") || "—"}
+              </p>
+            ) : null}
+            {requiredFields.length ? (
+              <p className="mt-1 text-muted-foreground">
+                <Trans>Declared required fields:</Trans> {requiredFields.join(", ")}
               </p>
             ) : null}
           </div>
@@ -706,9 +715,9 @@ export function EmailMonitorSetup({
             <div className="space-y-2 text-sm text-muted-foreground">
               <p>
                 <Trans>
-                  The selected operation and arguments are instructions to the bot, not a guarantee.
-                  Review run activity to see what was used. A test does not confirm notification
-                  delivery.
+                  When setup matches the routine, a source check attempts the selected operation
+                  with these arguments. Run status shows whether it succeeded. A test does not
+                  confirm notification delivery.
                 </Trans>
               </p>
               {plan.routineId ? (
