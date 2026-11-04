@@ -34,18 +34,21 @@ export async function readOwnBotSettings(
   bot: OwnBotSettingsRow,
 ) {
   const modelDeps = { prisma: deps.prisma, ...deps.modelChange };
-  const effective =
+  const [modelResult, choicesResult] = await Promise.allSettled([
     bot.modelProvider && bot.modelId
-      ? { provider: bot.modelProvider, model: bot.modelId }
-      : await deps.modelChange.defaultModel();
-  const [choices, levels] = await Promise.all([
+      ? Promise.resolve({ provider: bot.modelProvider, model: bot.modelId })
+      : deps.modelChange.defaultModel(),
     connectedModelChoices(modelDeps, scope),
-    effective.provider && effective.model
-      ? prepareAllowedThinkingLevels(modelDeps, scope, effective.provider, effective.model)
-      : undefined,
   ]);
+  const effective = modelResult.status === "fulfilled" ? modelResult.value : undefined;
+  const levelsResult =
+    effective?.provider && effective.model
+      ? await Promise.allSettled([
+          prepareAllowedThinkingLevels(modelDeps, scope, effective.provider, effective.model),
+        ]).then(([result]) => result)
+      : undefined;
   const providers = new Map<string, string[]>();
-  for (const choice of choices) {
+  for (const choice of choicesResult.status === "fulfilled" ? choicesResult.value : []) {
     const ids = providers.get(choice.providerName) ?? [];
     ids.push(`${choice.provider}/${choice.id}`);
     providers.set(choice.providerName, ids);
@@ -56,7 +59,9 @@ export async function readOwnBotSettings(
     instructions: bot.instructions,
     avatar: bot.color.startsWith("data:image/") ? "image" : bot.color,
     notifyOnFinish: bot.notifyOnFinish,
-    model: `${modelLabel(effective.provider, effective.model)}${bot.modelId ? "" : " (default)"}`,
+    model: effective
+      ? `${modelLabel(effective.provider, effective.model)}${bot.modelId ? "" : " (default)"}`
+      : "default (unavailable)",
     thinkingLevel: bot.thinkingLevel ?? "default",
     readAloud: bot.autoSpeak,
     voice: bot.voiceId ?? "default",
@@ -65,7 +70,12 @@ export async function readOwnBotSettings(
       ids: ids.slice(0, MODELS_PER_PROVIDER),
       ...(ids.length > MODELS_PER_PROVIDER ? { more: ids.length - MODELS_PER_PROVIDER } : {}),
     })),
-    thinkingLevels: levels?.allowed ?? ThinkingLevelSchema.options,
+    ...(choicesResult.status === "rejected" ? { modelCatalogStatus: "unavailable" } : {}),
+    thinkingLevels:
+      levelsResult?.status === "fulfilled"
+        ? (levelsResult.value?.allowed ?? ThinkingLevelSchema.options)
+        : [],
+    ...(levelsResult?.status !== "fulfilled" ? { thinkingLevelsStatus: "unavailable" } : {}),
   };
 }
 

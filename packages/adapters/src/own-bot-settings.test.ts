@@ -3,17 +3,21 @@ import type { PrismaClient } from "@rakazo/db";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FleetPrepareDeps } from "./fleet-tools.js";
 import type * as ModelSelection from "./model-selection.js";
-import { validateBotModelChange } from "./model-selection.js";
+import { prepareAllowedThinkingLevels, validateBotModelChange } from "./model-selection.js";
 import {
   prepareOwnBotSettings,
   readOwnBotSettings,
   resolveVoiceChoice,
 } from "./own-bot-settings.js";
 
-vi.mock("./model-selection.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof ModelSelection>()),
-  validateBotModelChange: vi.fn(),
-}));
+vi.mock("./model-selection.js", async (importOriginal) => {
+  const original = await importOriginal<typeof ModelSelection>();
+  return {
+    ...original,
+    prepareAllowedThinkingLevels: vi.fn(original.prepareAllowedThinkingLevels),
+    validateBotModelChange: vi.fn(),
+  };
+});
 
 const validate = vi.mocked(validateBotModelChange);
 const scope = { userId: "user-1", spaceId: "space-1" };
@@ -85,6 +89,55 @@ describe("readOwnBotSettings", () => {
       }),
     ]);
     expect(settings.models[0]!.ids.length).toBeLessThanOrEqual(15);
+  });
+});
+
+describe("readOwnBotSettings during discovery failures", () => {
+  it("returns saved settings and marks an unavailable model catalog", async () => {
+    const broken = deps();
+    vi.mocked(broken.prisma.userModelCredential.findMany).mockRejectedValue(
+      new Error("catalog unavailable"),
+    );
+    const settings = await readOwnBotSettings(broken, scope, bot);
+    expect(settings).toMatchObject({
+      name: "Scout",
+      description: "Finds papers",
+      instructions: "Cite sources.",
+      notifyOnFinish: true,
+      model: "Google: Gemini 3.8 Flash (default)",
+      models: [],
+      modelCatalogStatus: "unavailable",
+    });
+  });
+
+  it("does not claim a default model when its lookup fails", async () => {
+    const broken = deps();
+    broken.modelChange.defaultModel = async () => {
+      throw new Error("default model unavailable");
+    };
+    const settings = await readOwnBotSettings(broken, scope, bot);
+    expect(settings).toMatchObject({
+      name: "Scout",
+      model: "default (unavailable)",
+      thinkingLevels: [],
+      thinkingLevelsStatus: "unavailable",
+    });
+    expect(settings.models.length).toBeGreaterThan(0);
+  });
+
+  it("preserves saved settings and catalog when only thinking-level discovery fails", async () => {
+    vi.mocked(prepareAllowedThinkingLevels).mockRejectedValueOnce(new Error("levels unavailable"));
+    const settings = await readOwnBotSettings(deps(), scope, { ...bot, thinkingLevel: "high" });
+    expect(settings).toMatchObject({
+      name: "Scout",
+      instructions: "Cite sources.",
+      model: "Google: Gemini 3.8 Flash (default)",
+      thinkingLevel: "high",
+      thinkingLevels: [],
+      thinkingLevelsStatus: "unavailable",
+    });
+    expect(settings.models.length).toBeGreaterThan(0);
+    expect(settings).not.toHaveProperty("modelCatalogStatus");
   });
 });
 
