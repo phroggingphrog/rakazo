@@ -717,26 +717,29 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   }
   runs?.attach(jobHandlers);
   const reconciler = inMemoryJobs
-    ? createJobReconciler({
-        prisma,
-        jobs,
-        events,
-        notifications,
-        reconcileModelCredits: createModelCreditReconciler({
+    ? createJobReconciler(
+        {
           prisma,
-          lookup: deploymentModelUsageLookup(),
-        }),
-        reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
-        reconcilePurchases: () => reconcilePurchases({ prisma, jobs, paymentWallet }),
-        reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
-        reconcileSecurityEventRetention: createSecurityEventPruner(
-          prisma,
-          securityEventRetentionDays(),
-        ),
-        reconcileAuditLog: createAuditLogReconciler(prisma, auditLogConfig()),
-        reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
-        reconcileProactive: () => proactive.reconcile(),
-      })
+          jobs,
+          events,
+          notifications,
+          reconcileModelCredits: createModelCreditReconciler({
+            prisma,
+            lookup: deploymentModelUsageLookup(),
+          }),
+          reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
+          reconcilePurchases: () => reconcilePurchases({ prisma, jobs, paymentWallet }),
+          reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
+          reconcileSecurityEventRetention: createSecurityEventPruner(
+            prisma,
+            securityEventRetentionDays(),
+          ),
+          reconcileAuditLog: createAuditLogReconciler(prisma, auditLogConfig()),
+          reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
+          reconcileProactive: () => proactive.reconcile(),
+        },
+        { mcpContinuationScanEnabled: env.mcpContinuationScanEnabled },
+      )
     : undefined;
   reconciler?.start();
   const stopReferralEmails =

@@ -21,6 +21,14 @@ const DEFAULT_INTERVAL_MS = 30_000;
 const DEFAULT_BATCH_SIZE = 100;
 const ROUTINE_LOOKAHEAD_MS = 60_000;
 const CONTROL_LOOKAHEAD_MS = 60_000;
+
+/** Hold new approval continuations while retaining the approval-aware API and schema. */
+export function mcpContinuationScanEnabledFromEnv(env: NodeJS.ProcessEnv): boolean {
+  const value = env.MCP_APPROVAL_CONTINUATION_SCAN_ENABLED?.trim();
+  if (!value || value === "true") return true;
+  if (value === "false") return false;
+  throw new Error("MCP_APPROVAL_CONTINUATION_SCAN_ENABLED must be true or false");
+}
 /**
  * A queued run's job lock older than a run lease is abandoned. A live worker
  * finishing a failed attempt holds it for seconds before Graphile unlocks it.
@@ -128,7 +136,12 @@ export function createJobReconciler(
     reconcileDeadJobs?: () => Promise<void>;
     reconcileProactive?: () => Promise<void>;
   },
-  options: { intervalMs?: number; batchSize?: number; maxPagesPerPass?: number } = {},
+  options: {
+    intervalMs?: number;
+    batchSize?: number;
+    maxPagesPerPass?: number;
+    mcpContinuationScanEnabled?: boolean;
+  } = {},
 ) {
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
@@ -182,6 +195,7 @@ export function createJobReconciler(
           deps.prisma,
           batchSize,
           mcpContinuationCursor,
+          options.mcpContinuationScanEnabled ?? true,
         );
       } catch (error) {
         getLogger().error("MCP approval continuation scan", error);

@@ -222,6 +222,7 @@ x-app-environment: &app-environment
   MCP_DISCOVERY_TIMEOUT_MS:
   MCP_PACKAGES_DIR:
   MCP_ALLOW_PRIVATE_ENDPOINT:
+  MCP_APPROVAL_CONTINUATION_SCAN_ENABLED:
   # phrog-web search/fetch provider and the proactive core webhook flag
   PHROG_WEB_URL:
   PHROG_WEB_TOKEN:

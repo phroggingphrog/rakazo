@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Duplex } from "node:stream";
+import type { PrismaClient } from "@rakazo/db";
 import { createDb, runAsSystem, runAsTenant } from "@rakazo/db";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -70,6 +71,108 @@ database("MCP continuation recovery (PostgreSQL)", () => {
     }
     restore?.();
     for (const child of children) child.kill();
+  });
+
+  it("preserves a pending continuation while held and materializes it once after resume", async () => {
+    const id = randomUUID();
+    const scope = { userId: `hold-user-${id}`, spaceId: `hold-space-${id}` };
+    const organizationId = `hold-org-${id}`;
+    const botId = randomUUID();
+    const threadId = randomUUID();
+    const serverId = randomUUID();
+    const messageId = randomUUID();
+    const intentId = randomUUID();
+    await runAsSystem("create isolated hold fixture", async () => {
+      await db.prisma.user.create({
+        data: { id: scope.userId, name: "Synthetic", email: `${scope.userId}@example.invalid` },
+      });
+      await db.prisma.organization.create({
+        data: {
+          id: organizationId,
+          name: "Synthetic",
+          slug: organizationId,
+          createdAt: new Date(),
+        },
+      });
+      await db.prisma.space.create({
+        data: { id: scope.spaceId, organizationId, name: "Synthetic", isDefault: true },
+      });
+    });
+    await runAsTenant(scope, async () => {
+      await db.prisma.bot.create({
+        data: { id: botId, ...scope, name: "Synthetic", color: "blue" },
+      });
+      await db.prisma.thread.create({ data: { id: threadId, ...scope, botId } });
+      await db.prisma.mcpServer.create({
+        data: { id: serverId, ...scope, slug: `hold-${id}`, name: "Synthetic", transport: "stdio" },
+      });
+      await db.prisma.botMcpServer.create({
+        data: { ...scope, botId, serverId, allowAllTools: false, allowedTools: ["read"] },
+      });
+      await db.prisma.message.create({
+        data: {
+          id: messageId,
+          threadId,
+          seq: 1,
+          botId,
+          role: "bot",
+          blocks: [
+            {
+              kind: "mcp_approval",
+              name: "Synthetic",
+              serverId,
+              transport: "stdio",
+              endpoint: null,
+              needsOAuth: false,
+              status: "connected",
+              assignmentOnly: true,
+            },
+          ],
+        },
+      });
+      await db.prisma.mcpApprovalContinuation.create({
+        data: {
+          id: intentId,
+          ...scope,
+          botId,
+          threadId,
+          serverId,
+          messageId,
+          assignmentOnly: true,
+        },
+      });
+    });
+
+    // Limit only the scan to this fixture; processing uses the real transaction and rows.
+    const scopedPrisma = {
+      mcpApprovalContinuation: {
+        findMany: (args: Parameters<typeof db.prisma.mcpApprovalContinuation.findMany>[0]) =>
+          db.prisma.mcpApprovalContinuation.findMany({
+            ...args,
+            where: { ...args?.where, id: intentId },
+          }),
+      },
+      $transaction: db.prisma.$transaction.bind(db.prisma),
+    } as unknown as PrismaClient;
+    await runAsSystem("check held synthetic continuation", async () => {
+      await reconcileMcpApprovalContinuations(scopedPrisma, 10, undefined, false);
+      await reconcileMcpApprovalContinuations(scopedPrisma, 10, undefined, false);
+      expect(
+        await db.prisma.mcpApprovalContinuation.findUniqueOrThrow({ where: { id: intentId } }),
+      ).toMatchObject({ status: "pending", runId: null });
+      expect(await db.prisma.run.count({ where: { threadId } })).toBe(0);
+
+      await Promise.all([
+        reconcileMcpApprovalContinuations(scopedPrisma, 10),
+        reconcileMcpApprovalContinuations(scopedPrisma, 10),
+      ]);
+      const resumed = await db.prisma.mcpApprovalContinuation.findUniqueOrThrow({
+        where: { id: intentId },
+      });
+      expect(resumed.status).toBe("materialized");
+      expect(resumed.runId).not.toBeNull();
+      expect(await db.prisma.run.count({ where: { threadId, status: "queued" } })).toBe(1);
+    });
   });
 
   it("holds a live run, then atomically materializes once across concurrent reconciler passes", async () => {

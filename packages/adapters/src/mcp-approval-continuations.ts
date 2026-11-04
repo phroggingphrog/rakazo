@@ -10,7 +10,9 @@ export async function reconcileMcpApprovalContinuations(
   prisma: PrismaClient,
   batchSize: number,
   cursor?: McpContinuationCursor,
+  enabled = true,
 ): Promise<McpContinuationCursor | undefined> {
+  if (!enabled) return cursor;
   const intents = await prisma.mcpApprovalContinuation.findMany({
     where: {
       status: "pending",

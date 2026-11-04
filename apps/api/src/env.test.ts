@@ -7,6 +7,16 @@ const base = {
 };
 
 describe("loadEnv", () => {
+  it("passes the approval continuation startup hold to the API", () => {
+    expect(loadEnv(base).mcpContinuationScanEnabled).toBe(true);
+    expect(
+      loadEnv({ ...base, MCP_APPROVAL_CONTINUATION_SCAN_ENABLED: "false" })
+        .mcpContinuationScanEnabled,
+    ).toBe(false);
+    expect(() => loadEnv({ ...base, MCP_APPROVAL_CONTINUATION_SCAN_ENABLED: "off" })).toThrow(
+      "MCP_APPROVAL_CONTINUATION_SCAN_ENABLED",
+    );
+  });
   it("defaults the attachment count to four and accepts configured bounds", () => {
     expect(loadEnv(base).maxAttachmentsPerMessage).toBe(4);
     expect(loadEnv({ ...base, MAX_ATTACHMENTS_PER_MESSAGE: " " }).maxAttachmentsPerMessage).toBe(4);
