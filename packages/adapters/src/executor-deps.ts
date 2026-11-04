@@ -50,6 +50,7 @@ export interface ExecutorDeps {
   deploymentModelConfigured?: boolean;
   dataDir?: string;
   notifications?: NotificationProvider;
+  routineNotificationOutbox?: boolean;
   jobs: JobPublisher;
   /** Publishes board-change signals and wakes ticket owners; absent disables both. */
   onTicketChange?: TicketChangeNotifier;

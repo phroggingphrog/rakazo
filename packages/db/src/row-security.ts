@@ -125,6 +125,7 @@ export const ROW_SECURITY_MODELS: ReadonlySet<string> = new Set([
   "Run",
   "Task",
   "Routine",
+  "RoutineNotificationIntent",
   "Connection",
   "McpServer",
   "McpServerSpace",

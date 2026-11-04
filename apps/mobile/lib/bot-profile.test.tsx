@@ -162,6 +162,13 @@ vi.mock("../components/run-error-sheet", () => ({
 }));
 vi.mock("../components/native-symbol", () => ({ NativeSymbol: () => null }));
 vi.mock("../components/row-accessories", () => ({ Chevron: () => null }));
+vi.mock("../components/routine-rearm", () => ({
+  RoutineRearm: ({ onSave, onCancel }: { onSave: (date: Date) => void; onCancel: () => void }) =>
+    createElement("div", null,
+      createElement("button", { type: "button", onClick: onCancel }, "Cancel rearm"),
+      createElement("button", { type: "button", onClick: () => onSave(new Date("2099-11-04T10:30:00.000Z")) }, "Save rearm"),
+    ),
+}));
 
 const routine = (id: string, name: string, partial: Partial<Routine> = {}) => ({
   id,
@@ -811,6 +818,74 @@ describe("routines screen", () => {
     );
   });
 
+  it("asks for a new time before rearming a completed one-shot", async () => {
+    const completed = routine("once", "Reminder", {
+      active: false,
+      crons: ["@once"],
+      lastRunAt: "2026-10-01T10:00:00.000Z",
+      nextRunAt: null,
+    });
+    const updateRoutine = vi.fn(async () => ({
+      ...completed,
+      active: true,
+      nextRunAt: "2099-11-04T10:30:00.000Z",
+    }));
+    profileRpc(async () => [completed], { updateRoutine });
+    await render(createElement(RoutinesScreen));
+    await act(async () => switchFor("Reminder")!.click());
+    expect(updateRoutine).not.toHaveBeenCalled();
+    expect(switchFor("Reminder")!.checked).toBe(false);
+    await act(async () => button("Cancel rearm")!.click());
+    expect(updateRoutine).not.toHaveBeenCalled();
+    await act(async () => switchFor("Reminder")!.click());
+    await act(async () => button("Save rearm")!.click());
+    expect(updateRoutine).toHaveBeenCalledExactlyOnceWith({
+      routineId: "once",
+      active: true,
+      runAt: "2099-11-04T10:30:00.000Z",
+    });
+    expect(switchFor("Reminder")!.checked).toBe(true);
+  });
+
+  it("does not rearm a routine from a previous account", async () => {
+    const completed = routine("once", "Reminder", {
+      active: false,
+      crons: ["@once"],
+      nextRunAt: null,
+    });
+    const updateRoutine = vi.fn(async () => completed);
+    profileRpc(async () => [completed], { updateRoutine });
+    await render(createElement(RoutinesScreen));
+    await act(async () => switchFor("Reminder")!.click());
+    session.generation += 1;
+    await act(async () => button("Save rearm")!.click());
+    expect(updateRoutine).not.toHaveBeenCalled();
+  });
+
+  it("sends only one rearm when save is pressed twice before the first render", async () => {
+    const completed = routine("once", "Reminder", {
+      active: false,
+      crons: ["@once"],
+      nextRunAt: null,
+    });
+    let finish!: (value: unknown) => void;
+    const updateRoutine = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    profileRpc(async () => [completed], { updateRoutine });
+    await render(createElement(RoutinesScreen));
+    await act(async () => switchFor("Reminder")!.click());
+    await act(async () => {
+      button("Save rearm")!.click();
+      button("Save rearm")!.click();
+    });
+    expect(updateRoutine).toHaveBeenCalledTimes(1);
+    await act(async () => finish({ ...completed, active: true }));
+  });
+
   it("stays quiet about a failed save a newer tap replaced", async () => {
     const saves: Array<{ resolve: (row: unknown) => void; reject: (error: Error) => void }> = [];
     profileRpc(async () => [digest()], {
@@ -1047,6 +1122,44 @@ describe("routine detail", () => {
     profileRpc(async () => [routine("r2", "Weekly report")]);
     await render(createElement(RoutineDetail));
     expect(container.textContent).toContain("This routine no longer exists");
+  });
+
+  it.each([
+    ["unknown", "Notification status unknown"],
+    ["pending", "Notification queued"],
+    ["submitting", "Notification submission started; outcome pending"],
+    ["uncertain", "Notification delivery unknown"],
+    ["undeliverable", "No available push recipient"],
+    ["cancelled", "Notification cancelled"],
+    ["blocked", "Notification blocked before sending"],
+    ["expo_accepted", "Push accepted by Expo; device delivery not confirmed"],
+    ["expo_receipt_ok", "Expo receipt was successful; device display not confirmed"],
+    ["expo_receipt_error", "Expo reported a push delivery error"],
+    ["expo_receipt_unavailable", "Expo receipt unavailable; device delivery not confirmed"],
+  ] as const)("shows routine notification state %s", async (notification, label) => {
+    const run = {
+      id: "run-1", botId: "bot-fixture", groupId: null, status: "completed", error: null,
+      createdAt: "2026-01-02T12:00:00Z", startedAt: null, completedAt: null,
+      messageId: null, notification,
+    };
+    profileRpc(async () => [routine("r1", "Morning digest")], {
+      history: async () => ({ runs: [run], nextCursor: null }),
+    });
+    await render(createElement(RoutineDetail));
+    expect(container.textContent).toContain(label);
+  });
+
+  it("explains exhausted notification preparation", async () => {
+    const run = {
+      id: "run-1", botId: "bot-fixture", groupId: null, status: "completed", error: null,
+      createdAt: "2026-01-02T12:00:00Z", startedAt: null, completedAt: null,
+      messageId: null, notification: "blocked", notificationRetryExhausted: true,
+    };
+    profileRpc(async () => [routine("r1", "Morning digest")], {
+      history: async () => ({ runs: [run], nextCursor: null }),
+    });
+    await render(createElement(RoutineDetail));
+    expect(container.textContent).toContain("Notification not sent; preparation retries exhausted");
   });
 
   it("lists the routine's runs and opens a reply at its message", async () => {

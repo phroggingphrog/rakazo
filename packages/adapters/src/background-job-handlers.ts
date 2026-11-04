@@ -32,6 +32,7 @@ import type { MemoryProviderResolver } from "./memory-provider-factory.js";
 import { deliverMessagingOutbound, mirrorMessagingOutbound } from "./messaging-delivery.js";
 import type { ProactiveRuntime } from "./proactive.js";
 import { pollPurchase } from "./purchase-poll.js";
+import { checkRoutineNotificationReceipt } from "./routine-notification-receipts.js";
 import { expireTaughtSkillTeaching } from "./teaching-session.js";
 
 type Tenant = { spaceId: string; userId: string };
@@ -219,7 +220,15 @@ export function createBackgroundJobHandlers(deps: {
     }),
     // A receipt belongs to a device's push token, not to a Space.
     "push.receipt": async (payload) => {
-      await runAsSystem("check a push receipt", () => deps.notifications?.checkReceipt(payload));
+      if (!deps.notifications) throw new Error("Push receipt provider is unavailable.");
+      if (payload.routine) {
+        await checkRoutineNotificationReceipt(
+          { prisma: deps.prisma, notifications: deps.notifications },
+          payload,
+        );
+      } else {
+        await runAsSystem("check a push receipt", () => deps.notifications!.checkReceipt(payload));
+      }
     },
     // The proactive core acts for a bot's scope through its own tenant lookup, not a job owner.
     "proactive.apply": async (payload) => {

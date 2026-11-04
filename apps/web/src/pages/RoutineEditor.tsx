@@ -50,6 +50,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { cronLabels } from "../lib/cron";
+import { localTimezone } from "../lib/local-timezone";
 import {
   connectedModelOptions,
   modelOptionKey,
@@ -73,7 +74,7 @@ export function routineNeedsOneShotArm(
   routine: Pick<Routine, "nextRunAt" | "lastRunAt">,
   crons: string[],
 ) {
-  return isOneShotRoutineCrons(crons) && !routine.nextRunAt && !routine.lastRunAt;
+  return isOneShotRoutineCrons(crons) && !routine.nextRunAt;
 }
 
 const SCHEDULE_PRESETS: CronFreq[] = [
@@ -213,7 +214,10 @@ export function draftFromRoutine(routine: Routine): RoutineDraftState {
     githubEnabled: routine.githubEnabled,
     messageProvider: routine.messageProvider,
     active: routine.active,
-    runAtLocal: routineNeedsOneShotArm(routine, routine.crons) ? defaultArmRunAtLocal() : "",
+    runAtLocal:
+      routineNeedsOneShotArm(routine, routine.crons) && !routine.lastRunAt
+        ? defaultArmRunAtLocal()
+        : "",
     modelKey:
       routine.modelProvider && routine.modelId
         ? modelOptionKey(routine.modelProvider, routine.modelId)
@@ -412,7 +416,9 @@ export function RoutineEditor({
     Boolean(draft.watch);
   const canTest = Boolean(editing) && !saving && !running;
   const needsOneShotArm =
-    editing != null && routineNeedsOneShotArm(editing, draft.schedules.map(cronFromPreset));
+    editing != null &&
+    draft.active &&
+    routineNeedsOneShotArm(editing, draft.schedules.map(cronFromPreset));
 
   function addSchedule(freq: CronFreq) {
     const base = defaultCronPreset();
@@ -658,14 +664,13 @@ export function RoutineEditor({
 
           {needsOneShotArm ? (
             <label htmlFor={`${fieldId}-run-at`} className="block text-sm text-muted-foreground">
-              <Trans>Run at</Trans>
+              <Trans>Run at</Trans> <span>({localTimezone()})</span>
               <Input
                 id={`${fieldId}-run-at`}
                 type="datetime-local"
                 value={draft.runAtLocal}
                 onChange={(e) => onChange({ ...draft, runAtLocal: e.target.value })}
-                aria-label={t`Run at`}
-                className="mt-2"
+                className="mt-2 h-11"
               />
             </label>
           ) : null}

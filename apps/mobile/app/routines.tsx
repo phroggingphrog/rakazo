@@ -1,15 +1,19 @@
 import type { Routine } from "@rakazo/contracts";
+import { isOneShotRoutineCrons } from "@rakazo/core";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
-import { ActivityIndicator, Alert, StyleSheet, Text, View } from "react-native";
+import { useRef, useState } from "react";
+import { ActivityIndicator, Alert, Platform, StyleSheet, Text, View } from "react-native";
 import { NativeActionButton } from "../components/native-action-button";
 import { RoutineList } from "../components/routine-list";
+import { RoutineRearm } from "../components/routine-rearm";
 import { useI18n } from "../lib/i18n";
 import { native, useThemedStyles } from "../lib/native";
 import { deviceTimeZone } from "../lib/routine";
 import {
   loadBotRoutines,
+  rearmBotRoutine,
   removeBotRoutine,
+  routineScope,
   setRoutineActive,
   useBotRoutines,
 } from "../lib/routine-store";
@@ -24,6 +28,24 @@ export default function Routines() {
   const { botId = "", name } = useLocalSearchParams<{ botId?: string; name?: string }>();
   const { routines, error } = useBotRoutines(botId);
   const [deleting, setDeleting] = useState(false);
+  const [rearming, setRearming] = useState<{ routine: Routine; scope: string } | null>(null);
+  const [rearmSaving, setRearmSaving] = useState(false);
+  const rearmInFlight = useRef(false);
+
+  async function rearm(at: Date) {
+    if (!rearming || rearmInFlight.current) return;
+    rearmInFlight.current = true;
+    setRearmSaving(true);
+    try {
+      await rearmBotRoutine(botId, rearming.routine, at, rearming.scope);
+      setRearming(null);
+    } catch (cause) {
+      Alert.alert(t("Could not update routine"), errorText(cause, t("Try again.")));
+    } finally {
+      rearmInFlight.current = false;
+      setRearmSaving(false);
+    }
+  }
 
   async function remove(routine: Routine) {
     setDeleting(true);
@@ -52,23 +74,43 @@ export default function Routines() {
 
   if (routines?.length) {
     return (
-      <RoutineList
-        routines={routines}
-        timeZone={deviceTimeZone()}
-        canDelete={!deleting}
-        onOpen={(routine) =>
-          router.push({
-            pathname: "/routine",
-            params: { botId, botName: name, routineId: routine.id, origin: "profile" },
-          })
-        }
-        onToggle={(routine, active) =>
-          setRoutineActive(botId, routine, active, (cause) =>
-            Alert.alert(t("Could not update routine"), errorText(cause, t("Try again."))),
-          )
-        }
-        onDelete={confirmDelete}
-      />
+      <>
+        <RoutineList
+          routines={routines}
+          timeZone={deviceTimeZone()}
+          canDelete={!deleting}
+          onOpen={(routine) =>
+            router.push({
+              pathname: "/routine",
+              params: { botId, botName: name, routineId: routine.id, origin: "profile" },
+            })
+          }
+          onToggle={(routine, active) => {
+            if (active && isOneShotRoutineCrons(routine.crons) && !routine.nextRunAt) {
+              if (Platform.OS !== "ios" && Platform.OS !== "android") {
+                Alert.alert(
+                  t("Choose a new time"),
+                  t("Open the routine editor to choose a new time."),
+                );
+                return;
+              }
+              setRearming({ routine, scope: routineScope(botId) });
+              return;
+            }
+            setRoutineActive(botId, routine, active, (cause) =>
+              Alert.alert(t("Could not update routine"), errorText(cause, t("Try again."))),
+            );
+          }}
+          onDelete={confirmDelete}
+        />
+        {rearming ? (
+          <RoutineRearm
+            saving={rearmSaving}
+            onCancel={() => setRearming(null)}
+            onSave={(at) => void rearm(at)}
+          />
+        ) : null}
+      </>
     );
   }
   return (

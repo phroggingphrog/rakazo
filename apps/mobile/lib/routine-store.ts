@@ -136,6 +136,42 @@ export function setRoutineActive(
   toggle.update(active);
 }
 
+/** Identify the server, account, space and bot used for a routine list. */
+export function routineScope(botId: string): string {
+  return hashKey(routinesQuery(botId).queryKey);
+}
+
+/** Rearm a one-shot at the time the owner selected, without an optimistic switch change. */
+export async function rearmBotRoutine(
+  botId: string,
+  routine: Routine,
+  runAt: Date,
+  expectedScope: string,
+): Promise<void> {
+  if (!Number.isFinite(runAt.getTime()) || runAt.getTime() <= Date.now()) {
+    throw new Error("Run time must be in the future.");
+  }
+  const { queryKey } = routinesQuery(botId);
+  const scope = hashKey(queryKey);
+  if (scope !== expectedScope) throw new Error("The account or space changed. Try again.");
+  const context = await captureApiRequestContext();
+  if (routineScope(botId) !== scope) throw new Error("The account or space changed. Try again.");
+  countWrite(scope, 1);
+  try {
+    const saved = await rpc(
+      "routines/update",
+      { routineId: routine.id, active: true, runAt: runAt.toISOString() },
+      { requestContext: context },
+    );
+    if (hashKey(routinesQuery(botId).queryKey) !== scope) return;
+    await writeSaved(queryClient, queryKey, (rows) =>
+      (rows ?? []).map((row) => (row.id === routine.id ? { ...row, ...saved } : row)),
+    );
+  } finally {
+    countWrite(scope, -1);
+  }
+}
+
 /** Deletes a routine; its row goes once the server confirms. */
 export async function removeBotRoutine(botId: string, routineId: string): Promise<void> {
   const { queryKey } = routinesQuery(botId);

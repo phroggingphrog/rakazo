@@ -674,6 +674,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     deploymentModelConfigured: env.deploymentModelConfigured,
     dataDir: env.dataDir,
     notifications,
+    routineNotificationOutbox: !inMemoryJobs,
     jobs,
     events,
     onTicketChange: ticketChanges,

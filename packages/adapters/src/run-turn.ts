@@ -796,6 +796,13 @@ export async function completeRun(ctx: RunContext) {
       ? botMessageOutcomeFromMidTurn(text, reply.midTurnUserTexts)
       : null;
   await ctx.settleRunningHelpers();
+  const durableRoutineNotice = Boolean(
+    deps.routineNotificationOutbox &&
+      run.trigger === "routine" &&
+      run.routineId &&
+      completionNotificationPreview(text) &&
+      completionNotificationPreview(completionNotificationBody("", blocks)),
+  );
   const completed = await deps.events.finalizeRun({
     spaceId: run.spaceId,
     threadId: thread.id,
@@ -807,6 +814,7 @@ export async function completeRun(ctx: RunContext) {
     leaseFence: ctx.fence,
     outcome: "completed",
     blocks,
+    ...(durableRoutineNotice ? { routineCompletionNotification: true } : {}),
     markUnread: completionMarksUnread(
       run.trigger,
       text,
@@ -839,7 +847,12 @@ export async function completeRun(ctx: RunContext) {
     ).catch((error) => getLogger().error("bot message result return", error));
   }
   const notifyBody = completionNotificationPreview(text);
-  if (runSendsFinishNotification(run.trigger) && notifyBody && !completed.continuationRunId) {
+  if (
+    runSendsFinishNotification(run.trigger) &&
+    notifyBody &&
+    !completed.continuationRunId &&
+    !durableRoutineNotice
+  ) {
     await notifyRun(deps, run, {
       kind: "completion",
       title: `${displayName(bot.name, "Bot")} finished`,

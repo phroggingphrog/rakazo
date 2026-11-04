@@ -34,6 +34,7 @@ const payloadSchemas = {
     userId: z.string().min(1),
     ticketId: z.string().min(1),
     tokenDigest: z.string().min(1),
+    routine: z.object({ intentId: z.string().min(1), spaceId: z.string().min(1) }).optional(),
   }),
   "proactive.apply": z.object({ scope: z.string().min(1) }),
   "proactive.decide": z.object({ scope: z.string().min(1) }),
@@ -187,7 +188,19 @@ export function pushReceiptJob(
   payload: BackgroundJobPayloads["push.receipt"],
   availableAt: Date,
 ): BackgroundJob {
-  return { name: "push.receipt", payload, availableAt, maxAttempts: 8 };
+  return {
+    name: "push.receipt",
+    payload,
+    availableAt,
+    maxAttempts: 8,
+    ...(payload.routine
+      ? {
+          replaceKey: `routine-receipt:${payload.routine.intentId}`,
+          keepExisting: true,
+          replaceLockedBefore: new Date(Date.now() - 5 * 60_000),
+        }
+      : {}),
+  };
 }
 
 export function cloudAgentPollJobKey(agentId: string): string {

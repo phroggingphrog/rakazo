@@ -302,7 +302,7 @@ describe("expo push", () => {
     await expect(loadPushToken(tokens, "user-1")).resolves.toBe("ExponentPushToken[test]");
   });
 
-  it("keeps the token when the session lookup fails", async () => {
+  it("reports a session lookup failure without sending or discarding the token", async () => {
     const tokens = new MemoryPushTokenStore();
     await tokens.save("user-1", "ExponentPushToken[test]", "session-1");
     const fetchMock = vi.fn();
@@ -318,7 +318,7 @@ describe("expo push", () => {
         { kind: "completion", title: "done", body: "secret", botId: "b", threadId: "t" },
         notifyContext,
       ),
-    ).resolves.toBe("undeliverable");
+    ).rejects.toThrow("Push recipient session lookup failed.");
     expect(fetchMock).not.toHaveBeenCalled();
     await expect(loadPushToken(tokens, "user-1")).resolves.toBe("ExponentPushToken[test]");
   });
@@ -405,7 +405,7 @@ describe("expo push", () => {
     ).rejects.toThrow("Expo push response is too large.");
   });
 
-  it("rejects malformed successful responses", async () => {
+  it("treats a malformed successful response as uncertain", async () => {
     const tokens = new MemoryPushTokenStore();
     await tokens.save("user-1", "ExponentPushToken[test]");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not json")));
@@ -415,8 +415,22 @@ describe("expo push", () => {
         { kind: "completion", title: "done", body: "ok", botId: "b", threadId: "t" },
         notifyContext,
       ),
-    ).rejects.toThrow("Expo push returned an invalid response.");
+    ).rejects.toThrow("Expo push outcome is uncertain");
   });
+
+  it.each([{}, { data: {} }, { data: { status: "ok" } }])(
+    "does not report acceptance when a successful response lacks a ticket: %s",
+    async (body) => {
+      const tokens = new MemoryPushTokenStore();
+      await tokens.save("user-1", "ExponentPushToken[test]");
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(
+        new ExpoPushProvider(tokens).deliver(pushMessage, notifyContext),
+      ).rejects.toThrow("Expo push outcome is uncertain");
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("passes caller cancellation to the Expo request", async () => {
     const tokens = new MemoryPushTokenStore();
@@ -438,17 +452,19 @@ describe("expo push", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("throws when the Expo request never reaches the network", async () => {
+  it("does not replay an Expo request when a network error leaves its outcome unknown", async () => {
     const tokens = new MemoryPushTokenStore();
     await tokens.save("user-1", "ExponentPushToken[test]");
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetchMock);
     const push = new ExpoPushProvider(tokens, { retryDelaysMs: [0, 0] });
     await expect(
       push.send(
         { kind: "completion", title: "done", body: "ok", botId: "b", threadId: "t" },
         notifyContext,
       ),
-    ).rejects.toThrow("offline");
+    ).rejects.toThrow("Expo push outcome is uncertain");
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("keeps a replacement token when Expo reports the old one unregistered", async () => {
@@ -603,17 +619,17 @@ describe("expo push delivery outcomes", () => {
       tokenKept: true,
     },
     {
-      name: "a 5xx then success",
+      name: "a 5xx with an unknown submission outcome",
       outcomes: [{ httpStatus: 503 }],
-      result: "delivered",
-      posts: 2,
+      result: /Expo push outcome is uncertain/,
+      posts: 1,
       tokenKept: true,
     },
     {
-      name: "a network failure then success",
+      name: "a network failure with an unknown submission outcome",
       outcomes: ["network"],
-      result: "delivered",
-      posts: 2,
+      result: /Expo push outcome is uncertain/,
+      posts: 1,
       tokenKept: true,
     },
     {
@@ -632,8 +648,8 @@ describe("expo push delivery outcomes", () => {
         { httpStatus: 502, errors: "down" },
         { httpStatus: 502, errors: "down" },
       ],
-      result: /down/,
-      posts: 3,
+      result: /Expo push outcome is uncertain/,
+      posts: 1,
       tokenKept: true,
     },
     {
@@ -675,7 +691,7 @@ describe("expo push delivery outcomes", () => {
     );
   });
 
-  it("retries when the connection drops while the reply is read", async () => {
+  it("does not resend when the connection drops while the reply is read", async () => {
     const tokens = new MemoryPushTokenStore();
     await tokens.save("user-1", "ExponentPushToken[test]");
     const dropped = new ReadableStream<Uint8Array>({
@@ -690,8 +706,35 @@ describe("expo push delivery outcomes", () => {
     vi.stubGlobal("fetch", fetchMock);
     const push = new ExpoPushProvider(tokens, { retryDelaysMs: [0] });
 
-    await expect(push.deliver(pushMessage, notifyContext)).resolves.toBe("delivered");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(push.deliver(pushMessage, notifyContext)).rejects.toThrow(
+      "Expo push outcome is uncertain",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("marks a cancellation during submission uncertain without resending", async () => {
+    const tokens = new MemoryPushTokenStore();
+    await tokens.save("user-1", "ExponentPushToken[test]");
+    const controller = new AbortController();
+    let started!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      started();
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const delivery = new ExpoPushProvider(tokens).deliver(pushMessage, {
+      ...notifyContext,
+      signal: controller.signal,
+    });
+    await requestStarted;
+    controller.abort();
+    await expect(delivery).rejects.toMatchObject({ name: "ExpoPushUncertainError" });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("does not fail a notification whose device is gone", async () => {
@@ -745,24 +788,25 @@ describe("expo push receipts", () => {
     expect(JSON.stringify(receipt)).not.toContain("ExponentPushToken");
   });
 
-  it.each<{ name: string; receipt?: ExpoPushTicket; tokenKept: boolean }>([
-    { name: "an ok receipt", receipt: { status: "ok" }, tokenKept: true },
-    { name: "a missing receipt", tokenKept: true },
+  it.each<{ name: string; receipt: ExpoPushTicket; tokenKept: boolean; outcome: string }>([
+    { name: "an ok receipt", receipt: { status: "ok" }, tokenKept: true, outcome: "ok" },
     {
       name: "MessageTooBig",
       receipt: { status: "error", message: "too big", details: { error: "MessageTooBig" } },
       tokenKept: true,
+      outcome: "error",
     },
     {
       name: "DeviceNotRegistered",
       receipt: { status: "error", message: "gone", details: { error: "DeviceNotRegistered" } },
       tokenKept: false,
+      outcome: "device_not_registered",
     },
-  ])("handles $name", async ({ receipt, tokenKept }) => {
+  ])("handles $name", async ({ receipt, tokenKept, outcome }) => {
     const { tokens, push, receipt: job } = await deliveredTicket();
     const expo = fakeExpo([], receipt ? { "ticket-1": receipt } : {});
 
-    await expect(push.checkReceipt(job)).resolves.toBeUndefined();
+    await expect(push.checkReceipt(job)).resolves.toBe(outcome);
 
     expect(expo.receiptRequests).toEqual([["ticket-1"]]);
     await expect(loadPushToken(tokens, "user-1")).resolves.toBe(
@@ -788,24 +832,34 @@ describe("expo push receipts", () => {
       "ticket-1": { status: "error", message: "gone", details: { error: "DeviceNotRegistered" } },
     });
 
-    await expect(push.checkReceipt(receipt)).resolves.toBeUndefined();
+    await expect(push.checkReceipt(receipt)).resolves.toBe("device_not_registered");
 
     expect(expo.receiptRequests).toHaveLength(2);
     await expect(loadPushToken(tokens, "user-1")).resolves.toBeUndefined();
   });
 
-  it("skips the check without an error while Expo stays unreachable", async () => {
+  it("fails the read-only job for retry while Expo stays unreachable", async () => {
     const sink = createTestSink();
     installLogger(createLogger({ service: "test", sinks: [sink] }));
     const { tokens, push, receipt } = await deliveredTicket();
     const expo = fakeExpo(["network", "network", "network"]);
 
-    await expect(push.checkReceipt(receipt)).resolves.toBeUndefined();
+    await expect(push.checkReceipt(receipt)).rejects.toThrow("receipt temporarily unavailable");
 
     expect(expo.receiptRequests).toHaveLength(3);
     await expect(loadPushToken(tokens, "user-1")).resolves.toBe("ExponentPushToken[test]");
     expect(sink.events.some((event) => event.level === "error")).toBe(false);
   });
+
+  it.each([undefined, { status: "pending" }])(
+    "retries an absent or unrecognized receipt without changing the token",
+    async (result) => {
+      const { tokens, push, receipt } = await deliveredTicket();
+      fakeExpo([], result ? { "ticket-1": result } : {});
+      await expect(push.checkReceipt(receipt)).rejects.toThrow(/receipt/i);
+      await expect(loadPushToken(tokens, "user-1")).resolves.toBe("ExponentPushToken[test]");
+    },
+  );
 });
 
 describe("expo push access token", () => {
@@ -824,7 +878,7 @@ describe("expo push access token", () => {
     await expect(push.deliver(pushMessage, notifyContext)).resolves.toBe("delivered");
     const [job] = enqueued;
     if (job?.name !== "push.receipt") throw new Error("receipt check was not scheduled");
-    await expect(push.checkReceipt(job.payload)).resolves.toBeUndefined();
+    await expect(push.checkReceipt(job.payload)).resolves.toBe("ok");
 
     expect(expo.authorizations).toEqual(["Bearer expo-access-token", "Bearer expo-access-token"]);
   });

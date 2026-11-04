@@ -13,6 +13,7 @@ import { phoneCallSettings } from "@rakazo/core";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 import { stopOnShutdownSignals } from "@rakazo/core/node/shutdown-signals";
 import { startWorkerHealth, watchEventLoopStalls } from "./health.js";
+import { workerRoutineNotifications } from "./routine-notifications.js";
 import { createWorkerSecretStore } from "./secret-store.js";
 
 loadRootEnv();
@@ -285,7 +286,15 @@ async function main() {
     enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
   });
 
+  const routineNotifications = workerRoutineNotifications({
+    prisma,
+    notifications,
+    jobs,
+    durable: !inMemoryJobs,
+  });
+
   const executor = createRunExecutor({
+    ...routineNotifications.executor,
     proactive,
     maxUploadSizeBytes: uploadSizeFromEnv(process.env),
     prisma,
@@ -373,6 +382,7 @@ async function main() {
     notifications,
   });
   const reconciler = createJobReconciler({
+    ...routineNotifications.reconciler,
     prisma,
     jobs,
     events,

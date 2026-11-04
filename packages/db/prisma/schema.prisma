@@ -893,6 +893,7 @@ model Message {
   sourceRuns            Run[]             @relation("RunSourceMessage")
   externalTranscriptFor  ExternalMessage?
   steeringMessages SteeringMessage[]
+  routineNotification RoutineNotificationIntent?
   createdAt        DateTime  @default(now())
 
   @@unique([threadId, seq])
@@ -988,6 +989,7 @@ model Run {
   effects              ExternalEffect[]
   steeringMessages     SteeringMessage[]
   externalMessage      ExternalMessage?
+  routineNotification  RoutineNotificationIntent?
 
   @@unique([spaceId, clientNonce])
   @@index([status, wakeAt])
@@ -1005,6 +1007,34 @@ model Run {
   // Partial index runs_bot_outcome_pending_idx (unreturned bot-message outcomes) is created in SQL.
   @@index([routineId])
   @@map("runs")
+}
+
+/// One routine completion notification; message content stays in the protected message row.
+model RoutineNotificationIntent {
+  id             String   @id @default(cuid())
+  spaceId        String
+  userId         String
+  runId          String   @unique
+  run            Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  messageId      String?  @unique
+  message        Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  status         String   @default("pending")
+  claimToken     String?
+  claimExpiresAt DateTime?
+  preSubmitFailures Int @default(0)
+  nextPreSubmitAttemptAt DateTime?
+  receiptTicketId String?
+  receiptTokenDigest String?
+  receiptStatus String?
+  receiptCheckAt DateTime?
+  receiptExpiresAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([spaceId, userId])
+  @@index([receiptStatus, receiptCheckAt])
+  @@map("routine_notification_intents")
 }
 
 model SteeringMessage {
