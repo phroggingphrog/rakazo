@@ -177,6 +177,10 @@ describe("email monitor setup", () => {
     await click("Pause routine");
     expect(rpc.routines.update).toHaveBeenLastCalledWith({ routineId: "routine-1", active: false });
     expect(container.textContent).toContain("Paused");
+    expect(container.textContent).toContain("This setup is saved. Its routine status");
+    expect(container.textContent).not.toContain(
+      "This saves a proposal. It does not start a routine",
+    );
   });
   it("starts only on request and reuses the owner-scoped nonce after a lost response and remount", async () => {
     const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
@@ -427,6 +431,7 @@ describe("email monitor setup", () => {
     expect(container.textContent).not.toContain("Active");
     await click("New proposal");
     expect(container.querySelector("textarea")!.value).toBe("");
+    expect(container.textContent).toContain("This saves a proposal. It does not start a routine");
   });
 
   it("does not claim a linked routine exists after it was removed", async () => {

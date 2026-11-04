@@ -478,6 +478,10 @@ describe("native email monitor proposal", () => {
     await click("Create paused routine");
     expect(session.configure).toHaveBeenCalledWith(proposed);
     expect(container.textContent).toContain("Paused");
+    expect(container.textContent).toContain("This setup is saved. Its routine status");
+    expect(container.textContent).not.toContain(
+      "This saves a proposal. It does not start a routine",
+    );
     expect(container.textContent).toContain(
       "The selected operation and arguments are instructions to the bot",
     );

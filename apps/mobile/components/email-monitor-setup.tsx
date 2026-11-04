@@ -395,7 +395,9 @@ export function EmailMonitorSetup({
           </Text>
           <Text style={styles.secondary}>{botName}</Text>
           <Text style={styles.secondary}>
-            {t("This saves a proposal. It does not start a routine or check your mailbox.")}
+            {plan?.status === "configured"
+              ? t("This setup is saved. Its routine status and available actions appear below.")
+              : t("This saves a proposal. It does not start a routine or check your mailbox.")}
           </Text>
 
           {plans.length ? (

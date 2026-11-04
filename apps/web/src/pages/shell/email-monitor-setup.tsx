@@ -403,7 +403,11 @@ export function EmailMonitorSetup({
         </Button>
       </div>
       <p className="mt-3 text-sm text-muted-foreground">
-        <Trans>This saves a proposal. It does not start a routine or check your mailbox.</Trans>
+        {plan?.status === "configured" ? (
+          <Trans>This setup is saved. Its routine status and available actions appear below.</Trans>
+        ) : (
+          <Trans>This saves a proposal. It does not start a routine or check your mailbox.</Trans>
+        )}
       </p>
 
       {plans.length ? (
