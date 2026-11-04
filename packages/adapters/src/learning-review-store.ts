@@ -60,6 +60,15 @@ function textField(payload: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+/**
+ * The (bot, UTC day, slot) claim. The planner's slot is the instant of the occurrence, and
+ * an instant in epoch milliseconds overflows an Int column, so the key stores its offset
+ * from that day's midnight: unique inside the day, stable, and small enough to persist.
+ */
+function slotKey(dayStart: Date, slot: number): number {
+  return slot - dayStart.getTime();
+}
+
 function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === "object" && error !== null && (error as { code?: unknown }).code === "P2002"
@@ -116,7 +125,7 @@ export function createLearningReviewStore(
           data: {
             botId,
             day: dayStart,
-            slot,
+            slot: slotKey(dayStart, slot),
             mode: "pending",
             rubricVersion: LEARNING_REVIEW_RUBRIC_VERSION,
             outcome: {},
@@ -180,7 +189,7 @@ export function createLearningReviewStore(
     },
     async recordReview(record: LearningReviewRecord) {
       await prisma.learningReview.updateMany({
-        where: { botId, day: record.dayStart, slot: record.slot },
+        where: { botId, day: record.dayStart, slot: slotKey(record.dayStart, record.slot) },
         data: {
           mode: record.mode,
           rubricVersion: record.rubricVersion,

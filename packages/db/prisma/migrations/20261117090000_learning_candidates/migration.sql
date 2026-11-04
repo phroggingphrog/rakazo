@@ -2,7 +2,8 @@
 -- reads either table unless a bot's stored profile asks for reviews and the collector flag is on.
 -- learning_candidates holds one row per lesson waiting for a review; learning_reviews holds one row
 -- per completed review, so the unique (botId, day, slot) key is both the cross-process claim and the
--- per-day cap the learning policy sets.
+-- per-day cap the learning policy sets. slot is the offset from the day's UTC midnight, because the
+-- planner's slot is an instant and epoch milliseconds overflow an integer column.
 
 CREATE TABLE "learning_candidates" (
     "id" TEXT NOT NULL,
@@ -25,7 +26,7 @@ CREATE TABLE "learning_candidates" (
 CREATE TABLE "learning_reviews" (
     "id" TEXT NOT NULL,
     "botId" TEXT NOT NULL,
-    "day" DATE NOT NULL,
+    "day" TIMESTAMP(3) NOT NULL,
     "slot" INTEGER NOT NULL,
     "mode" TEXT NOT NULL,
     "rubricVersion" TEXT NOT NULL,

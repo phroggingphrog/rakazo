@@ -2439,7 +2439,7 @@ model LearningReview {
   id String @id @default(cuid())
   botId String
   bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
-  day DateTime @db.Date
+  day DateTime
   slot Int
   mode String
   rubricVersion String
