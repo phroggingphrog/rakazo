@@ -114,7 +114,15 @@ function fixture(options: { noMessage?: boolean; initialStatus?: string } = {}) 
       },
     ),
   };
-  const prisma = { routineNotificationIntent: table } as unknown as PrismaClient;
+  const prisma = {
+    routineNotificationIntent: table,
+    $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        routineNotificationIntent: table,
+        $queryRaw: async () => [{ notifyOnFinish: row.run.bot.notifyOnFinish }],
+      }),
+    ),
+  } as unknown as PrismaClient;
   const notifications = new ExpoPushProvider({} as never);
   const deliver = vi
     .spyOn(notifications, "deliver")
@@ -227,6 +235,69 @@ describe("routine notification intent recovery", () => {
     await reconcileRoutineNotificationIntents(f);
     expect(f.row.status).toBe("cancelled");
     expect(f.deliver).not.toHaveBeenCalled();
+  });
+  it("honors a preference disabled after preparation but before submission", async () => {
+    const f = fixture();
+    f.table.findFirst.mockImplementationOnce(async () => structuredClone(f.row));
+    f.table.findFirst.mockImplementationOnce(async () => {
+      f.row.run.bot.notifyOnFinish = false;
+      return { id: f.row.id };
+    });
+
+    await reconcileRoutineNotificationIntents(f);
+
+    expect(f.row.status).toBe("cancelled");
+    expect(f.deliver).not.toHaveBeenCalled();
+  });
+  it("uses an enabled preference committed before submission", async () => {
+    const f = fixture();
+    f.row.run.bot.notifyOnFinish = false;
+    f.table.findFirst.mockImplementationOnce(async () => structuredClone(f.row));
+    f.table.findFirst.mockImplementationOnce(async () => {
+      f.row.run.bot.notifyOnFinish = true;
+      return { id: f.row.id };
+    });
+
+    await reconcileRoutineNotificationIntents(f);
+
+    expect(f.row.status).toBe("accepted");
+    expect(f.deliver).toHaveBeenCalledOnce();
+  });
+  it("preserves group notifications when the bot preference is disabled", async () => {
+    const f = fixture();
+    f.row.run.bot.notifyOnFinish = false;
+    (f.row.run.thread as { groupId: string | null }).groupId = "group";
+
+    await reconcileRoutineNotificationIntents(f);
+
+    expect(f.row.status).toBe("accepted");
+    expect(f.deliver).toHaveBeenCalledOnce();
+  });
+  it("does not submit after a claim expires before admission", async () => {
+    const f = fixture();
+    f.table.findFirst.mockImplementationOnce(async () => structuredClone(f.row));
+    f.table.findFirst.mockImplementationOnce(async () => {
+      f.row.claimExpiresAt = new Date(0);
+      return { id: f.row.id };
+    });
+
+    await reconcileRoutineNotificationIntents(f);
+
+    expect(f.row.status).toBe("preparing");
+    expect(f.deliver).not.toHaveBeenCalled();
+  });
+  it("keeps the outcome of a submission already admitted before the preference changes", async () => {
+    const f = fixture();
+    f.deliver.mockImplementationOnce(async (_message, _context, accepted) => {
+      f.row.run.bot.notifyOnFinish = false;
+      await accepted?.("ticket", "digest");
+      return "delivered";
+    });
+
+    await reconcileRoutineNotificationIntents(f);
+
+    expect(f.row.status).toBe("accepted");
+    expect(f.deliver).toHaveBeenCalledOnce();
   });
   it("does not call a provider for a mismatched run owner", async () => {
     const f = fixture();

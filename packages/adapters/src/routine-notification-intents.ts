@@ -135,13 +135,13 @@ export async function reconcileRoutineNotificationIntents(deps: {
                 userId: true,
                 botId: true,
                 threadId: true,
-                bot: { select: { name: true, notifyOnFinish: true } },
+                bot: { select: { name: true } },
                 thread: { select: { groupId: true } },
               },
             },
           },
         });
-        if (!intent?.message || (!intent.run.bot.notifyOnFinish && !intent.run.thread.groupId)) {
+        if (!intent?.message) {
           await settle("cancelled");
           return;
         }
@@ -200,19 +200,31 @@ export async function reconcileRoutineNotificationIntents(deps: {
           await settle("cancelled");
           return;
         }
-        const dispatched = await prisma.routineNotificationIntent.updateMany({
-          where: {
-            id: candidate.id,
-            spaceId: candidate.spaceId,
-            userId: candidate.userId,
-            status: "preparing",
-            claimToken,
-            claimExpiresAt: { gt: new Date() },
-            messageId: { not: null },
-          },
-          data: { status: "submitting" },
+        const dispatched = await prisma.$transaction(async (tx) => {
+          const bots = await tx.$queryRaw<Array<{ notifyOnFinish: boolean }>>`
+            SELECT "notifyOnFinish" FROM bots
+            WHERE id = ${intent.run.botId} AND "spaceId" = ${candidate.spaceId}
+            FOR UPDATE
+          `;
+          if (!bots[0]) return false;
+          const shouldNotify = bots[0].notifyOnFinish || Boolean(intent.run.thread.groupId);
+          const result = await tx.routineNotificationIntent.updateMany({
+            where: {
+              id: candidate.id,
+              spaceId: candidate.spaceId,
+              userId: candidate.userId,
+              status: "preparing",
+              claimToken,
+              claimExpiresAt: { gt: new Date() },
+              messageId: { not: null },
+            },
+            data: shouldNotify
+              ? { status: "submitting" }
+              : { status: "cancelled", claimToken: null, claimExpiresAt: null },
+          });
+          return shouldNotify && result.count === 1;
         });
-        if (dispatched.count !== 1) return;
+        if (!dispatched) return;
         submissionStarted = true;
         if (notifications instanceof ExpoPushProvider) {
           const result = await notifications.deliver(
