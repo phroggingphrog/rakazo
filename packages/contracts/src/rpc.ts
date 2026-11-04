@@ -478,6 +478,31 @@ export const appContract = {
       .output(z.object({ ok: z.literal(true) })),
   },
   setupPlans: {
+    previewReads: oc.input(z.object({ botId: Id, serverId: Id }).strict()).output(
+      z.object({
+        status: z.enum(["ok", "unavailable", "not_assigned"]),
+        revision: z.number().int().positive(),
+        tools: z.array(
+          z.object({
+            name: z.string(),
+            description: z.string(),
+            inputSchema: z.record(z.string(), z.unknown()),
+          }),
+        ),
+      }),
+    ),
+    grantRead: oc
+      .input(
+        z
+          .object({
+            botId: Id,
+            serverId: Id,
+            revision: SetupPlanRevisionSchema,
+            toolName: z.string().min(1).max(200),
+          })
+          .strict(),
+      )
+      .output(z.object({ status: z.literal("allowed") })),
     create: oc
       .input(z.object({ requestKey: z.uuid(), draft: SetupPlanDraftSchema }).strict())
       .output(SetupPlanSchema),

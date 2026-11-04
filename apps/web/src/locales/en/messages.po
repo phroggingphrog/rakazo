@@ -7078,3 +7078,15 @@ msgstr "When setup matches the routine, a source check attempts the selected ope
 #: src/pages/shell/email-monitor-setup.tsx
 msgid "When should it check?"
 msgstr "When should it check?"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Allow the selected read operation without changing other bot access."
+msgstr "Allow the selected read operation without changing other bot access."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Allow selected read"
+msgstr "Allow selected read"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Selected read is allowed in bot settings."
+msgstr "Selected read is allowed in bot settings."

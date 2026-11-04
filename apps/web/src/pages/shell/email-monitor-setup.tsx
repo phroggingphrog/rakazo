@@ -14,7 +14,7 @@ type Plan = Awaited<ReturnType<Client["setupPlans"]["get"]>>;
 type Draft = Plan["draft"];
 type Prerequisites = Awaited<ReturnType<Client["setupPlans"]["prerequisites"]>>;
 type Candidates = Awaited<ReturnType<Client["setupPlans"]["discoverCandidates"]>>;
-type Catalog = Awaited<ReturnType<Client["mcp"]["servers"]["monitorTools"]>>;
+type Catalog = Awaited<ReturnType<Client["setupPlans"]["previewReads"]>>;
 type SourceTestStatus =
   | NonNullable<RoutineRun["sourceTest"]>
   | "not_checked"
@@ -91,6 +91,7 @@ export function EmailMonitorSetup({
   const [timezone, setTimezone] = useState(() => localTimezone());
   const [notify, setNotify] = useState(true);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [grantStatus, setGrantStatus] = useState<"allowed" | null>(null);
   const [prerequisites, setPrerequisites] = useState<Prerequisites | null>(null);
   const [candidates, setCandidates] = useState<Candidates | null>(null);
   const [testRunId, setTestRunId] = useState<string | null>(null);
@@ -210,6 +211,7 @@ export function EmailMonitorSetup({
     setTimezone(next.draft.schedule?.timezone ?? localTimezone());
     setNotify(next.draft.notify);
     setCatalog(null);
+    setGrantStatus(null);
     createAttempt.current = null;
     clearCheck();
   }
@@ -230,6 +232,7 @@ export function EmailMonitorSetup({
     setTimezone(localTimezone());
     setNotify(true);
     setCatalog(null);
+    setGrantStatus(null);
     createAttempt.current = null;
     clearCheck();
   }
@@ -317,12 +320,26 @@ export function EmailMonitorSetup({
 
   async function findOperations() {
     if (!serverId) return;
-    const found = await rpc.mcp.servers.monitorTools({ id: serverId, botId });
+    const found = await rpc.setupPlans.previewReads({ serverId, botId });
     if (!mounted.current) return;
     setCatalog(found);
+    setGrantStatus(null);
     setSourceRevision(found.revision);
     setToolName("");
     setArgumentText("");
+    clearCheck();
+  }
+
+  async function grantRead() {
+    if (!serverId || sourceRevision === null || !toolName) return;
+    const result = await rpc.setupPlans.grantRead({
+      botId,
+      serverId,
+      revision: sourceRevision,
+      toolName,
+    });
+    if (!mounted.current) return;
+    setGrantStatus(result.status);
     clearCheck();
   }
 
@@ -581,6 +598,7 @@ export function EmailMonitorSetup({
               setToolName("");
               setArgumentText("");
               setCatalog(null);
+              setGrantStatus(null);
               clearCheck();
             }}
           >
@@ -627,6 +645,7 @@ export function EmailMonitorSetup({
               className="mt-2 w-full [&>select]:h-11"
               onChange={(event) => {
                 setToolName(event.target.value);
+                setGrantStatus(null);
                 setArgumentText("");
                 clearCheck();
               }}
@@ -648,6 +667,26 @@ export function EmailMonitorSetup({
           <p className="text-sm">
             <Trans>Read operation:</Trans> {toolName}
           </p>
+        ) : null}
+        {catalog?.status === "ok" && toolName && plan?.status !== "configured" ? (
+          <div className="text-sm">
+            <p>
+              <Trans>Allow the selected read operation without changing other bot access.</Trans>
+            </p>
+            <Button
+              variant="secondary"
+              className="mt-2 min-h-11"
+              disabled={busy}
+              onClick={() => void perform(grantRead)}
+            >
+              <Trans>Allow selected read</Trans>
+            </Button>
+            {grantStatus ? (
+              <p role="status" className="mt-2 text-muted-foreground">
+                <Trans>Selected read is allowed in bot settings.</Trans>
+              </p>
+            ) : null}
+          </div>
         ) : null}
         {toolName ? (
           <div className="text-sm">

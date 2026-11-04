@@ -23,11 +23,12 @@ async function lockSetupReferences(
       slug: string;
       spaceId: string;
       allSpaces: boolean;
+      allBots: boolean;
       revision: number;
       transport: string;
     }>
   >`
-    SELECT id, name, slug, "spaceId", "allSpaces", revision, transport FROM mcp_servers
+    SELECT id, name, slug, "spaceId", "allSpaces", "allBots", revision, transport FROM mcp_servers
     WHERE id = ${source.serverId} AND "userId" = ${scope.userId}
       AND enabled = true FOR SHARE`;
   const server = servers[0];
@@ -74,6 +75,91 @@ function dto(row: {
 export function setupPlansRoutes({ deps, authed }: RouterContext) {
   return {
     setupPlans: {
+      previewReads: authed.setupPlans.previewReads.handler(async ({ context, input }) => {
+        const result = await discoverMonitorTools(deps, context.actor, {
+          botId: input.botId,
+          serverId: input.serverId,
+          setupPreview: true,
+          signal: context.signal,
+        });
+        if (context.stillAuthorized && !(await context.stillAuthorized()))
+          throw new ORPCError("UNAUTHORIZED");
+        return result;
+      }),
+      grantRead: authed.setupPlans.grantRead.handler(async ({ context, input }) => {
+        const found = await discoverMonitorTools(deps, context.actor, {
+          botId: input.botId,
+          serverId: input.serverId,
+          expectedRevision: input.revision,
+          setupPreview: true,
+          signal: context.signal,
+        });
+        if (context.stillAuthorized && !(await context.stillAuthorized()))
+          throw new ORPCError("UNAUTHORIZED");
+        if (found.status !== "ok" || !found.tools.some((tool) => tool.name === input.toolName))
+          throw new ORPCError("CONFLICT", {
+            message: "Read operation is unavailable; find operations again.",
+          });
+        const scope = { spaceId: context.actor.spaceId, userId: context.actor.userId };
+        return deps.prisma.$transaction(async (tx) => {
+          const server = await lockSetupReferences(tx, scope, input.botId, {
+            serverId: input.serverId,
+            revision: input.revision,
+          });
+          const assignment = await tx.botMcpServer.findFirst({
+            where: { ...scope, botId: input.botId, serverId: input.serverId },
+          });
+          if (!assignment && !server.allBots) {
+            try {
+              await tx.botMcpServer.create({
+                data: {
+                  ...scope,
+                  botId: input.botId,
+                  serverId: input.serverId,
+                  allowAllTools: false,
+                  allowedTools: [input.toolName],
+                },
+              });
+            } catch (error) {
+              if (error && typeof error === "object" && "code" in error && error.code === "P2002")
+                throw new ORPCError("CONFLICT", {
+                  message: "Bot access changed; review and try again.",
+                });
+              throw error;
+            }
+          }
+          if (assignment && !assignment.allowAllTools) {
+            if (
+              !Array.isArray(assignment.allowedTools) ||
+              !assignment.allowedTools.every((tool) => typeof tool === "string")
+            )
+              throw new ORPCError("CONFLICT", {
+                message: "Bot access needs review in integration settings.",
+              });
+            if (!assignment.allowedTools.includes(input.toolName)) {
+              if (assignment.allowedTools.length >= 500)
+                throw new ORPCError("CONFLICT", {
+                  message: "The bot's operation limit was reached.",
+                });
+              const changed = await tx.botMcpServer.updateMany({
+                where: {
+                  ...scope,
+                  id: assignment.id,
+                  allowAllTools: false,
+                  updatedAt: assignment.updatedAt,
+                  allowedTools: { equals: assignment.allowedTools as Prisma.InputJsonValue },
+                },
+                data: { allowedTools: [...assignment.allowedTools, input.toolName] },
+              });
+              if (changed.count !== 1)
+                throw new ORPCError("CONFLICT", {
+                  message: "Bot access changed; review and try again.",
+                });
+            }
+          }
+          return { status: "allowed" as const };
+        });
+      }),
       create: authed.setupPlans.create.handler(async ({ context, input }) => {
         const scope = { spaceId: context.actor.spaceId, userId: context.actor.userId };
         const key = { ...scope, requestKey: input.requestKey };

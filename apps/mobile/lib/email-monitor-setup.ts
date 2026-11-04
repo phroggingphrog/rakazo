@@ -105,7 +105,17 @@ export async function openMonitorSetup(botId: string) {
     },
     async discover(serverId: string) {
       assertCurrent();
-      const result = await rpc("mcp/servers/monitorTools", { id: serverId, botId }, options);
+      const result = await rpc("setupPlans/previewReads", { serverId, botId }, options);
+      assertCurrent();
+      return result;
+    },
+    async grantRead(serverId: string, revision: number, toolName: string) {
+      assertCurrent();
+      const result = await rpc(
+        "setupPlans/grantRead",
+        { serverId, botId, revision, toolName },
+        options,
+      );
       assertCurrent();
       return result;
     },

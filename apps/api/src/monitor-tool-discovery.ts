@@ -7,7 +7,13 @@ import type { RouterDeps } from "./router.js";
 export async function discoverMonitorTools(
   deps: RouterDeps,
   actor: Actor,
-  input: { serverId: string; botId: string; expectedRevision?: number; signal?: AbortSignal },
+  input: {
+    serverId: string;
+    botId: string;
+    expectedRevision?: number;
+    signal?: AbortSignal;
+    setupPreview?: boolean;
+  },
 ) {
   const [server, bot] = await Promise.all([
     deps.prisma.mcpServer.findFirst({
@@ -21,9 +27,13 @@ export async function discoverMonitorTools(
   if (!server || !bot) throw new IsolationError();
   if (input.expectedRevision !== undefined && server.revision !== input.expectedRevision)
     throw new ORPCError("CONFLICT", { message: "Integration changed; review it again" });
-  if (!deps.mcp?.discoverMonitorTools)
+  const discover = input.setupPreview
+    ? deps.mcp?.discoverSetupMonitorTools
+    : deps.mcp?.discoverMonitorTools;
+  if (!discover)
     throw new ORPCError("SERVICE_UNAVAILABLE", { message: "Monitor discovery is unavailable" });
-  const found = await deps.mcp.discoverMonitorTools(
+  const found = await discover.call(
+    deps.mcp,
     {
       operationId: "monitor-tools",
       traceId: "monitor-tools",

@@ -442,6 +442,40 @@ export class McpConnector implements ConnectorProvider {
     };
   }
 
+  /** Owner-triggered setup preview; does not create a bot assignment. */
+  async discoverSetupMonitorTools(
+    context: AdapterContext,
+    serverId: string,
+  ): Promise<{ status: "ok" | "unavailable" | "not_assigned"; tools: ConnectorTool[] }> {
+    if (!context.botId) return { status: "not_assigned" as const, tools: [] };
+    const bot = await this.prisma.bot.findFirst({
+      where: {
+        id: context.botId,
+        spaceId: context.spaceId,
+        userId: context.userId,
+        archivedAt: null,
+      },
+      select: { id: true },
+    });
+    if (!bot) return { status: "not_assigned" as const, tools: [] };
+    const observations = new Map<string, "ok" | "unavailable">();
+    const tools = await this.authorizedTools(context, observations, serverId, true);
+    const status = observations.get(serverId) ?? "not_assigned";
+    return {
+      status,
+      tools:
+        status === "ok"
+          ? tools.filter(
+              (tool) =>
+                tool.readOnly === true &&
+                !tool.batch &&
+                tool.route?.resourceId === serverId &&
+                !tool.route.toolName.startsWith("__rakazo_"),
+            )
+          : [],
+    };
+  }
+
   async resolveCall(
     call: ConnectorCall,
     context: AdapterContext,
@@ -461,6 +495,7 @@ export class McpConnector implements ConnectorProvider {
     context: AdapterContext,
     observations?: Map<string, "ok" | "unavailable">,
     serverId?: string,
+    setupPreview = false,
   ): Promise<ConnectorTool[]> {
     if (!context.botId) return [];
     const usable = { enabled: true, ...availableInSpace(context) };
@@ -479,9 +514,13 @@ export class McpConnector implements ConnectorProvider {
         where: { ...usable, allBots: true, assignments: { none: { botId: context.botId } } },
       }),
     ]);
-    const assignments = [...assigned, ...shared.map(sharedAssignment)].filter(
-      (assignment) => !serverId || assignment.server.id === serverId,
-    );
+    const assignments = [...assigned, ...shared.map(sharedAssignment)]
+      .filter((assignment) => !serverId || assignment.server.id === serverId)
+      .map((assignment) => (setupPreview ? sharedAssignment(assignment.server) : assignment));
+    if (setupPreview && serverId && assignments.length === 0) {
+      const server = await this.prisma.mcpServer.findFirst({ where: { ...usable, id: serverId } });
+      if (server) assignments.push(sharedAssignment(server));
+    }
     const groups = await Promise.all(
       assignments.map(async (assignment): Promise<ConnectorTool[]> => {
         const startedAt = Date.now();
