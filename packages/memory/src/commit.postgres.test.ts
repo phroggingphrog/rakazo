@@ -259,9 +259,9 @@ describePostgres("memory commits (PostgreSQL)", () => {
       expect(current?.supersedesFactId).toBe(stale?.id);
       // The fact the correction replaced is stale, never current. This history view is
       // newest revision first, so compare what is live rather than the row order.
-      expect(new Set(facts.filter((fact) => fact.invalidFrom === null).map((fact) => fact.text))).toEqual(
-        new Set(["Review happens on Fridays.", "Deploy runs on Thursdays."]),
-      );
+      expect(
+        new Set(facts.filter((fact) => fact.invalidFrom === null).map((fact) => fact.text)),
+      ).toEqual(new Set(["Review happens on Fridays.", "Deploy runs on Thursdays."]));
 
       const saved = await document(path);
       expect(saved.content).toBe(after);

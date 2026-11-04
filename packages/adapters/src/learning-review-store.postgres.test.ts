@@ -1,11 +1,11 @@
 import { asSystem, createDb, runAsSystem, runAsTenant } from "@rakazo/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createScheduledLearningReview } from "./learning-reviews.js";
 import {
   createLearningReviewStore,
   enqueueLearningReviewJobs,
   runScheduledLearningReview,
 } from "./learning-review-store.js";
+import { createScheduledLearningReview } from "./learning-reviews.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const describePostgres =
@@ -34,7 +34,10 @@ function settings(mode: "off" | "proposals-only" | "automatic-private") {
   };
 }
 
-const answer = (body: object) => async () => ({ text: JSON.stringify(body), usage: { inputTokens: 100 } });
+const answer = (body: object) => async () => ({
+  text: JSON.stringify(body),
+  usage: { inputTokens: 100 },
+});
 
 describePostgres("scheduled learning review (PostgreSQL)", () => {
   let prisma: ReturnType<typeof createDb>["prisma"];
@@ -112,7 +115,9 @@ describePostgres("scheduled learning review (PostgreSQL)", () => {
       }),
     );
     expect(result).toEqual({ ran: false, reason: "judge-unavailable" });
-    expect(await asSystem(prisma).learningReview.count({ where: { botId: learningBotId } })).toBe(0);
+    expect(await asSystem(prisma).learningReview.count({ where: { botId: learningBotId } })).toBe(
+      0,
+    );
   });
 
   it("records a judge failure as unqualified and never promotes", async () => {
@@ -123,7 +128,11 @@ describePostgres("scheduled learning review (PostgreSQL)", () => {
           botId: learningBotId,
           kind: "memory",
           dedupeKey: "failure-a",
-          payload: { title: "First", body: "Export the invoice table as CSV.", evidence: "thread-1" },
+          payload: {
+            title: "First",
+            body: "Export the invoice table as CSV.",
+            evidence: "thread-1",
+          },
         },
         {
           spaceId,
@@ -171,7 +180,11 @@ describePostgres("scheduled learning review (PostgreSQL)", () => {
         botId: learningBotId,
         kind: "memory" as const,
         dedupeKey,
-        payload: { title: dedupeKey, body: "Durable and evidenced.", evidence: `thread-${dedupeKey}` },
+        payload: {
+          title: dedupeKey,
+          body: "Durable and evidenced.",
+          evidence: `thread-${dedupeKey}`,
+        },
       })),
     });
     const store = createLearningReviewStore({
