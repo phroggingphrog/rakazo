@@ -241,4 +241,31 @@ describePostgres("memory commits (PostgreSQL)", () => {
       expect(afterRetry.revisions).toHaveLength(5);
       expect(afterRetry.revisions.at(-1)).toMatchObject({ revision: 5, content: "rejected" });
     }));
+
+  it("invalidates a corrected fact and keeps the earlier one readable", () =>
+    runAsSystem(MEMORY_SAVE, async () => {
+      const path = "corrected-fact.md";
+      const before = "Deploy runs on Wednesdays.\nReview happens on Fridays.";
+      const after = "Deploy runs on Thursdays.\nReview happens on Fridays.";
+      const first = await store.commit(request(path, before), context);
+      const corrected = await store.commit(request(path, after), context);
+
+      const facts = await store.facts(first.id, context);
+      const stale = facts.find((fact) => fact.text === "Deploy runs on Wednesdays.");
+      const current = facts.find((fact) => fact.text === "Deploy runs on Thursdays.");
+      expect(stale?.invalidFrom).toBeInstanceOf(Date);
+      expect(stale).toMatchObject({ invalidFromRevision: corrected.revision });
+      expect(current).toMatchObject({ invalidFrom: null, invalidFromRevision: null });
+      expect(current?.supersedesFactId).toBe(stale?.id);
+      // The fact the correction replaced is stale, never current.
+      expect(facts.filter((fact) => fact.invalidFrom === null).map((fact) => fact.text)).toEqual([
+        "Review happens on Fridays.",
+        "Deploy runs on Thursdays.",
+      ]);
+
+      const saved = await document(path);
+      expect(saved.content).toBe(after);
+      // Both versions of the fact stay in the document history.
+      expect(saved.revisions.map(({ content }) => content)).toEqual([before, after]);
+    }));
 });

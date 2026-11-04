@@ -1349,6 +1349,7 @@ model MemoryDocument {
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
   revisions MemoryRevision[]
+  facts     MemoryFact[]
 
   @@unique([spaceId, scope, botId, path])
   @@index([spaceId, userId])
@@ -1367,6 +1368,30 @@ model MemoryRevision {
 
   @@unique([documentId, revision])
   @@map("memory_revisions")
+}
+
+/// One line of a memory document, valid from the revision that introduced it until the revision
+/// that stopped containing it. A correction invalidates the earlier fact instead of deleting it, so
+/// both stay readable while only the newest one is current.
+model MemoryFact {
+  id                  String         @id @default(cuid())
+  documentId          String
+  document            MemoryDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  text                String
+  validFrom           DateTime
+  validFromRevision   Int
+  invalidFrom         DateTime?
+  invalidFromRevision Int?
+  supersedesFactId    String?
+  supersedes          MemoryFact?    @relation("MemoryFactSupersede", fields: [supersedesFactId], references: [id], onDelete: SetNull)
+  superseded          MemoryFact[]   @relation("MemoryFactSupersede")
+  sourceRunId         String?
+  sourceThreadId      String?
+  createdAt           DateTime       @default(now())
+
+  @@index([documentId, invalidFrom])
+  @@index([supersedesFactId])
+  @@map("memory_facts")
 }
 
 model AgentHome {

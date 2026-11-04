@@ -14,6 +14,7 @@ import type {
 import { MEMORY_REVISION_CONFLICT_ERROR } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
 import { Prisma, withTransactionRetry } from "@rakazo/db";
+import { planMemoryFacts } from "./facts.js";
 
 export class MarkdownMemoryStore implements MemoryStore {
   constructor(private readonly prisma: PrismaClient) {}
@@ -72,8 +73,10 @@ export class MarkdownMemoryStore implements MemoryStore {
   }
 
   async commit(request: MemoryCommitRequest, context: AdapterContext): Promise<MemoryRevision> {
-    // A save replaces the current content and appends its history atomically.
-    // Conflicts retry the whole transaction so revision numbers use fresh state.
+    // A save replaces the current content, appends its history and moves the facts the new
+    // content adds or drops, all atomically. A fact the save no longer contains is invalidated
+    // from this revision rather than deleted, so the correction and what it replaced both stay
+    // readable. Conflicts retry the whole transaction so revision numbers use fresh state.
     return withTransactionRetry(() =>
       this.prisma.$transaction(
         async (tx) => {
@@ -114,11 +117,26 @@ export class MarkdownMemoryStore implements MemoryStore {
               sourceThreadId: request.sourceThreadId,
             },
           });
+          await recordFacts(tx, doc.id, doc.revision, request);
           return { id: doc.id, path: doc.path, revision: doc.revision, content: doc.content };
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       ),
     );
+  }
+
+  /** Facts the document has asserted, newest revision first, including the invalidated ones. */
+  async facts(documentId: string, context: AdapterContext) {
+    // A document id alone is not an authorisation: the caller must own it in this space.
+    const document = await this.prisma.memoryDocument.findFirst({
+      where: { id: documentId, spaceId: context.spaceId, userId: context.userId },
+      select: { id: true },
+    });
+    if (!document) return [];
+    return this.prisma.memoryFact.findMany({
+      where: { documentId },
+      orderBy: [{ validFromRevision: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    });
   }
 
   async remove(
@@ -169,6 +187,47 @@ export class MarkdownMemoryStore implements MemoryStore {
     }
     if (!last) throw new Error("No memory files to import");
     return last;
+  }
+}
+
+/**
+ * Record which facts start and stop being true at one document revision. The revision and the fact
+ * rows are written by the same transaction, so a fact can never point at a revision that was not
+ * stored. A correction stamps the earlier fact invalid at the instant the new one takes over,
+ * which keeps one current fact per line and the earlier one readable.
+ */
+async function recordFacts(
+  tx: Prisma.TransactionClient,
+  documentId: string,
+  revision: number,
+  request: MemoryCommitRequest,
+): Promise<void> {
+  const live = await tx.memoryFact.findMany({
+    where: { documentId, invalidFrom: null },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { id: true, text: true },
+  });
+  const plan = planMemoryFacts(live, request.content);
+  if (plan.invalidated.length === 0 && plan.added.length === 0) return;
+  const at = new Date();
+  if (plan.invalidated.length > 0) {
+    await tx.memoryFact.updateMany({
+      where: { id: { in: plan.invalidated.map((fact) => fact.id) }, invalidFrom: null },
+      data: { invalidFrom: at, invalidFromRevision: revision },
+    });
+  }
+  if (plan.added.length > 0) {
+    await tx.memoryFact.createMany({
+      data: plan.added.map((text) => ({
+        documentId,
+        text,
+        validFrom: at,
+        validFromRevision: revision,
+        supersedesFactId: plan.supersedes.get(text) ?? null,
+        sourceRunId: request.sourceRunId ?? null,
+        sourceThreadId: request.sourceThreadId ?? null,
+      })),
+    });
   }
 }
 
