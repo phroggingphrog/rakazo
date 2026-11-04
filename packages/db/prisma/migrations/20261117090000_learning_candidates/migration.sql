@@ -45,3 +45,28 @@ CREATE INDEX "learning_reviews_botId_createdAt_idx" ON "learning_reviews"("botId
 
 ALTER TABLE "learning_candidates" ADD CONSTRAINT "learning_candidates_botId_fkey" FOREIGN KEY ("botId") REFERENCES "bots"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "learning_reviews" ADD CONSTRAINT "learning_reviews_botId_fkey" FOREIGN KEY ("botId") REFERENCES "bots"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- Both tables are tenant data: a Space reaches only its own candidates and reviews.
+ALTER TABLE "learning_candidates" ENABLE ROW LEVEL SECURITY;
+CREATE POLICY learning_candidates_tenant ON "learning_candidates"
+  USING ("spaceId" = NULLIF(current_setting('app.space_id', true), ''));
+CREATE POLICY learning_candidates_system ON "learning_candidates"
+  USING (current_setting('app.rls_bypass', true) = 'on');
+
+-- A review carries no Space of its own; it belongs to its bot's Space.
+ALTER TABLE "learning_reviews" ENABLE ROW LEVEL SECURITY;
+CREATE POLICY learning_reviews_tenant ON "learning_reviews"
+  USING (EXISTS (
+    SELECT 1 FROM "bots" b
+    WHERE b."id" = "learning_reviews"."botId"
+      AND b."spaceId" = NULLIF(current_setting('app.space_id', true), '')
+  ));
+CREATE POLICY learning_reviews_system ON "learning_reviews"
+  USING (current_setting('app.rls_bypass', true) = 'on');
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rakazo_app') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON "learning_candidates", "learning_reviews" TO rakazo_app;
+  END IF;
+END $$;

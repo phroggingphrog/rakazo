@@ -26,3 +26,22 @@ CREATE INDEX "memory_facts_supersedesFactId_idx" ON "memory_facts"("supersedesFa
 ALTER TABLE "memory_facts" ADD CONSTRAINT "memory_facts_documentId_fkey" FOREIGN KEY ("documentId") REFERENCES "memory_documents"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 ALTER TABLE "memory_facts" ADD CONSTRAINT "memory_facts_supersedesFactId_fkey" FOREIGN KEY ("supersedesFactId") REFERENCES "memory_facts"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- Same policies as memory_revisions (20261021140000_row_level_security): a fact belongs to its
+-- document's Space, and only a system-scope job may read across Spaces.
+ALTER TABLE "memory_facts" ENABLE ROW LEVEL SECURITY;
+CREATE POLICY memory_facts_tenant ON "memory_facts"
+  USING (EXISTS (
+    SELECT 1 FROM "memory_documents" d
+    WHERE d."id" = "memory_facts"."documentId"
+      AND d."spaceId" = NULLIF(current_setting('app.space_id', true), '')
+  ));
+CREATE POLICY memory_facts_system ON "memory_facts"
+  USING (current_setting('app.rls_bypass', true) = 'on');
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rakazo_app') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON "memory_facts" TO rakazo_app;
+  END IF;
+END $$;
