@@ -164,16 +164,23 @@ export function learningReviewTokensSpent(usage: LearningReviewUsage): number {
 export async function judgeLearningCandidate(
   complete: LearningReviewComplete,
   input: LearningReviewPromptInput,
-  options: { maxRetries: number; timeoutMs: number; deadline?: number },
+  options: {
+    maxRetries: number;
+    timeoutMs: number;
+    deadline?: number;
+    /** The clock the caller plans against, so the deadline is measured on the same one. */
+    now?: () => number;
+  },
 ): Promise<LearningReviewJudgement> {
   const prompt = buildLearningReviewPrompt(input);
+  const clock = options.now ?? Date.now;
   const retries = Number.isFinite(options.maxRetries) ? Math.trunc(options.maxRetries) : 0;
   const maxAttempts = Math.min(Math.max(retries, 0), 5) + 1;
   const usage: LearningReviewUsage = {};
   let attempts = 0;
   let lastError = "";
   while (attempts < maxAttempts) {
-    if (options.deadline !== undefined && Date.now() > options.deadline) {
+    if (options.deadline !== undefined && clock() > options.deadline) {
       lastError = "review deadline reached";
       break;
     }

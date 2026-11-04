@@ -206,9 +206,9 @@ describe("scheduled learning review", () => {
   });
 
   it("stops at the review deadline even when candidates remain", async () => {
-    vi.useFakeTimers();
     const at = new Date("2026-11-04T20:00:00.000Z");
-    vi.setSystemTime(at);
+    // One clock for planning and for the deadline, so the run cannot straddle a real clock.
+    let clock = at;
     const h = harness({
       policyRecord: {
         policy: { ...policy, maxReviewSeconds: 1 },
@@ -219,11 +219,11 @@ describe("scheduled learning review", () => {
     const slow: LearningReviewPorts = {
       ...h.ports,
       complete: async () => {
-        vi.setSystemTime(new Date(at.getTime() + 2_000));
+        clock = new Date(at.getTime() + 2_000);
         return qualifiedAnswer();
       },
     };
-    const run = await createScheduledLearningReview(slow, { now: () => at }).runOnce(at);
+    const run = await createScheduledLearningReview(slow, { now: () => clock }).runOnce(at);
     expect(run).toMatchObject({ ran: true, stoppedBecause: "deadline" });
   });
 

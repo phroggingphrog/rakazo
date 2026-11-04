@@ -257,11 +257,11 @@ describePostgres("memory commits (PostgreSQL)", () => {
       expect(stale).toMatchObject({ invalidFromRevision: corrected.revision });
       expect(current).toMatchObject({ invalidFrom: null, invalidFromRevision: null });
       expect(current?.supersedesFactId).toBe(stale?.id);
-      // The fact the correction replaced is stale, never current.
-      expect(facts.filter((fact) => fact.invalidFrom === null).map((fact) => fact.text)).toEqual([
-        "Review happens on Fridays.",
-        "Deploy runs on Thursdays.",
-      ]);
+      // The fact the correction replaced is stale, never current. This history view is
+      // newest revision first, so compare what is live rather than the row order.
+      expect(new Set(facts.filter((fact) => fact.invalidFrom === null).map((fact) => fact.text))).toEqual(
+        new Set(["Review happens on Fridays.", "Deploy runs on Thursdays."]),
+      );
 
       const saved = await document(path);
       expect(saved.content).toBe(after);

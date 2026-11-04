@@ -171,7 +171,7 @@ export function createScheduledLearningReview(
           stoppedBecause = "tokens";
           break;
         }
-        if (Date.now() > plan.deadline) {
+        if (now().getTime() > plan.deadline) {
           stoppedBecause = "deadline";
           break;
         }
@@ -182,6 +182,7 @@ export function createScheduledLearningReview(
             maxRetries: policy.maxRetries,
             timeoutMs,
             deadline: plan.deadline,
+            now: () => now().getTime(),
           },
         );
         usage.inputTokens = addTokens(usage.inputTokens, judgement.usage.inputTokens);
