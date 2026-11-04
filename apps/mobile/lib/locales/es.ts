@@ -1,4 +1,10 @@
 export const ES_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "Configurar monitor de fuente",
+  "Source monitor": "Monitor de fuente",
+  "Saving a proposal does not start a routine or read the source.":
+    "Guardar una propuesta no inicia una rutina ni lee la fuente.",
+  "Source access and permissions have not been verified. No read was performed.":
+    "No se han verificado el acceso a la fuente ni los permisos. No se ha realizado ninguna lectura.",
   "Declared required fields:": "Campos declarados como obligatorios:",
   "Enter a valid JSON object up to 8 KB.": "Introduce un objeto JSON válido de hasta 8 KB.",
   "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":

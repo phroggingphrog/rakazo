@@ -491,13 +491,13 @@ export function EmailMonitorSetup({
           contentInsetAdjustmentBehavior="automatic"
         >
           <Text accessibilityRole="header" style={styles.title}>
-            {t("Email monitor")}
+            {t("Source monitor")}
           </Text>
           <Text style={styles.secondary}>{botName}</Text>
           <Text style={styles.secondary}>
             {plan?.status === "configured"
               ? t("This setup is saved. Its routine status and available actions appear below.")
-              : t("This saves a proposal. It does not start a routine or check your mailbox.")}
+              : t("Saving a proposal does not start a routine or read the source.")}
           </Text>
 
           {plans.length ? (
@@ -782,7 +782,7 @@ export function EmailMonitorSetup({
                   ) : null}
                   <Text style={styles.secondary}>
                     {t(
-                      "Mailbox access and permissions have not been verified. No read was performed.",
+                      "Source access and permissions have not been verified. No read was performed.",
                     )}
                   </Text>
                 </View>

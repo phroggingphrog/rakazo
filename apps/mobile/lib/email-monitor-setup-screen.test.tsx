@@ -241,7 +241,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("native email monitor proposal", () => {
+describe("native source monitor proposal", () => {
   it("lets the owner grant only the selected read after preview", async () => {
     await select("Integration", "server-1");
     await click("Find read operations");
@@ -601,8 +601,8 @@ describe("native email monitor proposal", () => {
       [...container.querySelectorAll("button")].some((node) => node.textContent === "Run test"),
     ).toBe(false);
   });
-  it("saves and checks a proposal without claiming a mailbox read or activation", async () => {
-    expect(container.textContent).toContain("does not start a routine or check your mailbox");
+  it("saves and checks a proposal without claiming a source read or activation", async () => {
+    expect(container.textContent).toContain("does not start a routine or read the source");
     await act(async () => {
       input(container.querySelector("textarea")!, draft.purpose);
     });
@@ -732,9 +732,7 @@ describe("native email monitor proposal", () => {
     expect(session.configure).toHaveBeenCalledWith(proposed);
     expect(container.textContent).toContain("Paused");
     expect(container.textContent).toContain("This setup is saved. Its routine status");
-    expect(container.textContent).not.toContain(
-      "This saves a proposal. It does not start a routine",
-    );
+    expect(container.textContent).not.toContain("Saving a proposal does not start a routine");
     expect(container.textContent).toContain(
       "When setup matches the routine, a source check attempts the selected operation",
     );

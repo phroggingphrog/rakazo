@@ -1,4 +1,10 @@
 export const JA_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "ソース監視を設定",
+  "Source monitor": "ソース監視",
+  "Saving a proposal does not start a routine or read the source.":
+    "提案を保存しても、ルーチンの開始やソースの読み取りは行われません。",
+  "Source access and permissions have not been verified. No read was performed.":
+    "ソースへのアクセスと権限は確認されていません。読み取りは行われていません。",
   "Declared required fields:": "必須として宣言されたフィールド:",
   "Enter a valid JSON object up to 8 KB.": "8 KB以下の有効なJSONオブジェクトを入力してください。",
   "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":

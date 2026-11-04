@@ -157,9 +157,32 @@ afterEach(() => {
   container.remove();
 });
 
-describe("email monitor setup", () => {
+describe("source monitor setup", () => {
+  it("saves a calendar read using the existing draft format", async () => {
+    rpc.mcp.servers.list.mockResolvedValue([{ ...server, name: "Calendar" }]);
+    rpc.setupPlans.previewReads.mockResolvedValue({
+      ...catalog,
+      tools: [{ name: "list_events", description: "Read events", inputSchema: {} }],
+    });
+    await click("Set up source monitor");
+    await act(async () => change(container.querySelector("textarea")!, "Find appointments"));
+    await act(async () => change(container.querySelector("select")!, "server-1"));
+    await click("Find read operations");
+    await act(async () => change(container.querySelectorAll("select")[1]!, "list_events"));
+    await click("Save draft");
+    expect(rpc.setupPlans.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: expect.objectContaining({
+          kind: "email_monitor",
+          purpose: "Find appointments",
+          source: { serverId: "server-1", revision: 3, toolName: "list_events" },
+        }),
+      }),
+    );
+  });
+
   it("grants the selected read only after the owner chooses it", async () => {
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await act(async () =>
       change(
         container.querySelector<HTMLSelectElement>('select[aria-label="Integration"]')!,
@@ -188,7 +211,7 @@ describe("email monitor setup", () => {
       plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
       nextCursor: null,
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     rpc.routines.history.mockRejectedValue(new Error("offline"));
     vi.useFakeTimers();
@@ -211,7 +234,7 @@ describe("email monitor setup", () => {
       .mockResolvedValueOnce({
         runs: [{ id: "old", status: "completed", sourceTest: "succeeded" }],
       });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     vi.useFakeTimers();
     await click("Find appointment updatesConfigured");
     expect(container.textContent).toContain("Source test: Running");
@@ -232,7 +255,7 @@ describe("email monitor setup", () => {
     rpc.routines.history
       .mockResolvedValueOnce({ runs: [] })
       .mockImplementationOnce(() => new Promise((resolve) => (resolvePoll = resolve)));
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     vi.useFakeTimers();
     await click("Run test");
@@ -250,7 +273,7 @@ describe("email monitor setup", () => {
       plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
       nextCursor: null,
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     let resolvePoll!: (value: {
       runs: { id: string; status: string; sourceTest: string }[];
@@ -279,7 +302,7 @@ describe("email monitor setup", () => {
       runs: [{ id: "old", status: "completed", sourceTest: "not_started", sourceUnbound: true }],
       nextCursor: null,
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     expect(container.textContent).toContain("Source test: Setup changed; source not verified");
     expect(rpc.routines.testRun).not.toHaveBeenCalled();
@@ -296,7 +319,7 @@ describe("email monitor setup", () => {
       ],
       nextCursor: null,
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     expect(rpc.routines.history).toHaveBeenCalledWith({ routineId: "routine-1", limit: 20 });
     expect(container.textContent).toContain("Source test: Succeeded");
@@ -321,7 +344,7 @@ describe("email monitor setup", () => {
           resolve = r;
         }),
     );
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     await click("Run test");
     await act(async () =>
@@ -348,7 +371,7 @@ describe("email monitor setup", () => {
           resolve = r;
         }),
     );
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     await click("New proposal");
     await act(async () =>
@@ -365,7 +388,7 @@ describe("email monitor setup", () => {
       { ...server, id: "local-1", name: "Local mail", transport: "stdio" },
       { ...server, id: "local-2", name: "Disabled local", transport: "stdio", enabled: false },
     ]);
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     expect(container.textContent).toContain("Local mail");
     expect(container.textContent).not.toContain("Disabled local");
   });
@@ -374,7 +397,7 @@ describe("email monitor setup", () => {
       plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
       nextCursor: null,
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     await click("Activate routine");
     expect(rpc.routines.update).toHaveBeenCalledWith({ routineId: "routine-1", active: true });
@@ -384,9 +407,7 @@ describe("email monitor setup", () => {
     expect(rpc.routines.update).toHaveBeenLastCalledWith({ routineId: "routine-1", active: false });
     expect(container.textContent).toContain("Paused");
     expect(container.textContent).toContain("This setup is saved. Its routine status");
-    expect(container.textContent).not.toContain(
-      "This saves a proposal. It does not start a routine",
-    );
+    expect(container.textContent).not.toContain("Saving a proposal does not start a routine");
   });
   it("starts only on request and reuses the owner-scoped nonce after a lost response and remount", async () => {
     const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
@@ -394,7 +415,7 @@ describe("email monitor setup", () => {
     rpc.routines.testRun
       .mockRejectedValueOnce(new Error("connection lost"))
       .mockResolvedValueOnce({ runId: "run-1" });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     expect(rpc.routines.testRun).not.toHaveBeenCalled();
     await click("Run test");
@@ -416,7 +437,7 @@ describe("email monitor setup", () => {
         />,
       ),
     );
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     await click("Run test");
     expect(rpc.routines.testRun.mock.calls[1]![0]).toEqual(first);
@@ -449,7 +470,7 @@ describe("email monitor setup", () => {
       ],
       nextCursor: null,
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     await click("Run test");
     await click("Refresh status");
@@ -481,7 +502,7 @@ describe("email monitor setup", () => {
       sourceAccess: "not_verified",
       createdAt: plan.createdAt,
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     expect(container.textContent).toContain("The routine is unavailable, so a test cannot run");
     expect(
@@ -494,7 +515,7 @@ describe("email monitor setup", () => {
       plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
       nextCursor: null,
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     const storage = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("storage unavailable");
@@ -512,7 +533,7 @@ describe("email monitor setup", () => {
     const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
     rpc.setupPlans.list.mockResolvedValue({ plans: [configured], nextCursor: null });
     rpc.routines.testRun.mockRejectedValue(new Error("connection lost"));
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     await click("Run test");
     rpc.me.mockResolvedValue({ userId: "owner-2", spaceId: "space-1" });
@@ -530,14 +551,14 @@ describe("email monitor setup", () => {
     rpc.setupPlans.preparedTest
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce(null);
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     expect(button("Run test")).toBeTruthy();
     expect(rpc.setupPlans.preparedTest).not.toHaveBeenCalled();
     expect(rpc.routines.testRun).not.toHaveBeenCalled();
   });
-  it("saves and checks a proposal without claiming a mailbox read or activation", async () => {
-    await click("Set up email monitor");
+  it("saves and checks a proposal without claiming a source read or activation", async () => {
+    await click("Set up source monitor");
     expect(container.textContent).toContain("does not start a routine");
     await act(async () => {
       change(container.querySelector("textarea")!, draft.purpose);
@@ -566,9 +587,7 @@ describe("email monitor setup", () => {
       id: "plan-1",
       expectedRevision: 1,
     });
-    expect(container.textContent).toContain(
-      "Mailbox access and permissions have not been verified",
-    );
+    expect(container.textContent).toContain("Source access and permissions have not been verified");
     expect(container.textContent).toContain("No read was performed");
     expect(button("Save proposal").disabled).toBe(false);
     await click("Save proposal");
@@ -588,7 +607,7 @@ describe("email monitor setup", () => {
         },
       ],
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await act(async () => {
       change(container.querySelector("textarea")!, draft.purpose);
     });
@@ -623,7 +642,7 @@ describe("email monitor setup", () => {
       ...prerequisites,
       assignment: "not_configured",
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesDraft");
     await click("Check setup");
     expect(container.textContent).toContain("Not configured");
@@ -634,7 +653,7 @@ describe("email monitor setup", () => {
   it("does not discover an operation denied by the bot's assignment", async () => {
     rpc.setupPlans.list.mockResolvedValue({ plans: [plan], nextCursor: null });
     rpc.setupPlans.prerequisites.mockResolvedValue({ ...prerequisites, selectedTool: "blocked" });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesDraft");
     await click("Check setup");
     expect(container.textContent).toContain("Not allowed in bot settings");
@@ -646,7 +665,7 @@ describe("email monitor setup", () => {
     const saved = { ...plan, draft: { ...draft, notify: false } };
     rpc.setupPlans.list.mockResolvedValue({ plans: [saved], nextCursor: null });
     rpc.setupPlans.update.mockResolvedValue({ ...saved, revision: 2 });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesDraft");
     await act(async () => {
       change(container.querySelector("textarea")!, "Look for updates");
@@ -671,7 +690,7 @@ describe("email monitor setup", () => {
       revision: 3,
       routineId: "routine-1",
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesProposed");
     expect(button("Create paused routine").disabled).toBe(true);
     await click("Check setup");
@@ -692,7 +711,7 @@ describe("email monitor setup", () => {
     expect(container.textContent).not.toContain("Active");
     await click("New proposal");
     expect(container.querySelector("textarea")!.value).toBe("");
-    expect(container.textContent).toContain("This saves a proposal. It does not start a routine");
+    expect(container.textContent).toContain("Saving a proposal does not start a routine");
   });
 
   it("does not claim a linked routine exists after it was removed", async () => {
@@ -700,7 +719,7 @@ describe("email monitor setup", () => {
       plans: [{ ...plan, status: "configured", routineId: null }],
       nextCursor: null,
     });
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await click("Find appointment updatesConfigured");
     expect(container.textContent).toContain("Routine no longer exists");
     expect(container.textContent).not.toContain("Created paused");
@@ -712,7 +731,7 @@ describe("email monitor setup", () => {
 
   it("does not repeat an uncertain create with changed content", async () => {
     rpc.setupPlans.create.mockRejectedValue(new Error("connection lost"));
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await act(async () => {
       change(container.querySelector("textarea")!, draft.purpose);
     });
@@ -734,7 +753,7 @@ describe("email monitor setup", () => {
 
   it("keeps the creation key after a lost response and remount", async () => {
     rpc.setupPlans.create.mockRejectedValueOnce(new Error("connection lost"));
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await act(async () => {
       change(container.querySelector("textarea")!, draft.purpose);
     });
@@ -759,7 +778,7 @@ describe("email monitor setup", () => {
         />,
       ),
     );
-    await click("Set up email monitor");
+    await click("Set up source monitor");
     await act(async () => {
       change(container.querySelector("textarea")!, draft.purpose);
     });

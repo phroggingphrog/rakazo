@@ -25,6 +25,7 @@ function fixture() {
     liveLease: true,
     assigned: true,
     server: true,
+    slug: "mail",
     calls: 0,
     expireDuringCall: false,
     events: [] as ConnectorEvent[],
@@ -33,7 +34,7 @@ function fixture() {
     externalEffect: { findUnique: vi.fn(async () => ({ ...effect })) },
     mcpServer: {
       findFirst: vi.fn(async () =>
-        state.server ? { id: "server", slug: "mail", allBots: false } : null,
+        state.server ? { id: "server", slug: state.slug, allBots: false } : null,
       ),
     },
     botMcpServer: {
@@ -105,6 +106,29 @@ describe("setup source execution", () => {
       route: { resourceId: "server", resourceRevision: 1, toolName: "read" },
     });
     expect((await f.run())?.state).toBe("succeeded");
+    expect(f.state.calls).toBe(1);
+  });
+  it("tests a calendar read from an existing email_monitor draft without assuming email", async () => {
+    const f = fixture();
+    f.state.slug = "calendar";
+    f.effect.request.purpose = "Find upcoming appointments";
+    f.effect.request.source.toolName = "list_events";
+    f.effect.request.arguments = { query: "appointments" };
+    f.state.events = [{ type: "result", data: { events: [{ title: "Synthetic appointment" }] } }];
+    expect(await f.run()).toEqual({
+      state: "succeeded",
+      data: { events: [{ title: "Synthetic appointment" }] },
+    });
+    expect(f.authorize).toHaveBeenCalledWith(
+      expect.objectContaining({ serverSlug: "calendar", toolName: "list_events" }),
+    );
+    expect(f.calls).toEqual([
+      expect.objectContaining({
+        tool: "list_events",
+        args: { query: "appointments" },
+        route: expect.objectContaining({ resourceId: "server", toolName: "list_events" }),
+      }),
+    ]);
     expect(f.state.calls).toBe(1);
   });
   it("does not dispatch after an expired claim or accept a late response", async () => {
