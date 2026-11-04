@@ -214,8 +214,37 @@ describe("email monitor setup", () => {
     await click("Find appointment updatesConfigured");
     await click("Run test");
     expect(rpc.routines.testRun.mock.calls[1]![0]).toEqual(first);
-    expect(container.textContent).toContain("Test status:");
+    expect(container.textContent).toContain("Run status:");
+    expect(container.textContent).toContain("Source test: Not checked");
     expect(container.textContent).toContain("not checked");
+    expect(container.textContent).toContain("A test does not confirm notification delivery");
+  });
+
+  it.each([
+    ["not_started", "Not started"],
+    ["pending", "Pending"],
+    ["running", "Running"],
+    ["succeeded", "Succeeded"],
+    ["failed", "Failed"],
+    ["uncertain", "Uncertain"],
+    [undefined, "Unavailable for this run"],
+  ])("shows the source-test state %s separately from the run", async (sourceTest, label) => {
+    const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
+    rpc.setupPlans.list.mockResolvedValue({ plans: [configured], nextCursor: null });
+    rpc.routines.history.mockResolvedValue({
+      runs: [{ id: "run-1", status: "completed", sourceTest }],
+      nextCursor: null,
+    });
+    await click("Set up email monitor");
+    await click("Find appointment updatesConfigured");
+    await click("Run test");
+    await click("Refresh status");
+    expect(container.textContent).toContain("Run status: completed");
+    expect(container.textContent).toContain(`Source test: ${label}`);
+    expect(container.textContent).toContain(
+      "Arguments are not validated against the operation schema here",
+    );
+    expect(container.textContent).not.toContain("validated against the operation or tested");
     expect(container.textContent).toContain("A test does not confirm notification delivery");
   });
 

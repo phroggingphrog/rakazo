@@ -190,6 +190,7 @@ import {
 } from "./run-turn-images.js";
 import { loadAgentScratchpadContext } from "./scratchpad-context.js";
 import { inferScript } from "./scripted-runtime.js";
+import { executeSetupSourceTest, setupSourceTestInstruction } from "./setup-source-test.js";
 import { listAgentSkillRecords } from "./skill-tools.js";
 import {
   continueRunClaimFence,
@@ -1486,7 +1487,33 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
             // Lateness is optional context; a lookup failure must not prevent a run.
           }
         }
+        const sourceTest = await executeSetupSourceTest({
+          prisma: deps.prisma,
+          connector: deps.connector,
+          context,
+          runId,
+          workerId,
+          fence,
+          secrets: runSecrets,
+        });
+        if (sourceTest && sourceTest.state !== "succeeded") {
+          await failRun(
+            ctx,
+            new Error(
+              sourceTest.state === "failed"
+                ? "The selected integration test failed. Start another test after checking the integration."
+                : "The selected integration test outcome is uncertain. Check the integration before starting another test.",
+            ),
+            {
+              ownCredential: false,
+              active: { "model.provider": runModelProvider, "model.id": runModelId },
+            },
+          );
+          return;
+        }
+        if (sourceTest?.state === "succeeded") ctx.state.tainted = true;
         const prompt = [
+          setupSourceTestInstruction(sourceTest),
           replyContext,
           run.trigger === "reaction" && replyContext ? undefined : basePrompt,
           takeoverResume?.promptNote,

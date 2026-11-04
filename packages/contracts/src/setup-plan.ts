@@ -2,6 +2,9 @@ import * as z from "zod";
 import { TimeZoneSchema } from "./domain.js";
 import { Id } from "./ids.js";
 
+export const SETUP_SOURCE_TEST_KIND = "setup_source_test";
+export const setupSourceTestKey = (runId: string) => `setup-source-test:${runId}`;
+
 /** Revisions are stored as signed PostgreSQL integers. */
 export const SetupPlanRevisionSchema = z.number().int().positive().max(2_147_483_647);
 

@@ -196,7 +196,7 @@ beforeEach(async () => {
   session.current.mockReturnValue(true);
   session.preparedTest.mockResolvedValue(null);
   session.runTest.mockResolvedValue({ runId: "run-1" });
-  session.testStatus.mockResolvedValue("completed");
+  session.testStatus.mockResolvedValue({ runStatus: "completed", sourceTest: "unavailable" });
   session.routineState.mockResolvedValue(false);
   session.setRoutineActive.mockImplementation(async (_plan, active) => active);
   session.load.mockResolvedValue({
@@ -310,6 +310,46 @@ describe("native email monitor proposal", () => {
     await click("Refresh status");
     expect(session.testStatus).toHaveBeenCalledWith(configured, "run-1");
     expect(container.textContent).toContain("completed");
+    expect(container.textContent).toContain("Source test: Unavailable for this run");
+    expect(container.textContent).toContain("A test does not confirm notification delivery");
+  });
+
+  it.each([
+    ["not_started", "Not started"],
+    ["pending", "Pending"],
+    ["running", "Running"],
+    ["succeeded", "Succeeded"],
+    ["failed", "Failed"],
+    ["uncertain", "Uncertain"],
+  ])("shows source-test state %s separately from the run", async (sourceTest, label) => {
+    const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
+    session.load.mockResolvedValue({
+      servers: [{ id: "server-1", revision: 3, name: "Mail" }],
+      plans: [configured],
+      nextCursor: null,
+    });
+    session.testStatus.mockResolvedValue({ runStatus: "completed", sourceTest });
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(
+        <EmailMonitorSetup
+          botId="bot-1"
+          botName="Scout"
+          onClose={close}
+          onOpenIntegrations={openIntegrations}
+        />,
+      );
+    });
+    await select("Saved proposals", "plan-1");
+    await click("Run test");
+    await click("Refresh status");
+    expect(container.textContent).toContain("Run status: completed");
+    expect(container.textContent).toContain(`Source test: ${label}`);
+    expect(container.textContent).toContain(
+      "Arguments are not validated against the operation schema here",
+    );
+    expect(container.textContent).not.toContain("validated against the operation or tested");
     expect(container.textContent).toContain("A test does not confirm notification delivery");
   });
 

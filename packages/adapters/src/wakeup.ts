@@ -8,7 +8,7 @@ import type {
 } from "@rakazo/adapter-kit";
 import { dispatchBackgroundJob } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
-import { isTooManyDatabaseConnections, runAsSystem } from "@rakazo/db";
+import { currentDbContext, isTooManyDatabaseConnections, runAsSystem } from "@rakazo/db";
 import { getLogger, runCorrelatedJob, unwrapJobPayload, wrapJobPayload } from "@rakazo/logging";
 import type { Runner, WorkerUtils } from "graphile-worker";
 import { makeWorkerUtils, run } from "graphile-worker";
@@ -54,6 +54,28 @@ export class GraphileJobPublisher implements JobPublisher {
 
   async enqueue(job: BackgroundJob): Promise<void> {
     const utils = await this.getUtils();
+    if (job.name === "routine.wakeup" && job.replaceKey === `routine:${job.payload.routineId}`) {
+      const scheduledFor = new Date(job.payload.scheduledFor);
+      if (!Number.isFinite(scheduledFor.getTime())) throw new Error("Invalid routine wakeup time");
+      const jobKeyMode = await this.keepExistingMode(utils, job);
+      await this.withRoutineLock(job.payload.routineId, async (client, routine) => {
+        if (!routine?.active || routine.nextRunAt?.getTime() !== scheduledFor.getTime()) return;
+        await client.query(
+          `select graphile_worker.add_job(identifier := $1::text, payload := $2::json,
+           run_at := $3::timestamptz, max_attempts := $4::integer, job_key := $5::text,
+           job_key_mode := $6::text)`,
+          [
+            job.name,
+            JSON.stringify(wrapJobPayload(job.payload)),
+            job.availableAt ?? null,
+            job.maxAttempts ?? null,
+            job.replaceKey,
+            jobKeyMode ?? "replace",
+          ],
+        );
+      });
+      return;
+    }
     // replace resets attempts and run_at. unsafe_dedupe leaves both, so an
     // exhausted row would stay queued forever. Dedupe only while attempts remain,
     // and not a job locked by replaceLockedBefore: Graphile never unlocks a job
@@ -97,8 +119,63 @@ export class GraphileJobPublisher implements JobPublisher {
 
   async cancel(key: string): Promise<void> {
     const utils = await this.getUtils();
+    if (key.startsWith("routine:")) {
+      await this.withRoutineLock(key.slice("routine:".length), async (client, routine) => {
+        if (routine?.active && routine.nextRunAt) return;
+        await client.query("select graphile_worker.remove_job($1::text)", [key]);
+      });
+      return;
+    }
     await utils.withPgClient(async (client) => {
       await client.query("select graphile_worker.remove_job($1::text)", [key]);
+    });
+  }
+
+  private async withRoutineLock(
+    routineId: string,
+    action: (
+      client: import("pg").PoolClient,
+      routine:
+        | { spaceId: string; userId: string; active: boolean; nextRunAt: Date | null }
+        | undefined,
+    ) => Promise<void>,
+  ): Promise<void> {
+    const context = currentDbContext();
+    if (!context) throw new Error("Routine queue changes require a database context");
+    await runAsSystem("synchronize routine queue with its current schedule", async () => {
+      const client = await this.pgPool.connect();
+      try {
+        await client.query("begin");
+        await client.query("select pg_advisory_xact_lock($1::integer, hashtext($2::text))", [
+          1380019077,
+          routineId,
+        ]);
+        const result = await client.query<{
+          spaceId: string;
+          userId: string;
+          active: boolean;
+          nextRunAt: Date | null;
+        }>(
+          `select "spaceId", "userId", active, "nextRunAt" at time zone 'UTC' as "nextRunAt"
+           from routines where id = $1 for update`,
+          [routineId],
+        );
+        const routine = result.rows[0];
+        if (
+          context.kind === "tenant" &&
+          routine &&
+          (routine.spaceId !== context.spaceId || routine.userId !== context.userId)
+        ) {
+          throw new Error("Routine queue change is outside the current tenant");
+        }
+        await action(client, routine);
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
     });
   }
 

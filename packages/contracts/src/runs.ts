@@ -68,10 +68,22 @@ export const ROUTINE_NOTIFICATION_PRE_SUBMIT_MAX_FAILURES = 5;
 export const RoutineRunSchema = z.object({
   id: Id,
   notificationRetryExhausted: z.boolean().optional(),
+  sourceTest: z
+    .enum(["not_started", "pending", "running", "succeeded", "failed", "uncertain"])
+    .optional(),
   notification: z
     .enum([
-      "unknown", "pending", "submitting", "uncertain", "undeliverable", "cancelled",
-      "blocked", "expo_accepted", "expo_receipt_ok", "expo_receipt_error", "expo_receipt_unavailable",
+      "unknown",
+      "pending",
+      "submitting",
+      "uncertain",
+      "undeliverable",
+      "cancelled",
+      "blocked",
+      "expo_accepted",
+      "expo_receipt_ok",
+      "expo_receipt_error",
+      "expo_receipt_unavailable",
     ])
     .optional(),
   botId: Id,

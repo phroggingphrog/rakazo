@@ -298,6 +298,7 @@ export interface ConnectorCall {
   args: Record<string, unknown>;
   connectionId?: string;
   executionId: string;
+  enforceResourceRevision?: boolean;
   route?: ConnectorRoute;
 }
 

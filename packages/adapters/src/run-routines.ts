@@ -6,6 +6,7 @@ import {
   runContinueJob,
   TransientModelError,
 } from "@rakazo/adapter-kit";
+import { SETUP_SOURCE_TEST_KIND } from "@rakazo/contracts";
 import {
   displayName,
   expandSkillReferencesInPrompt,
@@ -69,7 +70,7 @@ export async function scheduleRoutineRetry(
   }
   try {
     const retryAt = Date.now() + ROUTINE_RETRY_DELAY_MS;
-    const [routine, toolCalls, botMessages] = await Promise.all([
+    const [routine, toolCalls, botMessages, sourceTest] = await Promise.all([
       deps.prisma.routine.findUnique({
         where: { id: run.routineId },
         select: { nextRunAt: true },
@@ -78,8 +79,12 @@ export async function scheduleRoutineRetry(
       deps.prisma.message.count({
         where: { threadId: run.threadId, runId: run.id, role: "bot" },
       }),
+      deps.prisma.externalEffect.findFirst({
+        where: { runId: run.id, kind: SETUP_SOURCE_TEST_KIND },
+        select: { id: true },
+      }),
     ]);
-    if (!routine || toolCalls > 0 || botMessages > 0) return false;
+    if (!routine || toolCalls > 0 || botMessages > 0 || sourceTest) return false;
     if (routineNextRunIsNear(routine.nextRunAt, retryAt)) return false;
     await deps.jobs.enqueue(routineRetryJob(run.id, new Date(retryAt)));
     return true;

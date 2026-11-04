@@ -63,6 +63,30 @@ beforeEach(() => {
 });
 
 describe("mobile monitor setup scope and idempotency", () => {
+  it("uses only the matching run's explicit source-test state", async () => {
+    state.rpc.mockImplementation(async (path: string) => {
+      if (path === "me") return { userId: "user-a", spaceId: "space-a" };
+      if (path === "routines/history")
+        return {
+          runs: [
+            { id: "other", status: "completed", sourceTest: "succeeded" },
+            { id: "selected", status: "failed", sourceTest: "uncertain" },
+          ],
+          nextCursor: null,
+        };
+      throw new Error(`Unexpected path: ${path}`);
+    });
+    const opened = await openMonitorSetup("bot-1");
+    const configured = { ...plan, status: "configured" as const, routineId: "routine-1" };
+    await expect(opened.testStatus(configured, "selected")).resolves.toEqual({
+      runStatus: "failed",
+      sourceTest: "uncertain",
+    });
+    await expect(opened.testStatus(configured, "missing")).resolves.toEqual({
+      runStatus: "unknown",
+      sourceTest: "unavailable",
+    });
+  });
   it("offers enabled local integrations for setup", async () => {
     state.rpc.mockImplementation(async (path: string) => {
       if (path === "me") return { userId: "user-a", spaceId: "space-a" };

@@ -1,5 +1,5 @@
 import { Trans, useLingui } from "@lingui/react/macro";
-import { type McpServer, SetupOperationArgumentsSchema } from "@rakazo/contracts";
+import { type McpServer, type RoutineRun, SetupOperationArgumentsSchema } from "@rakazo/contracts";
 import type { CronPreset } from "@rakazo/core";
 import { cronFromPreset, defaultCronPreset, presetFromCron } from "@rakazo/core";
 import { Button, NativeSelect, NativeSelectOption, Textarea } from "@rakazo/ui-web";
@@ -15,6 +15,7 @@ type Draft = Plan["draft"];
 type Prerequisites = Awaited<ReturnType<Client["setupPlans"]["prerequisites"]>>;
 type Candidates = Awaited<ReturnType<Client["setupPlans"]["discoverCandidates"]>>;
 type Catalog = Awaited<ReturnType<Client["mcp"]["servers"]["monitorTools"]>>;
+type SourceTestStatus = NonNullable<RoutineRun["sourceTest"]> | "not_checked" | "unavailable";
 function testKey(owner: string, space: string, plan: Plan): { storageKey: string; key: string } {
   const storageKey = `rakazo:monitor-test:${JSON.stringify([owner, space, plan.id, plan.revision])}`;
   const saved = window.localStorage.getItem(storageKey);
@@ -89,6 +90,7 @@ export function EmailMonitorSetup({
   const [candidates, setCandidates] = useState<Candidates | null>(null);
   const [testRunId, setTestRunId] = useState<string | null>(null);
   const [testStatus, setTestStatus] = useState<string | null>(null);
+  const [sourceTestStatus, setSourceTestStatus] = useState<SourceTestStatus>("not_checked");
   const [routineActive, setRoutineActive] = useState<boolean | null>(null);
   const [routineStateError, setRoutineStateError] = useState(false);
 
@@ -131,6 +133,7 @@ export function EmailMonitorSetup({
     setPlan(next);
     setTestRunId(null);
     setTestStatus(null);
+    setSourceTestStatus("not_checked");
     setPurpose(next.draft.purpose);
     setServerId(next.draft.source?.serverId ?? "");
     setSourceRevision(next.draft.source?.revision ?? null);
@@ -152,6 +155,7 @@ export function EmailMonitorSetup({
     setPlan(null);
     setTestRunId(null);
     setTestStatus(null);
+    setSourceTestStatus("not_checked");
     setPurpose("");
     setServerId("");
     setSourceRevision(null);
@@ -355,6 +359,7 @@ export function EmailMonitorSetup({
     if (mounted.current) {
       setTestRunId(result.runId);
       setTestStatus("not checked");
+      setSourceTestStatus("not_checked");
     }
   }
 
@@ -362,7 +367,10 @@ export function EmailMonitorSetup({
     if (!plan?.routineId || !testRunId) return;
     const history = await rpc.routines.history({ routineId: plan.routineId, limit: 20 });
     const run = history.runs.find((item) => item.id === testRunId);
-    if (mounted.current) setTestStatus(run?.status ?? "unknown");
+    if (mounted.current) {
+      setTestStatus(run?.status ?? "unknown");
+      setSourceTestStatus(run?.sourceTest ?? "unavailable");
+    }
   }
 
   async function setActive(active: boolean) {
@@ -575,8 +583,8 @@ export function EmailMonitorSetup({
             <p className="mt-1 text-muted-foreground">
               <Trans>
                 Review the fields required by the selected operation. Do not enter passwords, tokens
-                or other secrets; configure authentication in the integration. Arguments are not yet
-                validated against the operation or tested.
+                or other secrets; configure authentication in the integration. Arguments are not
+                validated against the operation schema here.
               </Trans>
             </p>
             <Textarea
@@ -699,7 +707,27 @@ export function EmailMonitorSetup({
                   {testRunId ? (
                     <div role="status" className="space-y-2">
                       <p>
-                        <Trans>Test status:</Trans> {testStatus}
+                        <Trans>Run status:</Trans> {testStatus}
+                      </p>
+                      <p>
+                        <Trans>Source test:</Trans>{" "}
+                        {sourceTestStatus === "not_started" ? (
+                          <Trans>Not started</Trans>
+                        ) : sourceTestStatus === "pending" ? (
+                          <Trans>Pending</Trans>
+                        ) : sourceTestStatus === "running" ? (
+                          <Trans>Running</Trans>
+                        ) : sourceTestStatus === "succeeded" ? (
+                          <Trans>Succeeded</Trans>
+                        ) : sourceTestStatus === "failed" ? (
+                          <Trans>Failed</Trans>
+                        ) : sourceTestStatus === "uncertain" ? (
+                          <Trans>Uncertain</Trans>
+                        ) : sourceTestStatus === "unavailable" ? (
+                          <Trans>Unavailable for this run</Trans>
+                        ) : (
+                          <Trans>Not checked</Trans>
+                        )}
                       </p>
                       <p>
                         <Trans>Open routine history for the result and notification status.</Trans>

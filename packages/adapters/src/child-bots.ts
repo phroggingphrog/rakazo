@@ -486,6 +486,7 @@ export async function destroyBot(
     }),
   );
   if (!deletion) return;
+  await Promise.allSettled(routines.map((routine) => deps.jobs.cancel(routineJobKey(routine.id))));
   await Promise.allSettled(
     deletion.cancelledGroupRuns.map((run) => deps.jobs.cancel(runJobKey(run.id))),
   );

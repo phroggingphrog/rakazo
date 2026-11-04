@@ -1,5 +1,10 @@
 import DateTimePicker from "@expo/ui/community/datetime-picker";
-import { type McpServer, type RpcOutput, SetupOperationArgumentsSchema } from "@rakazo/contracts";
+import {
+  type McpServer,
+  type RoutineRun,
+  type RpcOutput,
+  SetupOperationArgumentsSchema,
+} from "@rakazo/contracts";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -25,6 +30,7 @@ type Frequency = "hourly" | "daily" | "weekdays" | "custom";
 type Catalog = RpcOutput<"mcp/servers/monitorTools">;
 type Prerequisites = RpcOutput<"setupPlans/prerequisites">;
 type Candidates = RpcOutput<"setupPlans/discoverCandidates">;
+type SourceTestStatus = NonNullable<RoutineRun["sourceTest"]> | "not_checked" | "unavailable";
 
 function initialTime(hour = 9, minute = 0): Date {
   const time = new Date();
@@ -89,6 +95,7 @@ export function EmailMonitorSetup({
   const [candidates, setCandidates] = useState<Candidates | null>(null);
   const [testRunId, setTestRunId] = useState<string | null>(null);
   const [testStatus, setTestStatus] = useState<string | null>(null);
+  const [sourceTestStatus, setSourceTestStatus] = useState<SourceTestStatus>("not_checked");
   const [routineActive, setRoutineActive] = useState<boolean | null>(null);
   const [routineStateError, setRoutineStateError] = useState(false);
 
@@ -148,6 +155,7 @@ export function EmailMonitorSetup({
   function loadPlan(next: MonitorPlan) {
     setTestRunId(null);
     setTestStatus(null);
+    setSourceTestStatus("not_checked");
     const savedSchedule = next.draft.schedule;
     const parsed = savedSchedule
       ? parseSchedule(savedSchedule.cron)
@@ -173,6 +181,7 @@ export function EmailMonitorSetup({
     setPlan(null);
     setTestRunId(null);
     setTestStatus(null);
+    setSourceTestStatus("not_checked");
     setPurpose("");
     setServerId("");
     setSourceRevision(null);
@@ -318,13 +327,17 @@ export function EmailMonitorSetup({
     if (mounted.current && session.current()) {
       setTestRunId(result.runId);
       setTestStatus("not checked");
+      setSourceTestStatus("not_checked");
     }
   }
 
   async function refreshTest() {
     if (!session || !plan || !testRunId) return;
     const status = await session.testStatus(plan, testRunId);
-    if (mounted.current && session.current()) setTestStatus(status);
+    if (mounted.current && session.current()) {
+      setTestStatus(status.runStatus);
+      setSourceTestStatus(status.sourceTest);
+    }
   }
 
   async function setActive(active: boolean) {
@@ -494,7 +507,7 @@ export function EmailMonitorSetup({
               <Text style={styles.label}>{t("Operation arguments (JSON object)")}</Text>
               <Text style={styles.secondary}>
                 {t(
-                  "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested.",
+                  "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not validated against the operation schema here.",
                 )}
               </Text>
               <TextInput
@@ -714,7 +727,25 @@ export function EmailMonitorSetup({
                       {testRunId ? (
                         <View accessibilityLiveRegion="polite" style={styles.readiness}>
                           <Text style={styles.secondary}>
-                            {t("Test status:")} {testStatus}
+                            {t("Run status:")} {testStatus}
+                          </Text>
+                          <Text style={styles.secondary}>
+                            {t("Source test:")}{" "}
+                            {sourceTestStatus === "not_started"
+                              ? t("Not started")
+                              : sourceTestStatus === "pending"
+                                ? t("Pending")
+                                : sourceTestStatus === "running"
+                                  ? t("Running")
+                                  : sourceTestStatus === "succeeded"
+                                    ? t("Succeeded")
+                                    : sourceTestStatus === "failed"
+                                      ? t("Failed")
+                                      : sourceTestStatus === "uncertain"
+                                        ? t("Uncertain")
+                                        : sourceTestStatus === "unavailable"
+                                          ? t("Unavailable for this run")
+                                          : t("Not checked")}
                           </Text>
                           <Text style={styles.secondary}>
                             {t("Open routine history for the result and notification status.")}

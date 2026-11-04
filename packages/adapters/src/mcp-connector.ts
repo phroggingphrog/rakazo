@@ -717,6 +717,17 @@ export class McpConnector implements ConnectorProvider {
       (await this.prisma.mcpServer
         .findFirst({ where: { ...usable, id: call.route.resourceId, allBots: true } })
         .then((server) => (server ? sharedAssignment(server) : null)));
+    if (
+      assignment &&
+      call.enforceResourceRevision &&
+      call.route.resourceRevision !== assignment.server.revision
+    ) {
+      yield {
+        type: "error",
+        message: "The selected integration changed before the operation could run.",
+      };
+      return;
+    }
     if (assignment && call.route.toolName === UNAVAILABLE_TOOL) {
       const reason =
         this.unavailable.get(this.sessionKey(assignment.server, context)) ??

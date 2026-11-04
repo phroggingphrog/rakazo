@@ -2,7 +2,11 @@ import { ORPCError } from "@orpc/server";
 import { routineWakeupJob } from "@rakazo/adapter-kit";
 import { parseRoutineWatch, parseRoutineWatchState, routineRunModelPin } from "@rakazo/adapters";
 import type { Actor, CreateRoutineInput, Routine } from "@rakazo/contracts";
-import { canonicalPiProviderId } from "@rakazo/contracts";
+import {
+  canonicalPiProviderId,
+  SETUP_SOURCE_TEST_KIND,
+  setupSourceTestKey,
+} from "@rakazo/contracts";
 import {
   hasMixedOneShotSchedule,
   isOneShotRoutineCrons,
@@ -204,7 +208,7 @@ export async function createRoutineTestRun(
     select: { modelProvider: true, modelId: true, thinkingLevel: true },
   });
   if (!currentModel) throw new IsolationError();
-  return tx.run.create({
+  const run = await tx.run.create({
     data: {
       spaceId: actor.spaceId,
       botId,
@@ -219,4 +223,25 @@ export async function createRoutineTestRun(
     },
     select: { id: true, status: true },
   });
+  const setup = await tx.setupPlan.findFirst({
+    where: {
+      routineId: routine.id,
+      spaceId: actor.spaceId,
+      userId: actor.userId,
+      status: "configured",
+    },
+    select: { draft: true },
+  });
+  if (setup)
+    await tx.externalEffect.create({
+      data: {
+        runId: run.id,
+        spaceId: actor.spaceId,
+        kind: SETUP_SOURCE_TEST_KIND,
+        idempotencyKey: setupSourceTestKey(run.id),
+        status: "intended",
+        request: setup.draft as Prisma.InputJsonValue,
+      },
+    });
+  return run;
 }

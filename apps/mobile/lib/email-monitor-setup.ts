@@ -214,7 +214,10 @@ export async function openMonitorSetup(botId: string) {
       );
       assertCurrent();
       const run = history.runs.find((item) => item.id === runId);
-      return run?.status ?? "unknown";
+      return {
+        runStatus: run?.status ?? "unknown",
+        sourceTest: run?.sourceTest ?? ("unavailable" as const),
+      };
     },
     async routineState(plan: MonitorPlan) {
       assertCurrent();

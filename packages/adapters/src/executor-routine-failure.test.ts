@@ -37,6 +37,7 @@ interface Scenario {
   switchToBackup?: { provider: string; modelId: string };
   personalKey?: boolean;
   pinnedTo?: { provider: string; modelId: string };
+  sourceUncertain?: boolean;
 }
 
 async function failRun(scenario: Scenario) {
@@ -188,7 +189,22 @@ async function failRun(scenario: Scenario) {
     vaultCredential: { findMany: vi.fn(async () => []) },
     agentSkill: { findMany: vi.fn(async () => []) },
     scratchpadItem: { findMany: vi.fn(async () => []) },
-    externalEffect: { findMany: vi.fn(async () => []) },
+    externalEffect: {
+      findMany: vi.fn(async () => []),
+      findFirst: vi.fn(async () => null),
+      findUnique: vi.fn(async () =>
+        scenario.sourceUncertain
+          ? {
+              id: "source-effect",
+              kind: "setup_source_test",
+              runId: "run-1",
+              spaceId: "space-1",
+              status: "uncertain",
+              result: { state: "uncertain" },
+            }
+          : null,
+      ),
+    },
     artifact: { findMany: vi.fn(async () => []) },
     $transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) => work(prisma)),
   };
@@ -223,13 +239,17 @@ async function failRun(scenario: Scenario) {
   expect(finalizeRun).toHaveBeenCalledWith(
     expect.objectContaining({
       outcome: "failed",
-      error: scenario.pinnedTo ? "Connect that model provider first" : scenario.error.message,
+      error: scenario.sourceUncertain
+        ? "The selected integration test outcome is uncertain. Check the integration before starting another test."
+        : scenario.pinnedTo
+          ? "Connect that model provider first"
+          : scenario.error.message,
     }),
   );
   const retries = enqueue.mock.calls
     .map(([job]) => job)
     .filter((job) => job.name === "routine.retry");
-  return { retries, send, prisma };
+  return { retries, send, prisma, runtimeRun };
 }
 
 const overloaded = () =>
@@ -243,6 +263,14 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("setup source uncertainty", () => {
+  it("stops before the model and does not schedule an automatic retry", async () => {
+    const result = await failRun({ error: overloaded(), sourceUncertain: true });
+    expect(result.runtimeRun).not.toHaveBeenCalled();
+    expect(result.retries).toHaveLength(0);
+  });
 });
 
 describe("routine failure notifications", () => {
