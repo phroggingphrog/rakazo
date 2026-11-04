@@ -770,6 +770,7 @@ export function mcpRoutes(ctx: RouterContext) {
               serverId: input.serverId,
               status: "connected",
               threadId: input.threadId,
+              messageId: input.messageId,
             },
             async (tx, decision) => {
               if (!decision.assign) throw new IsolationError();
@@ -833,6 +834,7 @@ export function mcpRoutes(ctx: RouterContext) {
             serverId: input.serverId,
             status: "dismissed",
             threadId: input.threadId,
+            messageId: input.messageId,
           });
           return { ok: true as const };
         }),

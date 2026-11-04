@@ -45,7 +45,10 @@ describe("existing integration approval RPC", () => {
       bot: { findFirst: vi.fn(async () => ({ id: "bot" })) },
       mcpServer: { findFirst: vi.fn(async () => ({ id: "server", name: "Mail" })) },
       botMcpServer: { upsert: vi.fn(async () => assignment) },
-      mcpApprovalContinuation: { upsert: vi.fn(async () => ({})) },
+      mcpApprovalContinuation: {
+        findFirst: vi.fn(async () => null),
+        upsert: vi.fn(async () => ({})),
+      },
       thread: { findFirst: vi.fn(async () => ({ id: "thread" })) },
       run: { findFirst: vi.fn(async () => null), create: vi.fn(async () => ({ id: "run" })) },
       task: { create: vi.fn(async (_arg: { data: { prompt: string } }) => ({ id: "task" })) },

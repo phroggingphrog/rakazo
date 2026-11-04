@@ -1,3 +1,4 @@
+import { ORPCError } from "@orpc/server";
 import type { Actor, MessageBlock } from "@rakazo/contracts";
 import { mcpConnectedPrompt, QUEUE_HOLDING_RUN_STATUSES } from "@rakazo/core";
 import type { Prisma, PrismaClient, ThreadEvents } from "@rakazo/db";
@@ -20,6 +21,7 @@ export type McpApprovalResolution = {
   status: "connected" | "dismissed";
   /** The chat whose cards should resolve; defaults to the bot's own thread. */
   threadId?: string;
+  messageId?: string;
 };
 
 export type McpApprovalDecision = {
@@ -105,8 +107,9 @@ async function rewriteCards(
   tx: Prisma.TransactionClient,
   actor: Actor,
   threads: ApprovalThread[],
-  input: { botId?: string; serverId: string; status: ApprovalBlock["status"] },
+  input: { botId?: string; serverId: string; status: ApprovalBlock["status"]; messageId?: string },
   selectable: (block: ApprovalBlock) => boolean,
+  allowedMessageIds?: Set<string>,
 ): Promise<{
   seqs: ThreadSeq[];
   flipped: number;
@@ -125,12 +128,16 @@ async function rewriteCards(
   let decisionSeq: number | undefined;
   for (const thread of threads) {
     const messages = await tx.message.findMany({
-      where: { threadId: thread.id },
+      where: {
+        threadId: thread.id,
+        ...(allowedMessageIds ? { id: { in: [...allowedMessageIds] } } : {}),
+      },
       select: { id: true, botId: true, blocks: true },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: 100,
+      ...(allowedMessageIds ? {} : { take: 100 }),
     });
     for (const message of messages) {
+      if (allowedMessageIds && !allowedMessageIds.has(message.id)) continue;
       if (message.botId && message.botId !== input.botId) continue;
       const blocks = message.blocks as MessageBlock[];
       const matching = blocks.filter((block): block is ApprovalBlock =>
@@ -144,6 +151,7 @@ async function rewriteCards(
       if (!matching.some(selectable)) continue;
       const useForContinuation =
         !messageId &&
+        (!input.messageId || input.messageId === message.id) &&
         (message.botId === input.botId || (!message.botId && thread.botId === input.botId));
       if (matching.some((block) => selectable(block) && block.assignmentOnly === true))
         assignmentOnly = true;
@@ -184,17 +192,136 @@ export async function resolveMcpApprovalCards<T>(
   input: McpApprovalResolution,
   effect?: (tx: Prisma.TransactionClient, decision: McpApprovalDecision) => Promise<T>,
 ): Promise<T | undefined> {
+  if (input.messageId && !input.threadId)
+    throw new ORPCError("BAD_REQUEST", { message: "A conversation is required for this card." });
   const threads = await threadsForDecision(deps, actor, input);
   const committed = await withTransactionRetry(() =>
     deps.prisma.$transaction(
       async (tx) => {
-        if (input.threadId && input.status === "connected")
+        if (input.threadId)
           await tx.$queryRaw`SELECT id FROM threads WHERE id = ${input.threadId} AND "spaceId" = ${actor.spaceId} AND "userId" = ${actor.userId} FOR UPDATE`;
         const selectable =
           input.threadId === undefined
             ? (block: ApprovalBlock) => block.status !== "connected"
             : isOpen;
-        const painted = await rewriteCards(tx, actor, threads, input, selectable);
+        let selectedIds: Set<string> | undefined;
+        if (input.threadId) {
+          const thread = threads.find((item) => item.id === input.threadId);
+          let messages = thread
+            ? await tx.message.findMany({
+                where: {
+                  threadId: thread.id,
+                  ...(input.messageId
+                    ? { id: input.messageId }
+                    : {
+                        blocks: {
+                          array_contains: [{ kind: "mcp_approval", serverId: input.serverId }],
+                        },
+                      }),
+                },
+                select: { id: true, botId: true, runId: true, blocks: true },
+                orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                take: 101,
+              })
+            : [];
+          const target = input.messageId
+            ? messages.find((message) => message.id === input.messageId)
+            : undefined;
+          if (
+            input.messageId &&
+            (!target ||
+              (target.botId !== input.botId &&
+                !(target.botId === null && thread?.botId === input.botId)) ||
+              !(target.blocks as MessageBlock[]).some((block) => isApproval(block, input.serverId)))
+          )
+            throw new IsolationError();
+          if (
+            target?.runId &&
+            (target.blocks as MessageBlock[]).some(
+              (block) => isApproval(block, input.serverId) && selectable(block),
+            )
+          ) {
+            messages = await tx.message.findMany({
+              where: {
+                threadId: input.threadId,
+                runId: target.runId,
+                blocks: { array_contains: [{ kind: "mcp_approval", serverId: input.serverId }] },
+              },
+              select: { id: true, botId: true, runId: true, blocks: true },
+              orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+              take: 101,
+            });
+          }
+          if (messages.length > 100)
+            throw new ORPCError("CONFLICT", {
+              message:
+                "There are too many messages to identify this request safely. Open integration settings to manage access.",
+            });
+          if (
+            !input.messageId &&
+            messages.some(
+              (message) =>
+                message.botId === null &&
+                thread?.botId !== input.botId &&
+                (message.blocks as MessageBlock[]).some(
+                  (block) => isApproval(block, input.serverId) && selectable(block),
+                ),
+            )
+          )
+            throw new ORPCError("CONFLICT", {
+              message:
+                "This older card cannot be linked to a bot. Open integration settings to manage access.",
+            });
+          const cards = messages.flatMap((message) => {
+            if (
+              message.botId !== input.botId &&
+              !(message.botId === null && thread?.botId === input.botId)
+            )
+              return [];
+            const blocks = (message.blocks as MessageBlock[]).filter(
+              (block): block is ApprovalBlock => isApproval(block, input.serverId),
+            );
+            if (!blocks.length) return [];
+            const open = blocks.filter(selectable);
+            const kinds = new Set(
+              (open.length ? open : blocks).map((block) => block.assignmentOnly === true),
+            );
+            return [{ id: message.id, runId: message.runId, open: open.length > 0, kinds }];
+          });
+          const selected = input.messageId
+            ? cards.find((card) => card.id === input.messageId)
+            : undefined;
+          if (input.messageId && !selected) throw new IsolationError();
+          const candidates = selected ? [selected] : cards.filter((card) => card.open);
+          const groups = new Set(
+            candidates.flatMap((card) =>
+              [...card.kinds].map((kind) => JSON.stringify([card.runId ?? card.id, kind])),
+            ),
+          );
+          if (groups.size > 1)
+            throw new ORPCError("CONFLICT", {
+              message:
+                "Several requests need this integration. Update Rakazo and approve or dismiss each card separately.",
+            });
+          const first = candidates[0];
+          selectedIds = new Set(
+            first
+              ? cards
+                  .filter(
+                    (card) =>
+                      card.id === first.id ||
+                      (first.open &&
+                        first.runId &&
+                        card.runId === first.runId &&
+                        card.kinds.size === 1 &&
+                        first.kinds.size === 1 &&
+                        [...card.kinds][0] === [...first.kinds][0]),
+                  )
+                  .map((card) => card.id)
+              : cards.map((card) => card.id),
+          );
+        }
+        const painted = await rewriteCards(tx, actor, threads, input, selectable, selectedIds);
         const dismissalWon =
           input.threadId !== undefined &&
           painted.flipped === 0 &&
@@ -254,6 +381,40 @@ export async function createMcpApprovalContinuation(
     }),
   ]);
   if (!thread || !bot) return;
+  // The card decision and its pending continuation share this thread lock.
+  const locked = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM threads WHERE id = ${input.threadId} AND "spaceId" = ${actor.spaceId}
+      AND "userId" = ${actor.userId} FOR UPDATE`;
+  if (!locked.length) return;
+  const pending = await tx.mcpApprovalContinuation.findFirst({
+    where: {
+      spaceId: actor.spaceId,
+      userId: actor.userId,
+      threadId: input.threadId,
+      messageId: input.messageId,
+      botId: input.botId,
+      serverId: input.serverId,
+      status: "pending",
+    },
+    select: { id: true, decisionSeq: true },
+  });
+  if (pending) {
+    // A replay of an older decision must never move a newer approval backwards.
+    if (pending.decisionSeq < input.decisionSeq) {
+      const changed = await tx.mcpApprovalContinuation.updateMany({
+        where: {
+          id: pending.id,
+          spaceId: actor.spaceId,
+          userId: actor.userId,
+          status: "pending",
+          decisionSeq: pending.decisionSeq,
+        },
+        data: { decisionSeq: input.decisionSeq, assignmentOnly: input.assignmentOnly === true },
+      });
+      if (changed.count !== 1) throw new Error("Pending MCP approval changed while saving.");
+    }
+    return;
+  }
   await tx.mcpApprovalContinuation.upsert({
     where: {
       messageId_botId_serverId_decisionSeq: {

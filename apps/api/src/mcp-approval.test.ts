@@ -61,6 +61,172 @@ function fixture(blocks: unknown[]) {
 }
 
 describe("resolveMcpApprovalCards", () => {
+  it("targets the selected request and its same-run duplicates, leaving another run open", async () => {
+    const { deps, actor, tx } = fixture([]);
+    const card = (id: string, runId: string, assignmentOnly = true) => ({
+      id,
+      botId: "bot",
+      runId,
+      blocks: [
+        {
+          kind: "mcp_approval",
+          serverId: "srv-a",
+          name: "Mail",
+          status: "pending",
+          assignmentOnly,
+        },
+      ],
+    });
+    const rows = [
+      card("other", "run-b", false),
+      card("duplicate", "run-a"),
+      card("selected", "run-a"),
+    ];
+    tx.message.findMany.mockImplementation(async () => rows);
+    const effect = vi.fn(async () => "saved");
+    await resolveMcpApprovalCards(
+      deps,
+      actor,
+      {
+        botId: "bot",
+        serverId: "srv-a",
+        status: "connected",
+        threadId: "group-thread",
+        messageId: "selected",
+      },
+      effect,
+    );
+    expect(
+      (tx.message.update.mock.calls as unknown as Array<[{ where: { id: string } }]>)
+        .map(([arg]) => arg.where.id)
+        .sort(),
+    ).toEqual(["duplicate", "selected"]);
+    expect(effect).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ messageId: "selected", assignmentOnly: true }),
+    );
+  });
+
+  it("leaves distinct legacy requests untouched when the clicked card is unknown", async () => {
+    const { deps, actor, tx } = fixture([]);
+    tx.message.findMany.mockResolvedValue([
+      {
+        id: "first",
+        botId: "bot",
+        runId: "run-a",
+        blocks: [{ kind: "mcp_approval", serverId: "srv-a", name: "Mail", status: "pending" }],
+      },
+      {
+        id: "second",
+        botId: "bot",
+        runId: "run-b",
+        blocks: [{ kind: "mcp_approval", serverId: "srv-a", name: "Mail", status: "pending" }],
+      },
+    ]);
+    const effect = vi.fn();
+    await expect(
+      resolveMcpApprovalCards(
+        deps,
+        actor,
+        {
+          botId: "bot",
+          serverId: "srv-a",
+          status: "dismissed",
+          threadId: "group-thread",
+        },
+        effect,
+      ),
+    ).rejects.toThrow("approve or dismiss each card separately");
+    expect(effect).not.toHaveBeenCalled();
+    expect(tx.message.update).not.toHaveBeenCalled();
+  });
+
+  it.each(["dismissed", "connected"] as const)(
+    "does not repaint a same-run pending card when the selected card was already %s",
+    async (status) => {
+      const { deps, actor, tx } = fixture([]);
+      tx.message.findMany.mockResolvedValue([
+        {
+          id: "selected",
+          botId: "bot",
+          runId: "run",
+          blocks: [{ kind: "mcp_approval", serverId: "srv-a", name: "Mail", status }],
+        },
+        {
+          id: "pending",
+          botId: "bot",
+          runId: "run",
+          blocks: [{ kind: "mcp_approval", serverId: "srv-a", name: "Mail", status: "pending" }],
+        },
+      ]);
+      const effect = vi.fn();
+      await resolveMcpApprovalCards(
+        deps,
+        actor,
+        {
+          botId: "bot",
+          serverId: "srv-a",
+          status: "connected",
+          threadId: "group-thread",
+          messageId: "selected",
+        },
+        effect,
+      );
+      expect(tx.message.update).not.toHaveBeenCalled();
+      expect(effect).toHaveBeenCalledWith(tx, { assign: status === "connected", resolved: false });
+    },
+  );
+
+  it("rejects a card outside the authorized conversation", async () => {
+    const { deps, actor, tx } = fixture([]);
+    tx.message.findMany.mockResolvedValue([
+      {
+        id: "foreign",
+        botId: "another-bot",
+        runId: "run",
+        blocks: [{ kind: "mcp_approval", serverId: "srv-a", name: "Mail", status: "pending" }],
+      },
+    ]);
+    await expect(
+      resolveMcpApprovalCards(deps, actor, {
+        botId: "bot",
+        serverId: "srv-a",
+        status: "connected",
+        threadId: "group-thread",
+        messageId: "foreign",
+      }),
+    ).rejects.toThrow();
+    expect(tx.message.update).not.toHaveBeenCalled();
+  });
+
+  it("does not guess when a bounded legacy scan cannot cover the thread", async () => {
+    const { deps, actor, tx } = fixture([]);
+    tx.message.findMany.mockResolvedValue(
+      Array.from({ length: 101 }, (_, index) => ({
+        id: `message-${index}`,
+        botId: "bot",
+        runId: null,
+        blocks: [],
+      })),
+    );
+    const effect = vi.fn();
+    await expect(
+      resolveMcpApprovalCards(
+        deps,
+        actor,
+        {
+          botId: "bot",
+          serverId: "srv-a",
+          status: "connected",
+          threadId: "group-thread",
+        },
+        effect,
+      ),
+    ).rejects.toThrow("too many messages");
+    expect(effect).not.toHaveBeenCalled();
+    expect(tx.message.update).not.toHaveBeenCalled();
+  });
+
   it("flips pending and pre-upgrade cards for the matching server", async () => {
     const blocks = [
       { kind: "text", text: "before" },
@@ -109,7 +275,7 @@ describe("resolveMcpApprovalCards", () => {
       select: { id: true, botId: true },
     });
     expect(tx.message.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { threadId: "group-thread" } }),
+      expect.objectContaining({ where: expect.objectContaining({ threadId: "group-thread" }) }),
     );
     expect(tx.message.update).toHaveBeenCalledWith({
       where: { id: "card-message" },
@@ -212,13 +378,16 @@ describe("resolveMcpApprovalCards", () => {
       { id: "group-thread", botId: null },
     ] as never);
     const effect = vi.fn(async () => "saved");
-    await resolveMcpApprovalCards(
-      deps,
-      actor,
-      { botId: "bot", serverId: "srv-a", status: "connected", threadId: "group-thread" },
-      effect,
-    );
-    expect(effect).toHaveBeenCalledWith(tx, { assign: true, resolved: true });
+    await expect(
+      resolveMcpApprovalCards(
+        deps,
+        actor,
+        { botId: "bot", serverId: "srv-a", status: "connected", threadId: "group-thread" },
+        effect,
+      ),
+    ).rejects.toThrow("older card cannot be linked");
+    expect(effect).not.toHaveBeenCalled();
+    expect(tx.message.update).not.toHaveBeenCalled();
   });
 
   it("attributes an unattributed legacy card in a direct bot thread", async () => {
