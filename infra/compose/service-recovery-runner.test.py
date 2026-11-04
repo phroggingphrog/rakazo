@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -159,6 +160,9 @@ class RunnerTests(unittest.TestCase):
                 notify.assert_called_once_with("test-stack", "recovery_state_invalid")
             self.assertNotIn("private-invalid-state", output.getvalue())
             self.assertEqual(json.loads(output.getvalue())["reason"], "recovery_state_invalid")
+            with sqlite3.connect(runner.history_path(state, "test-stack")) as database:
+                outcome = database.execute("SELECT outcomes FROM observations").fetchone()[0]
+            self.assertEqual(outcome, runner.policy.pack_observation({name: "state_invalid" for name in runner.policy.OBSERVATION_SERVICES}))
 
     def test_invalid_state_never_dispatches_docker(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -198,6 +202,137 @@ class RunnerTests(unittest.TestCase):
     def test_missing_stack_requires_intervention(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(self.invoke(Path(directory) / "state.json", lambda *args: ""), 1)
+
+    def test_history_survives_restarts_and_does_not_store_container_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            private_id = "private-container-identity-123"
+            def docker(*args):
+                if args[0] == "ps": return private_id
+                return json.dumps(row(private_id))
+            self.invoke(state, docker)
+            self.invoke(state, docker)
+            path = runner.history_path(state, "test-stack")
+            with sqlite3.connect(path) as database:
+                samples = database.execute("SELECT wall_ns, mono_ns, outcomes FROM observations ORDER BY rowid").fetchall()
+            self.assertEqual(len(samples), 2)
+            self.assertTrue(all(sample[0] > 0 and sample[1] > 0 for sample in samples))
+            self.assertNotIn(private_id.encode(), path.read_bytes())
+            self.assertNotIn(b"test-stack", path.read_bytes())
+            journal = Path(str(path) + "-journal")
+            self.assertTrue(journal.exists())
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_history_scopes_projects_without_storing_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            outcomes = {name: "healthy" for name in runner.policy.OBSERVATION_SERVICES}
+            first = runner.history_path(state, "first")
+            second = runner.history_path(state, "second")
+            runner.append_observation(first, outcomes)
+            runner.append_observation(second, outcomes)
+            self.assertNotEqual(first, second)
+            for path in (first, second):
+                with sqlite3.connect(path) as database:
+                    self.assertEqual(database.execute("SELECT count(*) FROM observations").fetchone()[0], 1)
+            with self.assertRaises(ValueError):
+                runner.history_path(state, "../other")
+
+    def test_history_records_missing_ambiguous_and_inspection_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            def duplicate(*args):
+                if args[0] == "ps": return "one two"
+                return "\n".join(json.dumps(item) for item in [row("one"), row("two")])
+            self.invoke(state, duplicate)
+            self.invoke(state, lambda *_args: (_ for _ in ()).throw(OSError("private failure")))
+            with sqlite3.connect(runner.history_path(state, "test-stack")) as database:
+                packed = [item[0] for item in database.execute("SELECT outcomes FROM observations ORDER BY rowid")]
+            first = {name: "ambiguous" if name == "worker" else "missing" for name in runner.policy.OBSERVATION_SERVICES}
+            self.assertEqual(packed[0], runner.policy.pack_observation(first))
+            self.assertEqual(packed[1], runner.policy.pack_observation({name: "inspection_failed" for name in runner.policy.OBSERVATION_SERVICES}))
+
+    def test_invalid_inspection_identity_cannot_record_a_healthy_service(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            item = row("")
+            item["State"]["Health"]["Status"] = "healthy"
+            def docker(*args):
+                return "one" if args[0] == "ps" else json.dumps(item)
+            self.assertEqual(self.invoke(state, docker), 1)
+            with sqlite3.connect(runner.history_path(state, "test-stack")) as database:
+                packed = database.execute("SELECT outcomes FROM observations").fetchone()[0]
+            outcomes = {name: "unknown" if name == "worker" else "missing" for name in runner.policy.OBSERVATION_SERVICES}
+            self.assertEqual(packed, runner.policy.pack_observation(outcomes))
+
+    def test_history_failure_is_visible_and_does_not_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            history = runner.history_path(state, "test-stack")
+            history.write_text("not a database")
+            calls = []
+            def docker(*args):
+                calls.append(args)
+                return "container-one" if args[0] == "ps" else json.dumps(row())
+            output = io.StringIO()
+            with patch("sys.argv", ["runner", "--project", "test-stack", "--state", str(state), "--recover"]), patch.object(runner, "docker", side_effect=docker), contextlib.redirect_stdout(output):
+                self.assertEqual(runner.main(), 1)
+            self.assertEqual(json.loads(output.getvalue())["reason"], "observation_history_unavailable")
+            self.assertEqual(history.read_text(), "not a database")
+            self.assertFalse(any(call[0] == "restart" for call in calls))
+
+    def test_invalid_clock_is_visible_without_creating_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            output = io.StringIO()
+            def docker(*args):
+                return "container-one" if args[0] == "ps" else json.dumps(row())
+            with patch("sys.argv", ["runner", "--project", "test-stack", "--state", str(state)]), patch.object(runner, "docker", side_effect=docker), patch.object(runner.time, "time_ns", return_value=-1), contextlib.redirect_stdout(output):
+                self.assertEqual(runner.main(), 1)
+            self.assertEqual(json.loads(output.getvalue())["reason"], "observation_history_unavailable")
+            self.assertFalse(runner.history_path(state, "test-stack").exists())
+
+    def test_history_report_without_history_is_read_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            output = io.StringIO()
+            with patch("sys.argv", ["runner", "--project", "test-stack", "--state", str(state), "--history-report"]), patch.object(runner, "docker") as docker, contextlib.redirect_stdout(output):
+                self.assertEqual(runner.main(), 1)
+            docker.assert_not_called()
+            self.assertEqual(list(Path(directory).iterdir()), [])
+            self.assertEqual(json.loads(output.getvalue())["reason"], "observation_history_unavailable")
+
+    def test_history_report_has_seven_incomplete_windows_and_separate_outcomes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            path = runner.history_path(state, "test-stack")
+            now = 1_800_000_000_000_000_000
+            mono = 900_000_000_000_000
+            outcomes = {name: "healthy" for name in runner.policy.OBSERVATION_SERVICES}
+            outcomes["web"] = "no_healthcheck"
+            with patch.object(runner.time, "time_ns", return_value=now - 60_000_000_000), patch.object(runner.time, "monotonic_ns", return_value=mono - 60_000_000_000):
+                runner.append_observation(path, outcomes)
+            output = io.StringIO()
+            with patch("sys.argv", ["runner", "--project", "test-stack", "--state", str(state), "--history-report"]), patch.object(runner.time, "time_ns", return_value=now), patch.object(runner.time, "monotonic_ns", return_value=mono), contextlib.redirect_stdout(output):
+                self.assertEqual(runner.main(), 0)
+            report = json.loads(output.getvalue())
+            self.assertEqual(report["source"], "container_health_only")
+            self.assertEqual(len(report["windows"]), 7)
+            self.assertTrue(all(not day["sampling_complete"] for day in report["windows"]))
+            self.assertEqual(report["windows"][-1]["service_outcomes"]["web"]["no_healthcheck"], 1)
+
+    def test_unrelated_sqlite_file_is_not_rewritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "history.sqlite3"
+            with sqlite3.connect(path) as database:
+                database.execute("CREATE TABLE other(value TEXT)")
+                database.execute("INSERT INTO other VALUES ('keep')")
+                database.execute("PRAGMA user_version=1")
+            original = path.read_bytes()
+            with self.assertRaises(ValueError):
+                runner.append_observation(path, {name: "healthy" for name in runner.policy.OBSERVATION_SERVICES})
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(Path(str(path) + "-journal").exists())
 
 
 if __name__ == "__main__":
