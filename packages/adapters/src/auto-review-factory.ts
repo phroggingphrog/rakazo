@@ -37,6 +37,7 @@ export function createAutoReviewProvider(
       if (!apiKey) throw new Error("TYPESAFE_API_KEY is required");
       return new JevAutoReviewProvider({
         apiKey,
+        endpoint: env.TYPESAFE_API_URL,
         fetch: options.fetch,
         timeoutMs: options.timeoutMs ?? autoReviewTimeoutMs(env),
         model: options.model ?? env.RAKAZO_AUTO_REVIEW_MODEL?.trim() ?? DEFAULT_JEV_MODEL,

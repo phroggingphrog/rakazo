@@ -72,6 +72,19 @@ describe.each(["openrouter", "typesafe"] as const)("%s decision conformance", (p
         expect.objectContaining({ maxCostUsd: expect.any(Number) }),
       );
   });
+  it("uses an operator-supplied endpoint for TypeSafe", async () => {
+    if (provider !== "typesafe") return;
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response());
+    await new HttpDecisionProvider(provider, {
+      apiKey: "fake-key",
+      endpoint: "https://api.commandcode.ai/provider/v1/systemone",
+      fetch: fetchMock,
+    }).decide(request, context);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.commandcode.ai/provider/v1/systemone",
+      expect.anything(),
+    );
+  });
   it("rejects unknown answers while retaining provider costs", async () => {
     const onUsage = vi.fn();
     await expect(
