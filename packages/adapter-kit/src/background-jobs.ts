@@ -39,6 +39,7 @@ const payloadSchemas = {
   "proactive.decide": z.object({ scope: z.string().min(1) }),
   "proactive.redeliver": z.object({}),
   "proactive.timers": z.object({}),
+  "learning.review": z.object({ botId: z.string().min(1) }),
 } satisfies { [Name in BackgroundJobName]: z.ZodType<BackgroundJobPayloads[Name]> };
 
 export function parseBackgroundJob(name: string, payload: unknown): BackgroundJob {
@@ -227,4 +228,12 @@ export function proactiveJob(
     return { name: `proactive.${name}`, payload: { scope }, availableAt: runAt, replaceKey };
   }
   return { name: `proactive.${name}`, payload: {}, availableAt: runAt, replaceKey };
+}
+
+/**
+ * One bot's scheduled learning review. The key carries the day and the slot, so re-planning the
+ * same slot replaces the pending job instead of queueing a second review of the same lessons.
+ */
+export function learningReviewJob(botId: string, runAt: Date, replaceKey: string): BackgroundJob {
+  return { name: "learning.review", payload: { botId }, availableAt: runAt, replaceKey };
 }

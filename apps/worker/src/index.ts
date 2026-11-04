@@ -48,6 +48,7 @@ import {
   databaseCapacityBackoffMs,
   deploymentModelUsageLookup,
   ExpoPushProvider,
+  enqueueLearningReviewJobs,
   GraphileJobPublisher,
   homeStorageSweeper,
   InMemoryJobQueue,
@@ -412,6 +413,9 @@ async function main() {
     },
     reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
     reconcileDeadJobs: inMemoryJobs ? undefined : createDeadJobPruner(pool),
+    reconcileLearningReviews: async () => {
+      await enqueueLearningReviewJobs({ prisma, jobs });
+    },
     reconcileProactive: () => proactive.reconcile(),
   });
   let stopHealth: (() => Promise<void>) | undefined;

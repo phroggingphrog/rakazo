@@ -31,6 +31,7 @@ function handlers(): BackgroundJobHandlers {
     "proactive.decide": vi.fn(async () => undefined),
     "proactive.redeliver": vi.fn(async () => undefined),
     "proactive.timers": vi.fn(async () => undefined),
+    "learning.review": vi.fn(async () => undefined),
   };
 }
 

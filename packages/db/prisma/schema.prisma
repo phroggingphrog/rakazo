@@ -738,6 +738,8 @@ model Bot {
 
   externalConversations ExternalConversation[]
   runtimeProfile    BotRuntimeProfile?
+  learningCandidates LearningCandidate[]
+  learningReviews    LearningReview[]
 
   @@unique([spaceId, spawnKey])
   @@index([spaceId, userId, archivedAt, pinned, updatedAt])
@@ -2402,4 +2404,51 @@ model ProactiveTimer {
   state String @default("pending")
 
   @@map("proactive_timers")
+}
+
+/// One lesson a bot produced, waiting for a review to judge it. Additive: nothing reads this
+/// table unless the learning collector is enabled and the bot's stored profile asks for reviews.
+model LearningCandidate {
+  id String @id @default(cuid())
+  spaceId String
+  botId String
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// memory | skill | persona. A persona candidate is always proposed, never applied.
+  kind String
+  /// Stable digest of what the candidate says, so the same lesson is collected once.
+  dedupeKey String
+  sourceRunId String?
+  sourceThreadId String?
+  payload Json @default("{}")
+  /// pending | proposed | promoted | dropped
+  status String @default("pending")
+  reviewReason String?
+  reviewedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([botId, dedupeKey])
+  @@index([botId, status, createdAt])
+  @@index([spaceId, createdAt])
+  @@map("learning_candidates")
+}
+
+/// One completed review per (bot, UTC day, slot). The unique key is the claim: two workers
+/// racing for the same slot cannot both record it, and the day's cap is the row count.
+model LearningReview {
+  id String @id @default(cuid())
+  botId String
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  day DateTime @db.Date
+  slot Int
+  mode String
+  rubricVersion String
+  outcome Json @default("{}")
+  tokensSpent Int @default(0)
+  costUsd Float?
+  createdAt DateTime @default(now())
+
+  @@unique([botId, day, slot])
+  @@index([botId, createdAt])
+  @@map("learning_reviews")
 }
