@@ -1,4 +1,10 @@
 export const ZH_MESSAGES: Record<string, string> = {
+  "Declared required fields:": "声明的必填字段：",
+  "Enter a valid JSON object up to 8 KB.": "请输入不超过 8 KB 的有效 JSON 对象。",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "请在集成设置中配置 API 密钥和密码。分页令牌可在此输入。此处不会根据操作架构验证参数。",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "当设置与例程一致时，来源检查会尝试使用这些参数执行所选操作。运行状态会显示操作是否成功。测试不能确认通知已送达。",
   "How other bots see it": "其他机器人如何了解它",
   "Share to": "分享到",
   "{count} files": "{count} 个文件",

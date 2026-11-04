@@ -1,4 +1,10 @@
 export const ZH_TW_MESSAGES: Record<string, string> = {
+  "Declared required fields:": "宣告的必填欄位：",
+  "Enter a valid JSON object up to 8 KB.": "請輸入不超過 8 KB 的有效 JSON 物件。",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "請在整合設定中設定 API 金鑰和密碼。分頁權杖可在此輸入。此處不會依操作結構描述驗證引數。",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "當設定與例行工作一致時，來源檢查會嘗試使用這些引數執行所選操作。執行狀態會顯示操作是否成功。測試無法確認通知已送達。",
   "How other bots see it": "其他機器人如何瞭解它",
   "Share to": "分享到",
   "{count} files": "{count} 個檔案",

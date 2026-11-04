@@ -1,4 +1,10 @@
 export const JA_MESSAGES: Record<string, string> = {
+  "Declared required fields:": "必須として宣言されたフィールド:",
+  "Enter a valid JSON object up to 8 KB.": "8 KB以下の有効なJSONオブジェクトを入力してください。",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "APIキーとパスワードは連携設定で指定してください。ページネーショントークンはここに入力できます。引数はここでは操作のスキーマに照らして検証されません。",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "設定がルーティンと一致する場合、ソースチェックはこれらの引数で選択した操作の実行を試みます。実行状況で成功したか確認できます。テストでは通知の配信は確認されません。",
   "How other bots see it": "他のボットからの見え方",
   "Share to": "共有先",
   "{count} files": "{count}個のファイル",

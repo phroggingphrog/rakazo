@@ -1,4 +1,10 @@
 export const DE_MESSAGES: Record<string, string> = {
+  "Declared required fields:": "Als erforderlich angegebene Felder:",
+  "Enter a valid JSON object up to 8 KB.": "Gib ein gültiges JSON-Objekt mit höchstens 8 KB ein.",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "Verwende die Integrationseinstellungen für API-Schlüssel und Passwörter. Seitenwechsel-Token kannst du hier eingeben. Die Argumente werden hier nicht anhand des Operationsschemas überprüft.",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "Wenn die Einrichtung mit der Routine übereinstimmt, versucht eine Quellenprüfung die ausgewählte Operation mit diesen Argumenten auszuführen. Der Ausführungsstatus zeigt, ob sie erfolgreich war. Ein Test bestätigt nicht die Zustellung einer Benachrichtigung.",
   "How other bots see it": "So sehen andere Bots ihn",
   "Share to": "Teilen mit",
   "{count} files": "{count} Dateien",

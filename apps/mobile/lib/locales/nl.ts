@@ -1,4 +1,10 @@
 export const NL_MESSAGES: Record<string, string> = {
+  "Declared required fields:": "Als verplicht opgegeven velden:",
+  "Enter a valid JSON object up to 8 KB.": "Voer een geldig JSON-object van maximaal 8 KB in.",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "Gebruik de integratie-instellingen voor API-sleutels en wachtwoorden. Pagineringstokens kun je hier invoeren. Argumenten worden hier niet aan het bewerkingsschema getoetst.",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "Als de instellingen overeenkomen met de routine, probeert een broncontrole de geselecteerde bewerking met deze argumenten uit te voeren. De uitvoeringsstatus toont of dit is gelukt. Een test bevestigt niet dat een melding is bezorgd.",
   "How other bots see it": "Hoe andere bots deze zien",
   "Share to": "Delen met",
   "{count} files": "{count} bestanden",

@@ -1,4 +1,10 @@
 export const RU_MESSAGES: Record<string, string> = {
+  "Declared required fields:": "Поля, указанные как обязательные:",
+  "Enter a valid JSON object up to 8 KB.": "Введите корректный объект JSON размером до 8 КБ.",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "API-ключи и пароли задаются в настройках интеграции. Токены пагинации можно ввести здесь. Здесь аргументы не проверяются по схеме операции.",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "Если настройки соответствуют рутине, проверка источника попытается выполнить выбранную операцию с этими аргументами. Статус запуска покажет, удалось ли это. Тест не подтверждает доставку уведомления.",
   "How other bots see it": "Как его видят другие боты",
   "Share to": "Отправить в",
   "{count} files": "Файлов: {count}",
