@@ -570,7 +570,6 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
         if (
           runtimeProfileSnapshot &&
           (runtimeProfileSnapshot.settings.extensions.length > 0 ||
-            runtimeProfileSnapshot.settings.skills.mode !== "legacy-library" ||
             runtimeProfileSnapshot.settings.learning.mode !== "off" ||
             runtimeProfileSnapshot.settings.initiative.enabled ||
             runtimeProfileSnapshot.settings.routing.enabled)
@@ -583,7 +582,6 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
           );
           if (
             runtimeProfileSnapshot.settings.extensions.length > 0 ||
-            runtimeProfileSnapshot.settings.skills.mode !== "legacy-library" ||
             runtimeProfileSnapshot.settings.learning.mode !== "off" ||
             runtimeProfileSnapshot.settings.initiative.enabled ||
             runtimeProfileSnapshot.settings.routing.enabled
