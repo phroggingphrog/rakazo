@@ -597,6 +597,32 @@ const pushMessage = {
 } as const;
 
 describe("expo push delivery outcomes", () => {
+  it.each([
+    { status: 429, body: { data: { status: "ok", id: "accepted" } } },
+    {
+      status: 200,
+      body: { data: { status: "ok", id: "accepted", details: { error: "MessageRateExceeded" } } },
+    },
+    {
+      status: 200,
+      body: {
+        data: [
+          { status: "error", details: { error: "MessageRateExceeded" } },
+          { status: "ok", id: "accepted" },
+        ],
+      },
+    },
+  ])("does not repeat a contradictory rate-limit submission", async ({ status, body }) => {
+    const tokens = new MemoryPushTokenStore();
+    await tokens.save("user-1", "ExponentPushToken[test]");
+    const fetchMock = vi.fn(async () => jsonResponse(body, status));
+    vi.stubGlobal("fetch", fetchMock);
+    const accepted = vi.fn();
+    const push = new ExpoPushProvider(tokens, { retryDelaysMs: [0, 0] });
+    await expect(push.deliver(pushMessage, notifyContext, accepted)).rejects.toThrow("uncertain");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(accepted).not.toHaveBeenCalled();
+  });
   it.each<{
     name: string;
     outcomes: ExpoOutcome[];

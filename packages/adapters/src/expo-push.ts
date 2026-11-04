@@ -258,6 +258,8 @@ export class ExpoPushProvider implements NotificationProvider {
       if (submission && reply.status >= 500) throw new ExpoPushUncertainError();
       const retryDelay = this.retryDelaysMs[attempt];
       if (retryDelay === undefined || !expoAskedToBackOff(reply.status, reply.body)) return reply;
+      if (submission && !expoDefinitelyRejectedForRate(reply.status, reply.body))
+        throw new ExpoPushUncertainError("contradictory rate-limit response");
       await delay(retryDelay, undefined, { signal });
     }
   }
@@ -311,6 +313,22 @@ function expoAskedToBackOff(status: number, body: unknown): boolean {
     status === 429 ||
     status >= 500 ||
     expoPushTickets(body)[0]?.details?.error === "MessageRateExceeded"
+  );
+}
+
+/** A submission may only be repeated after an unambiguous rate-limit rejection. */
+function expoDefinitelyRejectedForRate(status: number, body: unknown): boolean {
+  const data = body && typeof body === "object" ? (body as { data?: unknown }).data : undefined;
+  if (status === 429 && data == null) return true;
+  if (status < 200 || status >= 300 || expoRequestErrorList(body).length > 0) return false;
+  if (Array.isArray(data) && data.length !== 1) return false;
+  const tickets = expoPushTickets(body);
+  const ticket = tickets[0];
+  return Boolean(
+    tickets.length === 1 &&
+      ticket?.status === "error" &&
+      !ticket.id &&
+      ticket.details?.error === "MessageRateExceeded",
   );
 }
 
