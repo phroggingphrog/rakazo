@@ -617,20 +617,30 @@ export class InMemoryJobQueue implements JobPublisher, JobWorkerHost {
         return;
       }
     }
-    const delay = stored.availableAt ? Math.max(0, stored.availableAt.getTime() - Date.now()) : 0;
-    const timer = setTimeout(() => {
-      this.timers.delete(timer);
-      this.scheduled.delete(timer);
-      if (stored.replaceKey && this.keyed.get(stored.replaceKey) === timer) {
-        this.keyed.delete(stored.replaceKey);
-      }
-      const handlers = this.handlers;
-      if (!handlers) return;
-      void this.dispatch(handlers, stored);
-    }, delay);
-    this.timers.add(timer);
-    this.scheduled.set(timer, stored);
-    if (stored.replaceKey) this.keyed.set(stored.replaceKey, timer);
+    const schedule = () => {
+      const delay = stored.availableAt ? Math.max(0, stored.availableAt.getTime() - Date.now()) : 0;
+      const timer = setTimeout(
+        () => {
+          this.timers.delete(timer);
+          this.scheduled.delete(timer);
+          if (stored.replaceKey && this.keyed.get(stored.replaceKey) === timer) {
+            this.keyed.delete(stored.replaceKey);
+          }
+          if (stored.availableAt && stored.availableAt.getTime() > Date.now()) {
+            schedule();
+            return;
+          }
+          const handlers = this.handlers;
+          if (!handlers) return;
+          void this.dispatch(handlers, stored);
+        },
+        Math.min(delay, 2_147_483_647),
+      );
+      this.timers.add(timer);
+      this.scheduled.set(timer, stored);
+      if (stored.replaceKey) this.keyed.set(stored.replaceKey, timer);
+    };
+    schedule();
   }
 
   async cancel(replaceKey: string): Promise<void> {

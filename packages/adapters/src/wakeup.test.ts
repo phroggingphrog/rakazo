@@ -92,6 +92,46 @@ describe("InMemoryJobQueue", () => {
     await queue.close();
   });
 
+  it("keeps long-future jobs queued until their actual due time", async () => {
+    vi.useFakeTimers();
+    const queue = new InMemoryJobQueue();
+    const target = handlers();
+    const delay = 40 * 24 * 60 * 60 * 1_000;
+    const due = new Date(Date.now() + delay);
+    await queue.start(target);
+    await queue.enqueue({
+      name: "routine.wakeup",
+      payload: { routineId: "r", scheduledFor: due.toISOString() },
+      availableAt: due,
+      replaceKey: "routine:r",
+    });
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(target["routine.wakeup"]).not.toHaveBeenCalled();
+    expect(queue.keyedJob("routine:r")?.availableAt).toEqual(due);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(target["routine.wakeup"]).toHaveBeenCalledOnce();
+    await queue.close();
+  });
+
+  it("can cancel a long-future keyed job after its timer is rearmed", async () => {
+    vi.useFakeTimers();
+    const queue = new InMemoryJobQueue();
+    const target = handlers();
+    await queue.start(target);
+    await queue.enqueue({
+      name: "computer.sleep",
+      payload: { computerId: "future" },
+      availableAt: new Date(Date.now() + 40 * 24 * 60 * 60 * 1_000),
+      replaceKey: "computer.sleep:future",
+    });
+    await vi.advanceTimersByTimeAsync(2_147_483_647);
+    await queue.cancel("computer.sleep:future");
+    await vi.advanceTimersByTimeAsync(40 * 24 * 60 * 60 * 1_000);
+    expect(target["computer.sleep"]).not.toHaveBeenCalled();
+    expect(queue.keyedJob("computer.sleep:future")).toBeUndefined();
+    await queue.close();
+  });
+
   it("replaces and cancels keyed jobs", async () => {
     vi.useFakeTimers();
     const queue = new InMemoryJobQueue();
