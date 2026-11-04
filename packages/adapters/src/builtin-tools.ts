@@ -680,6 +680,19 @@ export const builtinAgentTools: ConnectorTool[] = [
     },
   },
   {
+    name: "connect_existing_mcp",
+    description:
+      "Find existing MCP integrations available to this bot, or request a connection card for one. Omit server_id to list; pass an id to connect. Existing restricted grants stay unchanged.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_id: { type: "string", description: "Existing integration id to connect." },
+        query: { type: "string", description: "Filter integration names when listing." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "add_mcp_server",
     description:
       "Connect a remote MCP tool server to this Space when the user asks you to add one and provides the details (URL, optional token/headers). The server is created immediately and an approval card appears in the chat; its tools reach you once the user approves it there. Do not invent endpoints; only use details the user provided. Local (stdio) servers can only be added by an admin in Settings.",

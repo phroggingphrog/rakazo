@@ -470,6 +470,12 @@ export const ES_MESSAGES: Record<string, string> = {
     "Usa las credenciales de {source} de este servidor para acceder a {provider}.",
   "Connect API key": "Conectar clave de API",
   "Connect MCP server {name}": "Conectar el servidor MCP {name}",
+  "Assign MCP server {name}": "Asignar el servidor MCP {name}",
+  "Approve assignment": "Aprobar asignación",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "Permitir que este bot use el servidor existente. Aquí no se verifican el inicio de sesión ni el acceso al proveedor.",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "Asignación guardada. No se han verificado el inicio de sesión ni el acceso al proveedor.",
   "Connected.": "Conectado.",
   "Context limit": "Límite de contexto",
   "Could not connect this provider": "No se pudo conectar este proveedor",

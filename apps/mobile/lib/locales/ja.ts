@@ -477,6 +477,12 @@ export const JA_MESSAGES: Record<string, string> = {
     "このサーバー自身の{source}認証情報を使って{provider}にアクセスします。",
   "Connect API key": "APIキーを接続",
   "Connect MCP server {name}": "MCPサーバー{name}を接続",
+  "Assign MCP server {name}": "MCPサーバー{name}を割り当て",
+  "Approve assignment": "割り当てを承認",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "このボットによる既存サーバーの使用を許可します。サインインとプロバイダーへのアクセスはここでは確認されません。",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "割り当てを保存しました。サインインとプロバイダーへのアクセスは確認されていません。",
   "Connected.": "接続しました。",
   "Context limit": "コンテキスト上限",
   "Could not connect this provider": "このプロバイダーに接続できませんでした",

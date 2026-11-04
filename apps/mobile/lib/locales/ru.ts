@@ -351,6 +351,12 @@ export const RU_MESSAGES: Record<string, string> = {
   "Connect API key": "Подключить API-ключ",
   "Connect Executor": "Подключить Executor",
   "Connect MCP server {name}": "Подключение MCP-сервера {name}",
+  "Assign MCP server {name}": "Назначить MCP-сервер {name}",
+  "Approve assignment": "Одобрить назначение",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "Разрешить этому боту использовать существующий сервер. Вход и доступ к провайдеру здесь не проверяются.",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "Назначение сохранено. Вход и доступ к провайдеру не проверены.",
   "Connect Treg": "Подключить Treg",
   Connected: "Подключено",
   "Connected.": "Подключено.",

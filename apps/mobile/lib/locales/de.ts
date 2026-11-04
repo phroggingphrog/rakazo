@@ -495,6 +495,12 @@ export const DE_MESSAGES: Record<string, string> = {
     "Verwendet die eigenen {source}-Zugangsdaten dieses Servers für den Zugriff auf {provider}.",
   "Connect API key": "API-Schlüssel verbinden",
   "Connect MCP server {name}": "MCP-Server „{name}“ verbinden",
+  "Assign MCP server {name}": "MCP-Server „{name}“ zuweisen",
+  "Approve assignment": "Zuweisung genehmigen",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "Diesem Bot die Nutzung des vorhandenen Servers erlauben. Anmeldung und Anbieterzugriff werden hier nicht überprüft.",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "Zuweisung gespeichert. Anmeldung und Anbieterzugriff wurden nicht überprüft.",
   "Connected.": "Verbunden.",
   "Context limit": "Kontextlimit",
   "Could not connect this provider": "Anbieter konnte nicht verbunden werden",

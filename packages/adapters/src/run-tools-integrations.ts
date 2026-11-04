@@ -2,7 +2,7 @@ import { normalizedHttpUrl } from "@rakazo/core/egress";
 import { executeCloudAgentTool } from "./cloud-agent-service.js";
 import { collectLogIds } from "./composio-connector.js";
 import { connectApp } from "./connect-app.js";
-import { addMcpServerFromTool } from "./mcp-server-tool.js";
+import { addMcpServerFromTool, connectExistingMcpFromTool } from "./mcp-server-tool.js";
 import type { RunContext } from "./run-context.js";
 import { runScopedToolExecutionId } from "./run-effects.js";
 import { flushProgress, publishMidTurnNarration, showNarrationStatus } from "./run-progress.js";
@@ -67,6 +67,11 @@ export async function connectorTool(ctx: RunContext, call: ToolCall) {
 
 /** Web, cloud agents, MCP servers, app connections and connector tools. */
 export const integrationTools: ToolHandlers = {
+  async connect_existing_mcp(ctx, call) {
+    return call.finish(
+      await connectExistingMcpFromTool(ctx.deps, ctx.run, call.args, call.effectKey),
+    );
+  },
   async web_search(ctx, call) {
     const { context } = ctx;
     const { args } = call;

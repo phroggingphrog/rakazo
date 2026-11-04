@@ -488,6 +488,12 @@ export const NL_MESSAGES: Record<string, string> = {
     "Gebruikt de eigen {source}-gegevens van deze server om toegang te krijgen tot {provider}.",
   "Connect API key": "API-sleutel koppelen",
   "Connect MCP server {name}": "MCP-server {name} koppelen",
+  "Assign MCP server {name}": "MCP-server {name} toewijzen",
+  "Approve assignment": "Toewijzing goedkeuren",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "Geef deze bot toegang tot de bestaande server. Aanmelding en toegang tot de aanbieder worden hier niet gecontroleerd.",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "Toewijzing opgeslagen. Aanmelding en toegang tot de aanbieder zijn niet gecontroleerd.",
   "Connected.": "Gekoppeld.",
   "Context limit": "Contextlimiet",
   "Could not connect this provider": "Deze aanbieder koppelen mislukt",

@@ -22,6 +22,22 @@ import {
 } from "./index.js";
 
 describe("contracts", () => {
+  it("preserves assignment-only MCP cards while accepting existing cards", () => {
+    const card = {
+      kind: "mcp_approval",
+      name: "Example",
+      serverId: "server",
+      transport: "streamable_http",
+      endpoint: "https://example.test/mcp",
+      needsOAuth: false,
+    };
+    expect(MessageBlock.parse(card)).toMatchObject({ status: "pending" });
+    expect(MessageBlock.parse({ ...card, assignmentOnly: true })).toMatchObject({
+      assignmentOnly: true,
+      status: "pending",
+    });
+    expect(MessageBlock.safeParse({ ...card, assignmentOnly: "true" }).success).toBe(false);
+  });
   it("leaves bot management to the database default and preserves explicit choices", () => {
     expect(CreateBotInput.parse({ name: "New bot" }).fleetManagement).toBeUndefined();
     for (const fleetManagement of [false, true]) {

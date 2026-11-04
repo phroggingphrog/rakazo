@@ -283,6 +283,7 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     transport: McpTransportSchema,
     endpoint: z.string().nullable(),
     needsOAuth: z.boolean(),
+    assignmentOnly: z.boolean().optional(),
     status: z.enum(["pending", "connected", "dismissed"]).default("pending"),
   }),
   z.object({

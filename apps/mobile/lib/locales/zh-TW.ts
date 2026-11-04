@@ -314,6 +314,12 @@ export const ZH_TW_MESSAGES: Record<string, string> = {
   "Connect API key": "連線 API 金鑰",
   "Connect Executor": "連線 Executor",
   "Connect MCP server {name}": "連線 MCP 伺服器 {name}",
+  "Assign MCP server {name}": "指派 MCP 伺服器 {name}",
+  "Approve assignment": "核准指派",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "允許此機器人使用現有伺服器。此處不會驗證登入狀態和供應商存取權限。",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "指派已儲存。登入狀態和供應商存取權限尚未驗證。",
   "Connect Treg": "連線 Treg",
   Connected: "已連線",
   "Connected. Its tools are available from your next message.":

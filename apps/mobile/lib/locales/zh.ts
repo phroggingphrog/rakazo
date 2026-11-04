@@ -330,6 +330,12 @@ export const ZH_MESSAGES: Record<string, string> = {
   "Connect API key": "连接 API 密钥",
   "Connect Executor": "连接 Executor",
   "Connect MCP server {name}": "连接 MCP 服务器 {name}",
+  "Assign MCP server {name}": "分配 MCP 服务器 {name}",
+  "Approve assignment": "批准分配",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "允许此机器人使用现有服务器。此处不会验证登录状态和提供商访问权限。",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "分配已保存。登录状态和提供商访问权限尚未验证。",
   "Connect Treg": "连接 Treg",
   Connected: "已连接",
   "Connected.": "已连接。",
