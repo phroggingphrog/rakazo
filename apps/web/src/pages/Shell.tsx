@@ -992,6 +992,7 @@ function SpaceShell() {
             inCall={Boolean(active) && call?.botId === active?.id}
             panelOpen={chatPanelOpen}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
+            onOpenRoutines={() => setPanel("routines")}
             onTogglePanel={() => {
               if (chatPanelOpen) setPanel(null);
               else if (inGroup) setPanel("group-settings");

@@ -44,7 +44,17 @@ it("declares a bot chat's title and its … menu when the screen is created", ()
   expect(options.headerTitle).toBeTypeOf("function");
   expect(options.headerTitleAlign).toBe("center");
   expect(options.headerTransparent).toBe(true);
-  const [item] = rightItems(options);
+  const [routines, item] = rightItems(options);
+  expect(routines).toMatchObject({
+    type: "button",
+    label: "Routines",
+    accessibilityLabel: "Routines",
+  });
+  (routines as { onPress: () => void }).onPress();
+  expect(push).toHaveBeenCalledWith({
+    pathname: "/routines",
+    params: { botId: "bot-1", name: "Helper" },
+  });
   expect(item).toMatchObject({ type: "menu", icon: { type: "sfSymbol", name: "ellipsis" } });
   expect(options.headerRight).toBeTypeOf("function");
   expect(options.headerBackVisible).toBe(true);

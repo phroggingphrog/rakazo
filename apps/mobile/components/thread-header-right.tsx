@@ -1,5 +1,5 @@
 import type { NativeStackNavigationOptions } from "expo-router";
-import { Platform, Pressable, View } from "react-native";
+import { Platform, Pressable, Text, View } from "react-native";
 import { iosAtLeast } from "../lib/native-controls";
 import { NativeSymbol } from "./native-symbol";
 
@@ -21,6 +21,7 @@ export function threadHeaderRight({
   rowStyle,
   onGroupSettings,
   onBotActions,
+  onOpenRoutines,
   menuActions,
   computerLabel,
 }: {
@@ -32,6 +33,7 @@ export function threadHeaderRight({
   rowStyle?: object;
   onGroupSettings: () => void;
   onBotActions: () => void;
+  onOpenRoutines: () => void;
   menuActions: readonly ThreadHeaderAction[];
   /** The menu action that gets the computer icon. */
   computerLabel?: string;
@@ -40,6 +42,16 @@ export function threadHeaderRight({
     ...(Platform.OS === "ios" && !readOnly && (!inGroup || iosAtLeast(26))
       ? {
           unstable_headerRightItems: () => [
+            ...(!inGroup && hasBot
+              ? [
+                  {
+                    type: "button" as const,
+                    label: t("Routines"),
+                    accessibilityLabel: t("Routines"),
+                    onPress: onOpenRoutines,
+                  },
+                ]
+              : []),
             inGroup
               ? {
                   type: "button" as const,
@@ -81,6 +93,22 @@ export function threadHeaderRight({
         </Pressable>
       ) : (
         <View style={rowStyle}>
+          {!readOnly && hasBot ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("Routines")}
+              hitSlop={8}
+              style={{
+                minHeight: 48,
+                minWidth: 48,
+                justifyContent: "center",
+                alignItems: "center",
+              }}
+              onPress={onOpenRoutines}
+            >
+              <Text style={{ color }}>{t("Routines")}</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t("Bot actions")}
