@@ -24,7 +24,7 @@ import type {
   WakeTarget,
 } from "@rakazo/proactive";
 import { PgProactiveStore, ProactiveEngine } from "@rakazo/proactive";
-import { DEFAULT_JEV_MODEL, typesafeApiKey } from "./auto-review.js";
+import { DEFAULT_JEV_MODEL, typesafeApiKey, typesafeApiUrl } from "./auto-review.js";
 import { HttpDecisionProvider } from "./http-decisions.js";
 import { JevProactiveJudge } from "./jev-proactive-judge.js";
 import { PgProactiveControls, type BotProactiveConfig, type ProactiveHook } from "./proactive-controls.js";
@@ -227,7 +227,7 @@ export function createProactiveRuntime(deps: ProactiveRuntimeDeps) {
   });
   const apiKey = typesafeApiKey();
   const judge = deps.judge ?? (apiKey && deps.enabledBots?.trim() ? new JevProactiveJudge({
-    provider: new HttpDecisionProvider("typesafe", { apiKey }),
+    provider: new HttpDecisionProvider("typesafe", { apiKey, endpoint: typesafeApiUrl() }),
     model: DEFAULT_JEV_MODEL,
     context: async (scope) => {
       const botId = botIdFromScope(scope);

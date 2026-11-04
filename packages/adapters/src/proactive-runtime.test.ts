@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 vi.mock("@rakazo/db", () => ({ runAsSystem: (_reason: string, fn: () => unknown) => fn(), runAsTenant: (_owner: unknown, fn: () => unknown) => fn() }));
+vi.mock("./http-decisions.js", () => ({ HttpDecisionProvider: vi.fn() }));
+import { HttpDecisionProvider } from "./http-decisions.js";
 import { createProactiveRuntime, RakazoWakeTarget } from "./proactive.js";
 
 function fixture() {
@@ -33,5 +35,17 @@ describe("proactive runtime trusted identity", () => {
     await runtime.recordSent("run"); await runtime.recordSent("run");
     expect(receive).toHaveBeenNthCalledWith(1, { source: "sent:one", id: "sent:message", kind: "sent", at: 100, scope: "bot:one" });
     expect(receive.mock.calls[0]).toEqual(receive.mock.calls[1]);
+  });
+  it("passes the configured TypeSafe endpoint to the proactive judge", () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "fake-key");
+    vi.stubEnv("TYPESAFE_API_URL", "https://example.test/systemone");
+    const runtimeDeps = { prisma: { bot: { findFirst: vi.fn(), findUnique: vi.fn() }, run: { findFirst: vi.fn(), findUnique: vi.fn() }, message: { findMany: vi.fn() } }, jobs: { enqueue: vi.fn(), cancel: vi.fn() }, events: { sendUserMessage: vi.fn() }, enabledBots: "one" };
+    createProactiveRuntime(runtimeDeps as unknown as Parameters<typeof createProactiveRuntime>[0]);
+    expect(HttpDecisionProvider).toHaveBeenCalledWith("typesafe", { apiKey: "fake-key", endpoint: "https://example.test/systemone" });
+    vi.mocked(HttpDecisionProvider).mockClear();
+    vi.stubEnv("TYPESAFE_API_URL", "");
+    createProactiveRuntime(runtimeDeps as unknown as Parameters<typeof createProactiveRuntime>[0]);
+    expect(HttpDecisionProvider).toHaveBeenCalledWith("typesafe", { apiKey: "fake-key", endpoint: undefined });
+    vi.unstubAllEnvs();
   });
 });
