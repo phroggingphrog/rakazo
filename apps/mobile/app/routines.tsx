@@ -1,8 +1,9 @@
 import type { Routine } from "@rakazo/contracts";
 import { isOneShotRoutineCrons } from "@rakazo/core";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useRef, useState } from "react";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Platform, StyleSheet, Text, View } from "react-native";
+import { EmailMonitorSetup } from "../components/email-monitor-setup";
 import { NativeActionButton } from "../components/native-action-button";
 import { RoutineList } from "../components/routine-list";
 import { RoutineRearm } from "../components/routine-rearm";
@@ -30,7 +31,32 @@ export default function Routines() {
   const [deleting, setDeleting] = useState(false);
   const [rearming, setRearming] = useState<{ routine: Routine; scope: string } | null>(null);
   const [rearmSaving, setRearmSaving] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   const rearmInFlight = useRef(false);
+
+  useEffect(() => setSetupOpen(false), [botId]);
+  useFocusEffect(useCallback(() => () => setSetupOpen(false), []));
+
+  const setupLauncher =
+    botId && (Platform.OS === "ios" || Platform.OS === "android") ? (
+      <NativeActionButton
+        label={t("Set up email monitor")}
+        prominence="secondary"
+        onPress={() => setSetupOpen(true)}
+      />
+    ) : null;
+  const setupSheet = setupOpen ? (
+    <EmailMonitorSetup
+      botId={botId}
+      botName={name ?? t("Bot")}
+      onClose={() => setSetupOpen(false)}
+      onOpenIntegrations={() => {
+        setSetupOpen(false);
+        router.push("/integrations");
+      }}
+      onConfigured={() => void loadBotRoutines(botId)}
+    />
+  ) : null;
 
   async function rearm(at: Date) {
     if (!rearming || rearmInFlight.current) return;
@@ -77,6 +103,7 @@ export default function Routines() {
       <>
         <RoutineList
           routines={routines}
+          header={setupLauncher}
           timeZone={deviceTimeZone()}
           canDelete={!deleting}
           onOpen={(routine) =>
@@ -110,6 +137,7 @@ export default function Routines() {
             onSave={(at) => void rearm(at)}
           />
         ) : null}
+        {setupSheet}
       </>
     );
   }
@@ -117,7 +145,11 @@ export default function Routines() {
     <View style={[styles.empty, sideInsets]}>
       {routines ? (
         // There is no add button here: routines are set up by asking the bot.
-        <Text style={styles.message}>{t("Ask this Bot in chat to set up a routine.")}</Text>
+        <>
+          <Text style={styles.message}>{t("Ask this Bot in chat to set up a routine.")}</Text>
+          {setupLauncher}
+          {setupSheet}
+        </>
       ) : error ? (
         <>
           <Text style={styles.message}>{t("Could not load routines")}</Text>

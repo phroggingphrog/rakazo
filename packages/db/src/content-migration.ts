@@ -13,7 +13,7 @@ export type ContentMigrationMode = "encrypt" | "reencrypt" | "decrypt";
 
 interface TableSpec {
   model: keyof typeof ENCRYPTED_MODELS;
-  delegate: "message" | "event" | "memoryDocument" | "memoryRevision" | "thread";
+  delegate: "message" | "event" | "memoryDocument" | "memoryRevision" | "thread" | "setupPlan";
   column: string;
   json: boolean;
   /** Preserve @updatedAt so a migration does not reorder recently edited documents. */
@@ -31,6 +31,31 @@ interface ScannedRow {
 }
 
 const TABLES: TableSpec[] = [
+  {
+    model: "SetupPlan",
+    delegate: "setupPlan",
+    column: "draft",
+    json: true,
+    updatedAt: true,
+    scan: (cursor, limit) => Prisma.sql`
+      SELECT id, draft AS value, "spaceId", "userId" AS owner FROM setup_plans
+      WHERE id > ${cursor} ORDER BY id LIMIT ${limit}`,
+    writePlaintext: (id, value) =>
+      Prisma.sql`UPDATE setup_plans SET draft = ${JSON.stringify(value)}::jsonb WHERE id = ${id}`,
+  },
+  {
+    model: "SetupPlan",
+    delegate: "setupPlan",
+    column: "requestPayload",
+    json: true,
+    updatedAt: true,
+    scan: (cursor, limit) => Prisma.sql`
+      SELECT id, "requestPayload" AS value, "spaceId", "userId" AS owner FROM setup_plans
+      WHERE id > ${cursor} ORDER BY id LIMIT ${limit}`,
+    writePlaintext: (id, value) =>
+      Prisma.sql`UPDATE setup_plans SET "requestPayload" = ${JSON.stringify(value)}::jsonb WHERE id = ${id}`,
+  },
+
   {
     model: "Message",
     delegate: "message",
@@ -305,6 +330,8 @@ export async function contentEncryptionStatus(
     SELECT 'memory_documents', count(*), count(*) FILTER (WHERE content NOT LIKE 'rkz1:%') FROM memory_documents
     UNION ALL
     SELECT 'memory_revisions', count(*), count(*) FILTER (WHERE content NOT LIKE 'rkz1:%') FROM memory_revisions
+    UNION ALL
+    SELECT 'setup_plans', count(*), count(*) FILTER (WHERE NOT (jsonb_exists(draft, '$sealed') AND jsonb_exists("requestPayload", '$sealed'))) FROM setup_plans
     UNION ALL
     SELECT 'threads', count(*) FILTER (WHERE "historyCompactionSummary" IS NOT NULL),
       count(*) FILTER (WHERE "historyCompactionSummary" NOT LIKE 'rkz1:%') FROM threads

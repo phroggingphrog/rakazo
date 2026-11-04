@@ -420,6 +420,28 @@ export class McpConnector implements ConnectorProvider {
     return lazyCatalogTools(catalogToolPrefix("mcp"), "mcp", "MCP", catalogEntries(tools));
   }
 
+  async discoverMonitorTools(
+    context: AdapterContext,
+    serverId: string,
+  ): Promise<{ status: "ok" | "unavailable" | "not_assigned"; tools: ConnectorTool[] }> {
+    const observations = new Map<string, "ok" | "unavailable">();
+    const tools = await this.authorizedTools(context, observations, serverId);
+    const status = observations.get(serverId) ?? "not_assigned";
+    return {
+      status,
+      tools:
+        status === "ok"
+          ? tools.filter(
+              (tool) =>
+                tool.readOnly === true &&
+                !tool.batch &&
+                tool.route?.resourceId === serverId &&
+                !tool.route.toolName.startsWith("__rakazo_"),
+            )
+          : [],
+    };
+  }
+
   async resolveCall(
     call: ConnectorCall,
     context: AdapterContext,
@@ -435,7 +457,11 @@ export class McpConnector implements ConnectorProvider {
     return resolveCatalogCall(call, catalogEntries(await this.authorizedTools(context)));
   }
 
-  private async authorizedTools(context: AdapterContext): Promise<ConnectorTool[]> {
+  private async authorizedTools(
+    context: AdapterContext,
+    observations?: Map<string, "ok" | "unavailable">,
+    serverId?: string,
+  ): Promise<ConnectorTool[]> {
     if (!context.botId) return [];
     const usable = { enabled: true, ...availableInSpace(context) };
     const [assigned, shared] = await Promise.all([
@@ -453,11 +479,14 @@ export class McpConnector implements ConnectorProvider {
         where: { ...usable, allBots: true, assignments: { none: { botId: context.botId } } },
       }),
     ]);
-    const assignments = [...assigned, ...shared.map(sharedAssignment)];
+    const assignments = [...assigned, ...shared.map(sharedAssignment)].filter(
+      (assignment) => !serverId || assignment.server.id === serverId,
+    );
     const groups = await Promise.all(
       assignments.map(async (assignment): Promise<ConnectorTool[]> => {
         const startedAt = Date.now();
         const server = assignment.server;
+        observations?.set(server.id, "unavailable");
         const key = this.sessionKey(server, context);
         const live = this.sessions.get(key)?.revision === server.revision;
         // A package still installing finishes in the background; this run goes on without it.
@@ -493,6 +522,7 @@ export class McpConnector implements ConnectorProvider {
             }),
             this.options.discoveryTimeoutMs ?? DEFAULT_MCP_DISCOVERY_TIMEOUT_MS,
           );
+          observations?.set(server.id, "ok");
           this.discoveryBackoff.delete(key);
           this.unavailable.delete(key);
           void this.recordHealth(assignment.server.id, {

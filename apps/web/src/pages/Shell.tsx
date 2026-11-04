@@ -79,6 +79,7 @@ import { Composer } from "./shell/composer";
 import { ComputerOverlay } from "./shell/computer-overlay";
 import { ComputerPanel } from "./shell/computer-panel";
 import type { CreateBotDialogInput } from "./shell/create-bot-dialog";
+import { EmailMonitorSetup } from "./shell/email-monitor-setup";
 import type { ImportSetupTarget } from "./shell/import-setup-card";
 import { ShellDialogs, useShellDialogs } from "./shell/shell-dialogs";
 import { AppOverlays, SettingsOverlays } from "./shell/shell-overlays";
@@ -1182,17 +1183,29 @@ function SpaceShell() {
           ) : null
         }
         routinesPanel={
-          <RoutineList
-            routines={activeRoutines}
-            runningRoutineId={
-              snapshot?.run && isActive(snapshot.run.status)
-                ? (snapshot.run.routineId ?? undefined)
-                : undefined
-            }
-            onCreate={() => startRoutine()}
-            onEdit={startRoutine}
-            onStop={() => void stopRun()}
-          />
+          <>
+            {active ? (
+              <EmailMonitorSetup
+                key={`${shellSpaceId}:${active.id}`}
+                botId={active.id}
+                botName={active.name}
+                rpc={rpc}
+                onOpenIntegrations={() => setOverlay({ kind: "integrations" })}
+                onConfigured={() => void refreshThread(active.id).catch(() => undefined)}
+              />
+            ) : null}
+            <RoutineList
+              routines={activeRoutines}
+              runningRoutineId={
+                snapshot?.run && isActive(snapshot.run.status)
+                  ? (snapshot.run.routineId ?? undefined)
+                  : undefined
+              }
+              onCreate={() => startRoutine()}
+              onEdit={startRoutine}
+              onStop={() => void stopRun()}
+            />
+          </>
         }
         routineEditorProps={routineEditorProps}
         openBot={openBot}

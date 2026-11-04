@@ -23,6 +23,7 @@ model AiDataConsent {
 
 model User {
   aiDataConsents AiDataConsent[]
+  setupPlans SetupPlan[]
   id                          String                       @id
   name                        String
   email                       String
@@ -373,6 +374,7 @@ model Member {
 
 model Space {
   aiDataConsents              AiDataConsent[]
+  setupPlans                  SetupPlan[]
   id                          String                       @id
   organizationId              String
   organization                Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -1223,10 +1225,34 @@ model Routine {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   runs           Run[]
+  setupPlan      SetupPlan?
 
   @@index([active, nextRunAt])
   @@index([spaceId, botId])
   @@map("routines")
+}
+
+model SetupPlan {
+  id                     String   @id @default(cuid())
+  spaceId                String
+  space                  Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId                 String
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestKey             String
+  requestPayload         Json
+  revision               Int      @default(1)
+  status                 String   @default("draft")
+  draft                  Json
+  routineId              String?  @unique
+  routine                Routine? @relation(fields: [routineId], references: [id], onDelete: SetNull)
+  configureRequestKey    String?
+  configuredFromRevision Int?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([spaceId, userId, requestKey])
+  @@index([spaceId, userId, updatedAt])
+  @@map("setup_plans")
 }
 
 model ScratchpadItem {
