@@ -19,7 +19,7 @@ import { protectedComputerLifecycleRefusal } from "./desktop-command-guard.js";
 import type { ExecutorDeps } from "./executor-deps.js";
 import { routineRunModelPin } from "./model-selection.js";
 import { findPendingRoutineTick, routineTimerNonce } from "./routine-coalescing.js";
-import { tickRoutineWatch } from "./routine-watch.js";
+import { stableStringify, tickRoutineWatch, watchDefinitionFilter } from "./routine-watch.js";
 import { isUniqueViolation } from "./run-messages.js";
 import { notifyRun } from "./run-notifications.js";
 import { resolveSetupSourceBinding, storeSetupSourceBinding } from "./setup-source-binding.js";
@@ -195,6 +195,7 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
         nextRunAt: scheduledAt,
         crons: { equals: routine.crons },
         timezone: routine.timezone,
+        watch: watchDefinitionFilter(routine.watch),
         bot: { archivedAt: null },
       },
       data: {
@@ -276,7 +277,8 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
       current?.active &&
       current.nextRunAt?.getTime() === scheduledAt.getTime() &&
       (current.timezone !== routine.timezone ||
-        JSON.stringify(current.crons) !== JSON.stringify(routine.crons))
+        JSON.stringify(current.crons) !== JSON.stringify(routine.crons) ||
+        stableStringify(current.watch) !== stableStringify(routine.watch))
     ) {
       await deps.jobs.enqueue(routineWakeupJob(routine.id, scheduledAt));
     }

@@ -142,7 +142,7 @@ describe("tickRoutineWatch", () => {
     };
     const deps = {
       prisma: {
-        routine: { updateMany },
+        routine: { updateMany, findUnique: vi.fn(async () => null) },
         connection: { findMany: vi.fn(async () => []) },
         spaceSettingOverride: { findUnique: vi.fn(async () => null) },
         actionApprovalRule: { findMany: vi.fn(async () => []) },
@@ -206,6 +206,65 @@ describe("tickRoutineWatch", () => {
     );
     expect(deps.jobs.enqueue).toHaveBeenCalledTimes(2);
     expect(messages).toHaveLength(0);
+  });
+
+  it.each(["baseline", "failure", "retry"] as const)(
+    "discards a stale %s outcome after the watch is edited at the same time",
+    async (outcome) => {
+      const { deps, routine, updateMany, messages } = setup(
+        outcome === "failure" ? { error: "old check failed" } : { data: "old observation" },
+      );
+      if (outcome === "retry") {
+        routine.watch = { kind: "files", paths: ["inbox"] } as unknown as typeof routine.watch;
+        vi.mocked(provisionComputer).mockRejectedValueOnce(new ComputerBusyError());
+      }
+      const replacement = { kind: "tool", tool: "new_check", everyMinutes: 60 };
+      updateMany.mockResolvedValueOnce({ count: 0 });
+      vi.mocked(deps.prisma.routine.findUnique).mockResolvedValueOnce({
+        active: true,
+        nextRunAt: scheduledAt,
+        watch: replacement,
+      } as never);
+
+      expect(await tickRoutineWatch(deps, routine, target, scheduledAt)).toEqual({ run: false });
+      expect(updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ watch: { equals: routine.watch } }),
+        }),
+      );
+      expect(deps.jobs.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "routine.wakeup",
+          payload: { routineId: routine.id, scheduledFor: scheduledAt.toISOString() },
+        }),
+      );
+      expect(deps.jobs.cancel).not.toHaveBeenCalled();
+      expect(messages).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      state: "paused",
+      current: { active: false, nextRunAt: null, watch: { kind: "tool", tool: "new_check" } },
+    },
+    { state: "deleted", current: null },
+    {
+      state: "rescheduled",
+      current: {
+        active: true,
+        nextRunAt: new Date(scheduledAt.getTime() + 60_000),
+        watch: { kind: "tool", tool: "new_check" },
+      },
+    },
+  ])("does not republish an edited watch that is $state", async ({ current }) => {
+    const { deps, routine, updateMany } = setup({ data: "old observation" });
+    updateMany.mockResolvedValueOnce({ count: 0 });
+    vi.mocked(deps.prisma.routine.findUnique).mockResolvedValueOnce(current as never);
+
+    await tickRoutineWatch(deps, routine, target, scheduledAt);
+
+    expect(deps.jobs.enqueue).not.toHaveBeenCalled();
   });
 
   it("posts 'no changes' when loud", async () => {
