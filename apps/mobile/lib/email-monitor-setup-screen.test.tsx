@@ -234,11 +234,71 @@ beforeEach(async () => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  vi.useRealTimers();
   container.remove();
   vi.unstubAllGlobals();
 });
 
 describe("native email monitor proposal", () => {
+  it("resumes polling a restored running test without starting another", async () => {
+    const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
+    session.load.mockResolvedValue({ servers: [], plans: [configured], nextCursor: null });
+    session.latestSourceTest.mockResolvedValue({
+      runId: "old",
+      runStatus: "running",
+      sourceTest: "running",
+    });
+    session.testStatus.mockResolvedValue({ runStatus: "completed", sourceTest: "succeeded" });
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(
+        <EmailMonitorSetup
+          botId="bot-1"
+          botName="Scout"
+          onClose={close}
+          onOpenIntegrations={openIntegrations}
+        />,
+      );
+    });
+    vi.useFakeTimers();
+    await select("Saved proposals", "plan-1");
+    expect(container.textContent).toContain("Source test: Running");
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.textContent).toContain("Source test: Succeeded");
+    await act(async () => vi.advanceTimersByTimeAsync(60000));
+    expect(session.testStatus).toHaveBeenCalledTimes(1);
+    expect(session.runTest).not.toHaveBeenCalled();
+  });
+  it("ignores an in-flight automatic check after switching proposals", async () => {
+    const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
+    session.load.mockResolvedValue({ servers: [], plans: [configured], nextCursor: null });
+    let resolvePoll!: (value: { runStatus: string; sourceTest: string }) => void;
+    session.testStatus.mockImplementationOnce(
+      () => new Promise((resolve) => (resolvePoll = resolve)),
+    );
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(
+        <EmailMonitorSetup
+          botId="bot-1"
+          botName="Scout"
+          onClose={close}
+          onOpenIntegrations={openIntegrations}
+        />,
+      );
+    });
+    await select("Saved proposals", "plan-1");
+    vi.useFakeTimers();
+    await click("Run test");
+    await act(async () => vi.advanceTimersByTime(3000));
+    await click("New proposal");
+    await act(async () => resolvePoll({ runStatus: "completed", sourceTest: "succeeded" }));
+    expect(container.textContent).not.toContain("Source test: Succeeded");
+    await act(async () => vi.advanceTimersByTimeAsync(60000));
+    expect(session.testStatus).toHaveBeenCalledTimes(1);
+  });
   it("shows a previous source test as historical and ignores a stale session", async () => {
     const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
     session.load.mockResolvedValue({ servers: [], plans: [configured], nextCursor: null });
@@ -364,6 +424,91 @@ describe("native email monitor proposal", () => {
     expect(container.textContent).toContain("completed");
     expect(container.textContent).toContain("Source test: Unavailable for this run");
     expect(container.textContent).toContain("A test does not confirm notification delivery");
+  });
+
+  it("updates a requested test until it finishes and stops polling", async () => {
+    const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
+    session.load.mockResolvedValue({ servers: [], plans: [configured], nextCursor: null });
+    session.testStatus
+      .mockResolvedValueOnce({ runStatus: "running", sourceTest: "running" })
+      .mockResolvedValueOnce({ runStatus: "completed", sourceTest: "succeeded" });
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(
+        <EmailMonitorSetup
+          botId="bot-1"
+          botName="Scout"
+          onClose={close}
+          onOpenIntegrations={openIntegrations}
+        />,
+      );
+    });
+    await select("Saved proposals", "plan-1");
+    vi.useFakeTimers();
+    await click("Run test");
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.textContent).toContain("Source test: Running");
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.textContent).toContain("Source test: Succeeded");
+    await act(async () => vi.advanceTimersByTimeAsync(60000));
+    expect(session.testStatus).toHaveBeenCalledTimes(2);
+    expect(session.runTest).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds failed automatic checks and leaves manual refresh available", async () => {
+    const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
+    session.load.mockResolvedValue({ servers: [], plans: [configured], nextCursor: null });
+    session.testStatus.mockRejectedValue(new Error("offline"));
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(
+        <EmailMonitorSetup
+          botId="bot-1"
+          botName="Scout"
+          onClose={close}
+          onOpenIntegrations={openIntegrations}
+        />,
+      );
+    });
+    await select("Saved proposals", "plan-1");
+    vi.useFakeTimers();
+    await click("Run test");
+    await act(async () => vi.advanceTimersByTimeAsync(90000));
+    expect(session.testStatus).toHaveBeenCalledTimes(20);
+    session.testStatus.mockResolvedValueOnce({ runStatus: "completed", sourceTest: "succeeded" });
+    await click("Refresh status");
+    expect(container.textContent).toContain("Source test: Succeeded");
+  });
+
+  it("does not replace a newer manual status with a late automatic response", async () => {
+    const configured = { ...plan, status: "configured", revision: 3, routineId: "routine-1" };
+    session.load.mockResolvedValue({ servers: [], plans: [configured], nextCursor: null });
+    let resolvePoll!: (value: { runStatus: string; sourceTest: string }) => void;
+    session.testStatus
+      .mockImplementationOnce(() => new Promise((resolve) => (resolvePoll = resolve)))
+      .mockResolvedValueOnce({ runStatus: "completed", sourceTest: "succeeded" });
+    await act(async () => {
+      root.unmount();
+      root = createRoot(container);
+      root.render(
+        <EmailMonitorSetup
+          botId="bot-1"
+          botName="Scout"
+          onClose={close}
+          onOpenIntegrations={openIntegrations}
+        />,
+      );
+    });
+    await select("Saved proposals", "plan-1");
+    vi.useFakeTimers();
+    await click("Run test");
+    await act(async () => vi.advanceTimersByTime(3000));
+    await click("Refresh status");
+    await act(async () => resolvePoll({ runStatus: "running", sourceTest: "running" }));
+    expect(container.textContent).toContain("Source test: Succeeded");
+    expect(container.textContent).not.toContain("Source test: Running");
   });
 
   it.each([

@@ -178,6 +178,36 @@ export function EmailMonitorSetup({
     };
   }, [session, plan?.id, plan?.revision, plan?.routineId, plan?.status, planSelection]);
 
+  const testFinished = ["completed", "failed", "cancelled"].includes(testStatus ?? "");
+  useEffect(() => {
+    if (!session || !plan || !testRunId || testFinished) return;
+    let active = true;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (!active || !session.current()) return;
+      const generation = ++testReadGeneration.current;
+      attempts += 1;
+      try {
+        const status = await session.testStatus(plan, testRunId);
+        if (!active || !mounted.current || !session.current()) return;
+        if (testReadGeneration.current === generation) {
+          setTestStatus(status.runStatus);
+          setSourceTestStatus(status.sourceTest);
+          if (["completed", "failed", "cancelled"].includes(status.runStatus)) return;
+        }
+      } catch {
+        // The existing manual refresh remains available if the bounded polling window expires.
+      }
+      if (active && attempts < 20) timer = setTimeout(poll, 3000);
+    };
+    timer = setTimeout(poll, 3000);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [session, plan, testRunId, testFinished]);
+
   function clearCheck() {
     setPrerequisites(null);
     setCandidates(null);

@@ -151,6 +151,38 @@ export function EmailMonitorSetup({
     };
   }, [rpc, botId, plan?.id, plan?.revision, plan?.routineId, plan?.status, planSelection]);
 
+  const testFinished = ["completed", "failed", "cancelled"].includes(testStatus ?? "");
+  useEffect(() => {
+    if (!open || !plan?.routineId || !testRunId || testFinished) return;
+    const routineId = plan.routineId;
+    let active = true;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (!active) return;
+      const generation = ++testReadGeneration.current;
+      attempts += 1;
+      try {
+        const history = await rpc.routines.history({ routineId, limit: 20 });
+        if (!active || !mounted.current) return;
+        if (testReadGeneration.current === generation) {
+          const run = history.runs.find((item) => item.id === testRunId);
+          setTestStatus(run?.status ?? "unknown");
+          setSourceTestStatus(run?.sourceUnbound ? "unbound" : (run?.sourceTest ?? "unavailable"));
+          if (run && ["completed", "failed", "cancelled"].includes(run.status)) return;
+        }
+      } catch {
+        // The existing manual refresh remains available if the bounded polling window expires.
+      }
+      if (active && attempts < 20) timer = setTimeout(poll, 3000);
+    };
+    timer = setTimeout(poll, 3000);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [rpc, open, plan, testRunId, testFinished]);
+
   function clearCheck() {
     setPrerequisites(null);
     setCandidates(null);

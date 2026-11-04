@@ -150,10 +150,98 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  vi.useRealTimers();
   container.remove();
 });
 
 describe("email monitor setup", () => {
+  it("stops automatic retries after a minute and permits manual refresh", async () => {
+    rpc.setupPlans.list.mockResolvedValue({
+      plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
+      nextCursor: null,
+    });
+    await click("Set up email monitor");
+    await click("Find appointment updatesConfigured");
+    rpc.routines.history.mockRejectedValue(new Error("offline"));
+    vi.useFakeTimers();
+    await click("Run test");
+    await act(async () => vi.advanceTimersByTimeAsync(90000));
+    expect(rpc.routines.history).toHaveBeenCalledTimes(21);
+    rpc.routines.history.mockResolvedValueOnce({
+      runs: [{ id: "run-1", status: "completed", sourceTest: "succeeded" }],
+    });
+    await click("Refresh status");
+    expect(container.textContent).toContain("Source test: Succeeded");
+  });
+  it("resumes polling a restored running test and stops on completion", async () => {
+    rpc.setupPlans.list.mockResolvedValue({
+      plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
+      nextCursor: null,
+    });
+    rpc.routines.history
+      .mockResolvedValueOnce({ runs: [{ id: "old", status: "running", sourceTest: "running" }] })
+      .mockResolvedValueOnce({
+        runs: [{ id: "old", status: "completed", sourceTest: "succeeded" }],
+      });
+    await click("Set up email monitor");
+    vi.useFakeTimers();
+    await click("Find appointment updatesConfigured");
+    expect(container.textContent).toContain("Source test: Running");
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.textContent).toContain("Source test: Succeeded");
+    await act(async () => vi.advanceTimersByTimeAsync(60000));
+    expect(rpc.routines.history).toHaveBeenCalledTimes(2);
+    expect(rpc.routines.testRun).not.toHaveBeenCalled();
+  });
+  it("ignores an in-flight automatic check after switching to a new proposal", async () => {
+    rpc.setupPlans.list.mockResolvedValue({
+      plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
+      nextCursor: null,
+    });
+    let resolvePoll!: (value: {
+      runs: { id: string; status: string; sourceTest: string }[];
+    }) => void;
+    rpc.routines.history
+      .mockResolvedValueOnce({ runs: [] })
+      .mockImplementationOnce(() => new Promise((resolve) => (resolvePoll = resolve)));
+    await click("Set up email monitor");
+    await click("Find appointment updatesConfigured");
+    vi.useFakeTimers();
+    await click("Run test");
+    await act(async () => vi.advanceTimersByTime(3000));
+    await click("New proposal");
+    await act(async () =>
+      resolvePoll({ runs: [{ id: "run-1", status: "completed", sourceTest: "succeeded" }] }),
+    );
+    expect(container.textContent).not.toContain("Source test: Succeeded");
+    await act(async () => vi.advanceTimersByTimeAsync(60000));
+    expect(rpc.routines.history).toHaveBeenCalledTimes(2);
+  });
+  it("keeps a newer manual result when an automatic check returns late", async () => {
+    rpc.setupPlans.list.mockResolvedValue({
+      plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
+      nextCursor: null,
+    });
+    await click("Set up email monitor");
+    await click("Find appointment updatesConfigured");
+    let resolvePoll!: (value: {
+      runs: { id: string; status: string; sourceTest: string }[];
+    }) => void;
+    rpc.routines.history
+      .mockImplementationOnce(() => new Promise((resolve) => (resolvePoll = resolve)))
+      .mockResolvedValueOnce({
+        runs: [{ id: "run-1", status: "completed", sourceTest: "succeeded" }],
+      });
+    vi.useFakeTimers();
+    await click("Run test");
+    await act(async () => vi.advanceTimersByTime(3000));
+    await click("Refresh status");
+    await act(async () =>
+      resolvePoll({ runs: [{ id: "run-1", status: "running", sourceTest: "running" }] }),
+    );
+    expect(container.textContent).toContain("Source test: Succeeded");
+    expect(container.textContent).not.toContain("Source test: Running");
+  });
   it("restores a flagged unbound source without claiming the source was verified", async () => {
     rpc.setupPlans.list.mockResolvedValue({
       plans: [{ ...plan, status: "configured", revision: 3, routineId: "routine-1" }],
