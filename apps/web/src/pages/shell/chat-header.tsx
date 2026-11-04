@@ -77,7 +77,7 @@ export function ChatHeader({
             size="sm"
             aria-label={t`Routines`}
             onClick={onOpenRoutines}
-            className="app-no-drag"
+            className="app-no-drag min-h-11"
           >
             {t`Routines`}
           </Button>

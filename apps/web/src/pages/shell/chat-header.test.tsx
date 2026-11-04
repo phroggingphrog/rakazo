@@ -39,6 +39,7 @@ it("opens routines from an active one-to-one chat and hides the link elsewhere",
   act(() => root.render(<ChatHeader {...props} />));
   const button = container.querySelector<HTMLButtonElement>('button[aria-label="Routines"]');
   expect(button?.textContent).toBe("Routines");
+  expect(button?.classList.contains("min-h-11")).toBe(true);
   act(() => button?.click());
   expect(open).toHaveBeenCalledOnce();
   act(() => root.render(<ChatHeader {...props} inGroup />));
