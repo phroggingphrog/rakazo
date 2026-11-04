@@ -94,12 +94,12 @@ One additive migration for index and fact tables; no column drops, no backfills 
 - **Usage prior has no writer.** `ToolIndex.recordToolOutcome` exists and is tested, but no per-bot usage table exists and this change did not add one, so production scoring is lexical only.
 - **Per-bot budget and windows are module defaults**, not configuration: the spec's "configured maximum" needs a config surface that does not exist yet.
 - **`recordEnumerationFailure` is not called from the executor.** A wholesale discovery failure still fails the run as before; per-source failures are already tolerated upstream.
-- **`memory_facts` migration has never run.** The SQL path is proven only by the gated `VERIFY_DATABASE` test; no scratch database was available and the live Postgres belongs to the deployed stack.
+- **The migrations have run on a scratch database, not on the deployed one.** Both were applied to a fresh `postgres:16` database, then again on top of a database already holding organization, space, bot and memory-document rows, and the PostgreSQL suites passed there. The deployed database is still untouched by this change.
 - **Bot-scope `remember` is append-only**; fact supersede is reachable only through the turn memory script path.
-- **`learning_candidates` migration has never run.** Like `memory_facts`, the SQL path is unproven; the planner's `settings` JSON-path filter is Postgres-specific and unexercised against a live database.
+- **The planner's `settings` JSON-path filter ran on a scratch PostgreSQL database** in the new database test, but not against the deployed database.
 - **No promotion sink is wired.** A promotion resolves to `proposed`, so even `automatic-private` currently only proposes; nothing writes a skill or a memory document on a bot's own authority.
 - **The learning judge has never been called for real.** Tests inject a fake `DecisionProvider`; judge quality and cost against the live model are unmeasured.
 - **Collector window and limits are constants**, not configuration keys.
 - **Learning proposals have no reviewer surface yet.** A proposal is stored, but the UI and the owner's decision path for it do not exist, so promoted vs proposed is unobservable to the owner.
 - **No proposal path for persona or profile changes** (D14).
-- **No live provider exercise**: no MCP server, Composio or Pipedream call was made, and nothing was deployed.
+- **No live provider exercise**: no MCP server, Composio or Pipedream call was made, and nothing was deployed. Deploying this branch to the shared stack is blocked because that database already carries migrations from branches ahead of this base; the image's `migrate` step would abort. The tool-selection flag is process-wide, so a single test bot against a control bot (9.1) needs a per-bot surface that does not exist.
