@@ -227,6 +227,9 @@ x-app-environment: &app-environment
   PHROG_WEB_URL:
   PHROG_WEB_TOKEN:
   PROACTIVE_WEBHOOK_BOTS:
+  # Off by default: bot self-configuration rollout flags.
+  PROACTIVE_ROUTINE_SOURCE:
+  RAKAZO_TOOL_SELECTION:
   # Messaging (outbound delivery runs in the worker)
   MESSAGING_OPEN_SIGNUP:
   SENDBLUE_API_KEY_ID:

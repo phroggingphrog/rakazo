@@ -9,15 +9,13 @@ import {
 import type { RouterContext } from "./context.js";
 
 export const BOT_PROFILE_PARTIAL = "partial" as const;
-const SUPPORTED_CAPABILITIES: string[] = ["persona"];
+const SUPPORTED_CAPABILITIES: string[] = ["persona", "skills"];
 
 /** The profile contract is ahead of runtime support. Reject settings that could imply activation. */
 export function botProfileDraftOnlyProblem(
   settings: ReturnType<typeof BotRuntimeProfile.parse>,
 ): string | undefined {
   if (settings.extensions.length > 0) return "Extension assignments are not available yet";
-  if (settings.skills.mode !== "legacy-library")
-    return "Explicit skill selection is not available yet";
   if (settings.learning.mode !== "off") return "Learning is not available yet";
   if (settings.initiative.enabled) return "Initiative is not available yet";
   if (settings.routing.enabled) return "Routing is not available yet";

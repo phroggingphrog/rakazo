@@ -17,7 +17,7 @@ describe("partial bot runtime profile API guard", () => {
     expect(validateBotRuntimeProfileDraft({ settings: defaults() })).toEqual({
       valid: true,
       activationStatus: "partial",
-      supportedCapabilities: ["persona"],
+      supportedCapabilities: ["persona", "skills"],
       issues: [],
     });
   });
@@ -29,10 +29,6 @@ describe("partial bot runtime profile API guard", () => {
         ...defaults(),
         extensions: [{ extensionId: "calendar", version: "1", digest, settings: {} }],
       }),
-    ],
-    [
-      "explicit skills",
-      () => ({ ...defaults(), skills: { mode: "explicit", skillIds: ["research"] } }),
     ],
     [
       "learning",
@@ -84,7 +80,21 @@ describe("partial bot runtime profile API guard", () => {
     expect(validateBotRuntimeProfileDraft({ settings })).toEqual({
       valid: true,
       activationStatus: "partial",
-      supportedCapabilities: ["persona"],
+      supportedCapabilities: ["persona", "skills"],
+      issues: [],
+    });
+  });
+
+  it("allows explicit skill selection, which the runtime already enforces", () => {
+    const settings = {
+      ...defaults(),
+      skills: { mode: "explicit" as const, skillIds: ["research"] },
+    };
+    expect(botProfileDraftOnlyProblem(settings)).toBeUndefined();
+    expect(validateBotRuntimeProfileDraft({ settings })).toEqual({
+      valid: true,
+      activationStatus: "partial",
+      supportedCapabilities: ["persona", "skills"],
       issues: [],
     });
   });

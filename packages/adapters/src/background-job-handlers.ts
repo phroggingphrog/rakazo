@@ -28,6 +28,8 @@ import { performComputerUpdate } from "./computer-update.js";
 import type { createRunExecutor } from "./executor.js";
 import type { ExpoPushProvider } from "./expo-push.js";
 import { compactHistory } from "./history-compaction.js";
+import { collectLearningCandidates } from "./learning-candidate-collector.js";
+import { enqueueLearningReviewJobs, runScheduledLearningReview } from "./learning-review-store.js";
 import type { MemoryProviderResolver } from "./memory-provider-factory.js";
 import { deliverMessagingOutbound, mirrorMessagingOutbound } from "./messaging-delivery.js";
 import type { ProactiveRuntime } from "./proactive.js";
@@ -118,6 +120,8 @@ export function createBackgroundJobHandlers(deps: {
     deps.prisma.cloudAgent.findUnique({ where: { id: agentId }, select: OWNER });
   const purchase = ({ purchaseId }: { purchaseId: string }) =>
     deps.prisma.purchase.findUnique({ where: { id: purchaseId }, select: OWNER });
+  const bot = ({ botId }: { botId: string }) =>
+    deps.prisma.bot.findUnique({ where: { id: botId }, select: OWNER });
   const updatedComputer = async ({ updateId }: { updateId: string }) =>
     (
       await deps.prisma.computerUpdate.findUnique({
@@ -260,5 +264,27 @@ export function createBackgroundJobHandlers(deps: {
         payload.threadId,
       );
     }),
+    // One bot's scheduled review. The collector stays off unless its flag is set; the review only
+    // runs for a bot whose stored profile asks for it, and it re-plans the next slot afterwards so
+    // the chain continues without a separate cron entry.
+    "learning.review": async (payload) => {
+      const owner = await runAsSystem("find the tenant a learning review acts for", () =>
+        bot(payload),
+      );
+      if (!owner) return;
+      await runAsTenant(owner, async () => {
+        await collectLearningCandidates({ prisma: deps.prisma });
+        const result = await runScheduledLearningReview({
+          prisma: deps.prisma,
+          botId: payload.botId,
+          spaceId: owner.spaceId,
+          userId: owner.userId,
+        });
+        getLogger().info("learning.review finished", { botId: payload.botId, result });
+      });
+      await runAsSystem("plan this bot's next learning review", () =>
+        enqueueLearningReviewJobs({ prisma: deps.prisma, jobs: deps.jobs, botId: payload.botId }),
+      );
+    },
   };
 }

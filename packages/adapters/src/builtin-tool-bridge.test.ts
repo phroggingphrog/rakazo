@@ -55,7 +55,9 @@ describe("built-in tool bridge", () => {
       "web_search",
       "write_file",
     ]);
-    expect(definitionBytes(listed)).toBeLessThanOrEqual(30_600);
+    // Raised by the seven proactive self-control built-ins, which stay deferred but lengthen
+    // find_tool's name index. The owner-chat list itself is still the same 23 tools.
+    expect(definitionBytes(listed)).toBeLessThanOrEqual(31_000);
     expect(deferred.map((tool) => tool.name)).toEqual(
       expect.arrayContaining(["render_plot", "create_space", "generate_secret", "scratchpad_add"]),
     );

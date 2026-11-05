@@ -168,6 +168,7 @@ import { DELEGATED_EMPTY_NOTICE, runAllowsSilentEmpty, runReplyGuidance } from "
 import {
   notifyRoutineRetryAttemptsExhausted,
   retryRoutineRun,
+  startRoutineRun,
   wakeRoutine,
 } from "./run-routines.js";
 import {
@@ -211,7 +212,9 @@ import {
 } from "./thread-artifacts.js";
 import { loadAgentTicketContext } from "./ticket-context.js";
 import { appendToolCompletionAudit } from "./tool-completion-audit.js";
+import { runToolIndex } from "./tool-index.js";
 import { toolResultFingerprint } from "./tool-loop.js";
+import { selectionIndexOf, selectToolsForRun, toolSelectionEnabled } from "./tool-selection.js";
 import { createWebProvider } from "./web-provider-factory.js";
 
 /** Same reach as the MCP connector: usable servers assigned to the bot or shared with every bot. */
@@ -268,6 +271,14 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
     contextStrategy,
     resolveModel: resolveRunModel.bind(undefined, baseDeps),
     wakeRoutine: wakeRoutine.bind(undefined, baseDeps),
+    /**
+     * Starts a routine occurrence the proactive pipeline woke for, skipping the route.
+     * The wake ledger keys on a reference, and the occurrence is what it dedupes on.
+     */
+    startRoutine: async (routineId: string, scheduledFor: string) => {
+      await startRoutineRun(baseDeps, routineId, scheduledFor);
+      return { ref: `routine:${routineId}:${scheduledFor}` };
+    },
     notifyRoutineRetryAttemptsExhausted: notifyRoutineRetryAttemptsExhausted.bind(
       undefined,
       baseDeps,
@@ -572,7 +583,6 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
         if (
           runtimeProfileSnapshot &&
           (runtimeProfileSnapshot.settings.extensions.length > 0 ||
-            runtimeProfileSnapshot.settings.skills.mode !== "legacy-library" ||
             runtimeProfileSnapshot.settings.learning.mode !== "off" ||
             runtimeProfileSnapshot.settings.initiative.enabled ||
             runtimeProfileSnapshot.settings.routing.enabled)
@@ -585,7 +595,6 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
           );
           if (
             runtimeProfileSnapshot.settings.extensions.length > 0 ||
-            runtimeProfileSnapshot.settings.skills.mode !== "legacy-library" ||
             runtimeProfileSnapshot.settings.learning.mode !== "off" ||
             runtimeProfileSnapshot.settings.initiative.enabled ||
             runtimeProfileSnapshot.settings.routing.enabled
@@ -1250,10 +1259,51 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
         const storedTurnCheckpoint = Boolean(turnCheckpoint);
         const initiallyTainted =
           !ownerStartedRun || Boolean(turnCheckpoint) || Boolean(checkpointLoadError);
+        // Bounded per-turn tool selection. Every authorization rule has already run above
+        // (allowlists, disabledBuiltinTools, the run-trigger gates), so this stage can only
+        // remove or reorder what survived them - it can never re-admit a tool (design D2).
+        // The index is derived from the set the sources just authorized: it never enumerates
+        // anything of its own, and a cold or failed index falls back to the full list.
+        const toolIndex = runToolIndex();
+        const toolIndexScope = { spaceId: run.spaceId, botId: bot.id };
+        const toolIndexSnapshot = toolIndex.observe({
+          scope: toolIndexScope,
+          tools: exposedConnectorTools,
+          now: Date.now(),
+        });
         // The creation intro only asks what the bot is for (see selectBuiltinToolsForRun),
-        // so it gets no connector tools either.
-        const tools =
-          run.trigger === "created" ? builtins : [...builtins, ...exposedConnectorTools];
+        // so it gets no connector tools either. The stage is off unless the deployment
+        // enables it (RAKAZO_TOOL_SELECTION), so an unconfigured run gets exactly the
+        // list the rules above authorized.
+        const toolSelection = toolSelectionEnabled()
+          ? selectToolsForRun({
+              builtins,
+              connectorCandidates: run.trigger === "created" ? [] : exposedConnectorTools,
+              trigger: run.trigger,
+              interactive: ownerStartedRun,
+              request: task.prompt,
+              usage: toolIndex.usageFor(toolIndexScope),
+              index: selectionIndexOf(toolIndexSnapshot),
+            })
+          : null;
+        // Frozen for the whole run: the runtime receives this list once, and mid-run
+        // discovery stays inside find_tool/use_tool.
+        const tools = toolSelection?.tools ?? [...builtins, ...exposedConnectorTools];
+        if (
+          toolSelection &&
+          (toolSelection.record.withheld.byPolicy.length > 0 ||
+            toolSelection.record.withheld.notInCatalog.length > 0)
+        ) {
+          getLogger().info("tool selection withheld tools", {
+            runId,
+            mode: toolSelection.record.mode,
+            revision: toolSelection.record.revision,
+            candidates: toolSelection.record.candidates,
+            selected: toolSelection.record.selected,
+            withheldByPolicy: toolSelection.record.withheld.byPolicy.length,
+            notInCatalog: toolSelection.record.withheld.notInCatalog,
+          });
+        }
         const taskCatalogInstruction = tools.some((tool) => tool.name === "task_catalog")
           ? TASK_CATALOG_GUIDANCE
           : undefined;

@@ -7,6 +7,8 @@ describe("owner proactive configuration contract", () => {
     expect(schema.safeParse({ botId: "bot-one", config: { fallbackMs: 300000 } }).success).toBe(true);
     expect(schema.safeParse({ botId: "bot-one", config: { fallbackMs: 0 } }).success).toBe(true);
     expect(schema.safeParse({ botId: "bot-one", config: { fallbackMs: 1 } }).success).toBe(false);
-    expect(schema.safeParse({ botId: "bot-one", config: { decisionOrder: ["skip"] } }).success).toBe(false);
+    expect(
+      schema.safeParse({ botId: "bot-one", config: { decisionOrder: ["skip"] } }).success,
+    ).toBe(false);
   });
 });

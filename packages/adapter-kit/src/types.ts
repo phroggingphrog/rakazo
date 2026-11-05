@@ -778,6 +778,8 @@ export interface BackgroundJobPayloads {
   "proactive.decide": { scope: string };
   "proactive.redeliver": Record<string, never>;
   "proactive.timers": Record<string, never>;
+  /** Scheduled learning review: judge the bot's pending lessons and record the outcome. */
+  "learning.review": { botId: string };
 }
 
 export type BackgroundJobName = keyof BackgroundJobPayloads;
