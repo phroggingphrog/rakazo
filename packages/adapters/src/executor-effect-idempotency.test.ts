@@ -85,6 +85,7 @@ function fixture(runId = "run-1") {
   const memoryCommit = vi.fn(async (_request: MemoryCommitRequest) => ({ revision: "rev-1" }));
   const memoryDocuments: MemorySnapshot["documents"] = [];
   const externalEffect = {
+    count: vi.fn(async () => 0),
     findFirst: vi.fn(
       async ({
         where,

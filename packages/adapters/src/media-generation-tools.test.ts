@@ -22,6 +22,7 @@ function setup() {
     result: { provider: "fake", jobId: "remote-job" },
   };
   const externalEffect = {
+    count: vi.fn(async () => 0),
     findFirst: vi.fn().mockResolvedValue(null),
     create: vi
       .fn()

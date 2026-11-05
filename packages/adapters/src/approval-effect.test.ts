@@ -444,8 +444,7 @@ describe("approved effect resume", () => {
     const storedResult = { ok: true, written: true };
     let effectResult: unknown;
     const store = {
-      externalEffect: {
-        updateMany: vi.fn(async ({ where, data }) => {
+      externalEffect: { count: vi.fn(async () => 0), updateMany: vi.fn(async ({ where, data }) => {
           if (where.id === effectId && where.status === "approved" && status === "approved") {
             status = data.status as typeof status;
             return { count: 1 };

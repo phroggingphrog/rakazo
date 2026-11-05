@@ -247,8 +247,7 @@ async function executorHarness(server: ReturnType<typeof statefulMcpServer>) {
       findMany: vi.fn(async () => [server.install]),
       findFirst: vi.fn(async () => server.install),
     },
-    externalEffect: {
-      findMany: vi.fn(async () => []),
+    externalEffect: { count: vi.fn(async () => 0), findMany: vi.fn(async () => []),
       findFirst: vi.fn(async () => null),
       findUnique: vi.fn(async () => null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({

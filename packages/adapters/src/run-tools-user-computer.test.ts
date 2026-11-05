@@ -66,7 +66,7 @@ describe("userComputerGate", () => {
     const ctx = {
       deps: {
         userDevices: { pairedSince: async () => new Date(0) },
-        prisma: { externalEffect: { findMany } },
+        prisma: { externalEffect: { count: vi.fn(async () => 0), findMany } },
       },
       run: { spaceId: "space-1", userId: "user-1" },
     } as unknown as RunContext;

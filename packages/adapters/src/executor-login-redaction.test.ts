@@ -165,8 +165,7 @@ async function runAfterFill(
       })),
     },
     vaultCredential: { findMany: vi.fn(async () => botSecrets) },
-    externalEffect: {
-      findMany: vi.fn(async () => []),
+    externalEffect: { count: vi.fn(async () => 0), findMany: vi.fn(async () => []),
       findFirst: vi.fn(async () => null),
       findUnique: vi.fn(async () => null),
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({

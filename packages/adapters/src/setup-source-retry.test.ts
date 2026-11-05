@@ -11,7 +11,7 @@ describe("routine retries after setup source tests", () => {
         routine: { findUnique: vi.fn(async () => ({ nextRunAt: null })) },
         event: { count: vi.fn(async () => 0) },
         message: { count: vi.fn(async () => 0) },
-        externalEffect: { findFirst: source },
+        externalEffect: { count: vi.fn(async () => 0), findFirst: source },
       },
       jobs: { enqueue },
     };

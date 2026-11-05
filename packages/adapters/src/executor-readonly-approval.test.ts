@@ -190,6 +190,7 @@ function fixture({
   };
   const createdAt = new Map<string, Date>();
   const externalEffect = {
+    count: vi.fn(async () => 0),
     findFirst: vi.fn(
       async ({
         where,
@@ -1590,7 +1591,7 @@ describe("own instructions through update_bot", () => {
     await f.run();
     expect(f.instructionState.instructions).toBe("Newer manual edit");
     expect(f.effects[0]).toMatchObject({
-      status: "completed",
+      status: "failed",
       result: { error: expect.stringContaining("Instructions changed") },
     });
     expect(f.instructionState.instructionHistory).toHaveLength(0);

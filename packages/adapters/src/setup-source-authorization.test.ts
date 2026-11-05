@@ -33,6 +33,7 @@ type Effect = {
 function fixture(rules: ActionApprovalRule[] = [], skipApprovals = false) {
   const effects: Effect[] = [];
   const externalEffect = {
+    count: vi.fn(async () => 0),
     findUnique: vi.fn(
       async ({ where }: { where: { id?: string; idempotencyKey?: string } }) =>
         effects.find((effect) =>

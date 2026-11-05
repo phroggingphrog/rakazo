@@ -214,8 +214,7 @@ async function runTool(
       userActionAutoReviewPreference: {
         findUnique: async () => ({ enabled: false, skipApprovals: true }),
       },
-      externalEffect: {
-        findUnique: async () =>
+      externalEffect: { count: vi.fn(async () => 0), findUnique: async () =>
           options.answered
             ? {
                 id: "effect-1",

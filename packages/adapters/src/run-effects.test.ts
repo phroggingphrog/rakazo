@@ -23,8 +23,7 @@ function fixture(initial: Effect[] = []) {
   const append = vi.fn();
   const deps = {
     prisma: {
-      externalEffect: {
-        findUnique: vi.fn(
+      externalEffect: { count: vi.fn(async () => 0), findUnique: vi.fn(
           async ({ where }: { where: { idempotencyKey: string } }) =>
             stored.get(where.idempotencyKey) ?? null,
         ),
@@ -73,7 +72,7 @@ describe("executor tool effect ownership", () => {
           leaseFence: 2,
         })),
       },
-      externalEffect: { create: f.create },
+      externalEffect: { count: vi.fn(async () => 0), create: f.create },
     };
     const prisma = Object.assign(f.deps.prisma, {
       $transaction: vi.fn(async (write: (client: typeof tx) => unknown) => write(tx)),

@@ -226,7 +226,7 @@ async function runRoutine(
     vaultCredential: { findMany: vi.fn(async () => []) },
     agentSkill: { findMany: vi.fn(async () => []) },
     scratchpadItem: { findMany: vi.fn(async () => []) },
-    externalEffect: { findMany: vi.fn(async () => []) },
+    externalEffect: { count: vi.fn(async () => 0), findMany: vi.fn(async () => []) },
     artifact: {
       findMany: vi.fn(async () =>
         options.attachments
@@ -390,7 +390,9 @@ describe("run computer provisioning", () => {
       });
 
       const [[job]] = enqueue.mock.calls as unknown as [[{ availableAt: Date }]];
-      expect(job.availableAt.getTime() - before).toBeGreaterThanOrEqual(60_000);
+      // Equal jitter keeps between half and full ceiling (60s for priorFailures=2).
+      expect(job.availableAt.getTime() - before).toBeGreaterThanOrEqual(30_000);
+      expect(job.availableAt.getTime() - before).toBeLessThanOrEqual(60_000);
       expect(job.availableAt.getTime() - Date.now()).toBeLessThanOrEqual(60_000);
       expect(run.wakeAt).toEqual(job.availableAt);
     } finally {

@@ -141,6 +141,7 @@ async function runLoop(
   type Effect = { id: string; status: string; idempotencyKey?: string } & Record<string, unknown>;
   const effects: Effect[] = [];
   const externalEffect = {
+    count: vi.fn(async () => 0),
     findMany: async ({ where = {} }: { where?: Record<string, unknown> } = {}) =>
       effects.filter((e) =>
         ["id", "runId", "status", "kind"].every((key) => !where[key] || e[key] === where[key]),

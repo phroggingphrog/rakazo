@@ -153,8 +153,7 @@ async function requestSecretWith(origin: string, extra: Record<string, unknown> 
           defaultModelId: "openai/gpt-4o",
         }),
       },
-      externalEffect: {
-        create: async ({ data }: { data: Record<string, unknown> }) => ({
+      externalEffect: { count: vi.fn(async () => 0), create: async ({ data }: { data: Record<string, unknown> }) => ({
           id: `effect-${data.idempotencyKey}`,
           ...data,
         }),

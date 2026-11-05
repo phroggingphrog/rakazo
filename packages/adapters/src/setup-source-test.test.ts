@@ -31,7 +31,7 @@ function fixture(connectorOverride?: ConnectorProvider) {
     events: [] as ConnectorEvent[],
   };
   const prisma = {
-    externalEffect: { findUnique: vi.fn(async () => ({ ...effect })) },
+    externalEffect: { count: vi.fn(async () => 0), findUnique: vi.fn(async () => ({ ...effect })) },
     mcpServer: {
       findFirst: vi.fn(async () =>
         state.server ? { id: "server", slug: state.slug, allBots: false } : null,

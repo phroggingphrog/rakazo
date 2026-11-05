@@ -232,7 +232,7 @@ async function runWithModel(
     vaultCredential: { findMany: vi.fn(async () => []) },
     agentSkill: { findMany: vi.fn(async () => []) },
     scratchpadItem: { findMany: vi.fn(async () => []) },
-    externalEffect: { findMany: vi.fn(async () => []) },
+    externalEffect: { count: vi.fn(async () => 0), findMany: vi.fn(async () => []) },
     spaceSettingOverride: { findUnique: async () => null },
     userActionApprovalRule: { findMany: vi.fn(async () => []) },
     userActionAutoReviewPreference: { findUnique: vi.fn(async () => null) },
