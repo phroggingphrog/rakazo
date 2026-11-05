@@ -1,5 +1,5 @@
 import type { AutoReviewProvider } from "@rakazo/adapter-kit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LlmAutoReviewProvider } from "./auto-review.js";
 import { createAutoReviewProvider } from "./auto-review-factory.js";
 import { JevAutoReviewProvider } from "./jev-auto-review.js";
@@ -82,5 +82,26 @@ describe("createAutoReviewProvider", () => {
       reason: "Flagged",
       model: "scripted",
     });
+  });
+
+  it("sends Jev reviews to a configured endpoint and keeps the default without one", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("not json"));
+    const custom = createAutoReviewProvider("jev", {
+      env: { TYPESAFE_API_KEY: "fake-key", TYPESAFE_API_URL: "https://example.test/systemone" },
+      fetch: fetchMock,
+    });
+    await custom.review(request, context).catch(() => undefined);
+    expect(fetchMock).toHaveBeenCalledWith("https://example.test/systemone", expect.anything());
+
+    vi.mocked(fetchMock).mockClear();
+    const fallback = createAutoReviewProvider("jev", {
+      env: { TYPESAFE_API_KEY: "fake-key" },
+      fetch: fetchMock,
+    });
+    await fallback.review(request, context).catch(() => undefined);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.typesafe.ai/v1/systemone",
+      expect.anything(),
+    );
   });
 });

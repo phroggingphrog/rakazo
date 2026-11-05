@@ -72,6 +72,12 @@ export function typesafeApiKey(env: NodeJS.ProcessEnv = process.env): string | u
   return value || undefined;
 }
 
+/** Optional TypeSafe-compatible Jev endpoint; the provider keeps the public default when unset. */
+export function typesafeApiUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const value = env.TYPESAFE_API_URL?.trim();
+  return value || undefined;
+}
+
 export function autoReviewMinConfidence(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.RAKAZO_AUTO_REVIEW_MIN_CONFIDENCE?.trim();
   if (!raw) return DEFAULT_AUTO_REVIEW_MIN_CONFIDENCE;

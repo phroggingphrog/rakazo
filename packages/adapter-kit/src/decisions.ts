@@ -26,6 +26,7 @@ export interface DecisionProvider {
 }
 export interface DecisionProviderOptions {
   apiKey: string;
+  endpoint?: string;
   fetch?: typeof fetch;
   callObserver?: ModelCallObserver;
   onUsage?: (
