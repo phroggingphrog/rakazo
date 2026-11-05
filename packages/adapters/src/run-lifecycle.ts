@@ -156,8 +156,14 @@ export function computerRetryDelay(fence: number): number {
  * An outage at the computer provider usually lasts minutes, so the retries a run gets before
  * failing are spread over about a quarter of an hour instead of spent within seconds.
  */
-export function providerOutageRetryDelay(priorFailures: number): number {
-  return Math.min(5 * 60_000, 15_000 * 2 ** Math.min(priorFailures, 5));
+export function providerOutageRetryDelay(
+  priorFailures: number,
+  random: () => number = Math.random,
+): number {
+  const ceiling = Math.min(5 * 60_000, 15_000 * 2 ** Math.min(Math.max(priorFailures, 0), 5));
+  // Equal jitter avoids synchronized retries while preserving a useful minimum cooldown.
+  const sample = Math.max(0, Math.min(1, random()));
+  return Math.floor(ceiling * (0.5 + sample * 0.5));
 }
 
 /**
