@@ -18,7 +18,7 @@ import { sanitizedError } from "@rakazo/logging/monitoring";
 import { protectedComputerLifecycleRefusal } from "./desktop-command-guard.js";
 import type { ExecutorDeps } from "./executor-deps.js";
 import { routineRunModelPin } from "./model-selection.js";
-import { routineSourceFromEnv } from "./proactive.js";
+import { routineSourceEnabledForBot, routineSourceFromEnv } from "./proactive.js";
 import { findPendingRoutineTick, routineTimerNonce } from "./routine-coalescing.js";
 import { stableStringify, tickRoutineWatch, watchDefinitionFilter } from "./routine-watch.js";
 import { isUniqueViolation } from "./run-messages.js";
@@ -143,6 +143,7 @@ async function routeRoutineThroughProactive(
       select: { id: true, botId: true, active: true, nextRunAt: true, prompt: true },
     });
     if (!routine?.active || routine.nextRunAt?.getTime() !== scheduledAt.getTime()) return true;
+    if (!routineSourceEnabledForBot(process.env, routine.botId)) return false;
     if (!proactive.enabledFor(routine.botId)) return false;
     await proactive.receiveRoutine({
       botId: routine.botId,
