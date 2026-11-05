@@ -1214,6 +1214,7 @@ describe("MCP server deletion", () => {
   it("does not fail when a concurrent credential rotation already removed the old secret", async () => {
     const deleteServer = vi.fn().mockResolvedValue({ id: "server-1" });
     const deleteSecrets = vi.fn().mockResolvedValue({ count: 0 });
+    const cancelContinuations = vi.fn().mockResolvedValue({ count: 0 });
     const prisma = {
       mcpServer: {
         findMany: vi.fn(async () => []),
@@ -1222,6 +1223,7 @@ describe("MCP server deletion", () => {
       },
       mcpServerSpace: { findMany: vi.fn(async () => []) },
       secret: { deleteMany: deleteSecrets },
+      mcpApprovalContinuation: { updateMany: cancelContinuations },
       message: { findMany: vi.fn().mockResolvedValue([]) },
       $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(prisma)),
     } as unknown as PrismaClient;
@@ -1256,6 +1258,9 @@ describe("MCP server deletion", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ json: { ok: true } });
+    expect(cancelContinuations).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ serverId: "server-1", status: "pending" }) }),
+    );
     expect(deleteServer).toHaveBeenCalledWith({ where: { id: "server-1" } });
     expect(deleteSecrets).toHaveBeenCalledWith({
       where: {
