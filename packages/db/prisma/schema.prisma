@@ -1446,9 +1446,21 @@ model MemoryFact {
   superseded          MemoryFact[]   @relation("MemoryFactSupersede")
   sourceRunId         String?
   sourceThreadId      String?
+  /// Provenance (nullable, backfilled from the document): owning bot, Space and memory level.
+  botId               String?
+  spaceId             String?
+  scope               String?
+  /// Logical per-bot memory bank id, e.g. rakazo-bot-<botId>; null for Space/owner-level facts.
+  bankId              String?
+  /// owner-stated | tool-observed | bot-inferred
+  method              String?
+  confidence          Float?
+  sourceMessageId     String?
   createdAt           DateTime       @default(now())
 
   @@index([documentId, invalidFrom])
+  @@index([botId, invalidFrom])
+  @@index([spaceId, scope])
   @@index([supersedesFactId])
   @@map("memory_facts")
 }

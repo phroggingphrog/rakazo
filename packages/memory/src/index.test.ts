@@ -16,11 +16,21 @@ describe("memory store contract shape", () => {
     const findMany = vi
       .fn()
       .mockResolvedValue([
-        { id: "memory-1", path: "facts.md", content: "A fact", revision: 3, updatedAt },
+        {
+          id: "memory-1",
+          path: "facts.md",
+          content: "A fact",
+          revision: 3,
+          updatedAt,
+        },
       ]);
-    const store = new MarkdownMemoryStore({ memoryDocument: { findMany } } as never);
+    const store = new MarkdownMemoryStore({
+      memoryDocument: { findMany },
+    } as never);
 
-    await expect(store.read({ scope: "bot", botId: "bot-1" }, context)).resolves.toEqual({
+    await expect(
+      store.read({ scope: "bot", botId: "bot-1" }, context),
+    ).resolves.toEqual({
       documents: [
         {
           id: "memory-1",
@@ -44,10 +54,17 @@ describe("memory store contract shape", () => {
 
   it("removes one document by scope, bot and path inside the caller's space", async () => {
     const deleteMany = vi.fn().mockResolvedValue({ count: 1 });
-    const store = new MarkdownMemoryStore({ memoryDocument: { deleteMany } } as never);
+    const store = new MarkdownMemoryStore({
+      memoryDocument: { deleteMany },
+    } as never);
     await expect(
       store.remove(
-        { id: "memory-9", scope: "bot", botId: "bot-1", path: "projects/retired.md" },
+        {
+          id: "memory-9",
+          scope: "bot",
+          botId: "bot-1",
+          path: "projects/retired.md",
+        },
         context,
       ),
     ).resolves.toEqual({ removed: true });
@@ -65,9 +82,14 @@ describe("memory store contract shape", () => {
 
   it("returns false for a missing user document without touching bot memory", async () => {
     const deleteMany = vi.fn().mockResolvedValue({ count: 0 });
-    const store = new MarkdownMemoryStore({ memoryDocument: { deleteMany } } as never);
+    const store = new MarkdownMemoryStore({
+      memoryDocument: { deleteMany },
+    } as never);
     await expect(
-      store.remove({ id: "missing", scope: "user", path: "projects/retired.md" }, context),
+      store.remove(
+        { id: "missing", scope: "user", path: "projects/retired.md" },
+        context,
+      ),
     ).resolves.toEqual({ removed: false });
     expect(deleteMany).toHaveBeenCalledWith({
       where: {

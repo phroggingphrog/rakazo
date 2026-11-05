@@ -729,12 +729,22 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "remember",
     description:
-      "Add a durable fact to this bot's explicit memory. The fact is appended; existing memory is kept.",
+      "Add a durable fact to this bot's explicit memory. The fact is appended; existing memory is kept. To correct a fact, pass replaces with the old fact's exact text; the old fact is kept as superseded, not deleted.",
     inputSchema: {
       type: "object",
       properties: {
         content: { type: "string" },
         path: { type: "string" },
+        replaces: {
+          type: "string",
+          description: "Exact text of an existing fact this one corrects.",
+        },
+        source: {
+          type: "string",
+          enum: ["owner-stated", "tool-observed", "bot-inferred"],
+          description: "Where the fact came from (default bot-inferred).",
+        },
+        confidence: { type: "number", minimum: 0, maximum: 1 },
       },
       required: ["content"],
     },

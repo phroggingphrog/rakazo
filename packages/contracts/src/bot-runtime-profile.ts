@@ -8,11 +8,19 @@ const SettingsKey = z
   .min(1)
   .max(64)
   .refine(
-    (key) => !/(secret|password|passwd|token|credential|api[-_]?key|private[-_]?key)/i.test(key),
+    (key) =>
+      !/(secret|password|passwd|token|credential|api[-_]?key|private[-_]?key)/i.test(
+        key,
+      ),
     "Secret values are not allowed in extension settings",
   );
 function settingValue(depth: number): z.ZodType<unknown> {
-  const scalar = z.union([z.string().max(4096), z.number().finite(), z.boolean(), z.null()]);
+  const scalar = z.union([
+    z.string().max(4096),
+    z.number().finite(),
+    z.boolean(),
+    z.null(),
+  ]);
   if (depth === 0) return scalar;
   return z.union([
     scalar,
@@ -25,8 +33,14 @@ function settingValue(depth: number): z.ZodType<unknown> {
 const JsonValue = settingValue(5);
 export const BotExtensionSettings = z
   .record(SettingsKey, JsonValue)
-  .refine((value) => Object.keys(value).length <= 100, "Too many extension settings")
-  .refine((value) => JSON.stringify(value).length <= 16_384, "Extension settings are too large");
+  .refine(
+    (value) => Object.keys(value).length <= 100,
+    "Too many extension settings",
+  )
+  .refine(
+    (value) => JSON.stringify(value).length <= 16_384,
+    "Extension settings are too large",
+  );
 
 export const BotRuntimePersona = z
   .object({
@@ -37,10 +51,14 @@ export const BotRuntimePersona = z
 export const BotRuntimeSkillSelection = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("legacy-library") }).strict(),
   z
-    .object({ mode: z.literal("explicit"), skillIds: z.array(Identifier).max(100).default([]) })
+    .object({
+      mode: z.literal("explicit"),
+      skillIds: z.array(Identifier).max(100).default([]),
+    })
     .strict()
     .refine(
-      (selection) => new Set(selection.skillIds).size === selection.skillIds.length,
+      (selection) =>
+        new Set(selection.skillIds).size === selection.skillIds.length,
       "Skill IDs must be unique",
     ),
 ]);
@@ -49,7 +67,9 @@ export const BotRuntimeExtensionReference = z
   .object({
     extensionId: Identifier,
     version: z.string().trim().min(1).max(128),
-    digest: z.string().regex(/^sha256:[a-f0-9]{64}$/, "Use an immutable SHA-256 digest"),
+    digest: z
+      .string()
+      .regex(/^sha256:[a-f0-9]{64}$/, "Use an immutable SHA-256 digest"),
     settings: BotExtensionSettings.default({}),
   })
   .strict();
@@ -62,6 +82,11 @@ export const BotRuntimeLearningPolicy = z
     maxTokensPerReview: z.number().int().min(0).max(100_000).default(0),
     maxReviewSeconds: z.number().int().min(0).max(3_600).default(0),
     maxRetries: z.number().int().min(0).max(5).default(0),
+    /**
+     * Shared-memory participation. off: private only. read: also read Space-shared and owner-global
+     * facts. read+propose: also propose private facts for rules-based promotion. Never a direct write.
+     */
+    share: z.enum(["off", "read", "read+propose"]).default("off"),
   })
   .strict()
   .refine(
@@ -115,7 +140,9 @@ export const BotRuntimeRoutingPolicy = z
     "Enabled routing requires at least one route",
   )
   .refine(
-    (policy) => new Set(policy.routes.map((route) => route.label)).size === policy.routes.length,
+    (policy) =>
+      new Set(policy.routes.map((route) => route.label)).size ===
+      policy.routes.length,
     "Route labels must be unique",
   );
 
