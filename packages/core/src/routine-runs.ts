@@ -25,6 +25,16 @@ export function routineRunAt(run: RoutineRun): string {
   return run.startedAt ?? run.createdAt;
 }
 
+/** History includes failed, uncertain, and still-executing effects in this count. */
+export function routineRunNeedsReview(
+  run: Pick<RoutineRun, "status" | "unresolvedEffectCount">,
+): boolean {
+  return (
+    (run.unresolvedEffectCount ?? 0) > 0 &&
+    (run.status === "completed" || run.status === "failed" || run.status === "cancelled")
+  );
+}
+
 /** When a run happened, e.g. "Oct 25, 9:00 AM"; the year only shows outside the current one. */
 export function formatRoutineRunAt(run: RoutineRun, locale: string, now = new Date()): string {
   const at = new Date(routineRunAt(run));

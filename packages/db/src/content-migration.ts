@@ -13,7 +13,15 @@ export type ContentMigrationMode = "encrypt" | "reencrypt" | "decrypt";
 
 interface TableSpec {
   model: keyof typeof ENCRYPTED_MODELS;
-  delegate: "message" | "event" | "memoryDocument" | "memoryRevision" | "thread";
+  delegate:
+    | "message"
+    | "event"
+    | "memoryDocument"
+    | "memoryRevision"
+    | "thread"
+    | "setupPlan"
+    | "setupTestAttempt"
+    | "protectedExecutionContent";
   column: string;
   json: boolean;
   /** Preserve @updatedAt so a migration does not reorder recently edited documents. */
@@ -31,6 +39,54 @@ interface ScannedRow {
 }
 
 const TABLES: TableSpec[] = [
+  {
+    model: "SetupTestAttempt",
+    delegate: "setupTestAttempt",
+    column: "snapshot",
+    json: true,
+    updatedAt: true,
+    scan: (cursor, limit) => Prisma.sql`
+      SELECT id, snapshot AS value, "spaceId", "userId" AS owner FROM setup_test_attempts
+      WHERE id > ${cursor} ORDER BY id LIMIT ${limit}`,
+    writePlaintext: (id, value) =>
+      Prisma.sql`UPDATE setup_test_attempts SET snapshot = ${JSON.stringify(value)}::jsonb WHERE id = ${id}`,
+  },
+  {
+    model: "ProtectedExecutionContent",
+    delegate: "protectedExecutionContent",
+    column: "text",
+    json: false,
+    updatedAt: true,
+    scan: (cursor, limit) => Prisma.sql`
+      SELECT id, text AS value, "spaceId", "userId" AS owner FROM protected_execution_content
+      WHERE id > ${cursor} ORDER BY id LIMIT ${limit}`,
+    writePlaintext: (id, value) =>
+      Prisma.sql`UPDATE protected_execution_content SET text = ${value as string} WHERE id = ${id}`,
+  },
+  {
+    model: "SetupPlan",
+    delegate: "setupPlan",
+    column: "draft",
+    json: true,
+    updatedAt: true,
+    scan: (cursor, limit) => Prisma.sql`
+      SELECT id, draft AS value, "spaceId", "userId" AS owner FROM setup_plans
+      WHERE id > ${cursor} ORDER BY id LIMIT ${limit}`,
+    writePlaintext: (id, value) =>
+      Prisma.sql`UPDATE setup_plans SET draft = ${JSON.stringify(value)}::jsonb WHERE id = ${id}`,
+  },
+  {
+    model: "SetupPlan",
+    delegate: "setupPlan",
+    column: "requestPayload",
+    json: true,
+    updatedAt: true,
+    scan: (cursor, limit) => Prisma.sql`
+      SELECT id, "requestPayload" AS value, "spaceId", "userId" AS owner FROM setup_plans
+      WHERE id > ${cursor} ORDER BY id LIMIT ${limit}`,
+    writePlaintext: (id, value) =>
+      Prisma.sql`UPDATE setup_plans SET "requestPayload" = ${JSON.stringify(value)}::jsonb WHERE id = ${id}`,
+  },
   {
     model: "Message",
     delegate: "message",
@@ -137,6 +193,16 @@ export async function migrateContent(
 ): Promise<ContentMigrationProgress[]> {
   const encryption = contentEncryptionOf(prisma);
   if (!encryption) throw new Error("Content migration needs an encrypting database client");
+  if (options.mode === "decrypt") {
+    // Protected setup content has no plaintext execution or rollback path yet.
+    // Refuse before rewriting any other table, rather than silently exposing it.
+    const [content, attempt] = await Promise.all([
+      prisma.protectedExecutionContent.findFirst({ select: { id: true } }),
+      prisma.setupTestAttempt.findFirst({ select: { id: true } }),
+    ]);
+    if (content || attempt)
+      throw new Error("Protected setup content must be safely resolved before decrypting content.");
+  }
   const batchSize = options.batchSize ?? 200;
   const results: ContentMigrationProgress[] = [];
   for (const table of TABLES) {
@@ -305,6 +371,8 @@ export async function contentEncryptionStatus(
     SELECT 'memory_documents', count(*), count(*) FILTER (WHERE content NOT LIKE 'rkz1:%') FROM memory_documents
     UNION ALL
     SELECT 'memory_revisions', count(*), count(*) FILTER (WHERE content NOT LIKE 'rkz1:%') FROM memory_revisions
+    UNION ALL
+    SELECT 'setup_plans', count(*), count(*) FILTER (WHERE NOT (jsonb_exists(draft, '$sealed') AND jsonb_exists("requestPayload", '$sealed'))) FROM setup_plans
     UNION ALL
     SELECT 'threads', count(*) FILTER (WHERE "historyCompactionSummary" IS NOT NULL),
       count(*) FILTER (WHERE "historyCompactionSummary" NOT LIKE 'rkz1:%') FROM threads

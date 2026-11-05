@@ -2,8 +2,12 @@ import type { Prisma } from "@rakazo/db";
 import { appendEventInTransaction } from "@rakazo/db";
 
 /** Reserved provenance for recurring timer ticks; manual/event/retry runs never use it. */
-export function routineTimerNonce(routineId: string, scheduledFor: string): string {
-  return `routine-timer:${routineId}:${scheduledFor}`;
+export function routineTimerNonce(
+  routineId: string,
+  scheduledFor: string,
+  generation?: string,
+): string {
+  return `routine-timer:${routineId}:${scheduledFor}${generation ? `|${generation}` : ""}`;
 }
 
 /** The scheduled occurrence a recurring timer run was created for, if it is one. */
@@ -13,7 +17,7 @@ export function routineTimerScheduledFor(
 ): Date | undefined {
   const prefix = routineTimerNonce(routineId, "");
   if (!clientNonce?.startsWith(prefix)) return undefined;
-  const scheduledFor = new Date(clientNonce.slice(prefix.length));
+  const scheduledFor = new Date(clientNonce.slice(prefix.length).split("|", 1)[0] ?? "");
   return Number.isFinite(scheduledFor.getTime()) ? scheduledFor : undefined;
 }
 

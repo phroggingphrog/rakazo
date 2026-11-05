@@ -1,8 +1,11 @@
 // Run this read-only command separately in the API and worker containers.
 // node dist/cli/mcp-diagnostics.js <bot-id> <server-slug> [read-only-tool-name]
+
+import type { ConnectorEvent } from "@rakazo/adapter-kit";
 import { contentKeyProviderFromEnv, createSecretStore, McpConnector } from "@rakazo/adapters";
 import { createDb, runAsSystem } from "@rakazo/db";
 import { loadEnv } from "../env.js";
+import { diagnosticExecutionResult } from "./mcp-diagnostic-health.js";
 
 const report = (value: string) => {
   process.stdout.write(`${value}\n`);
@@ -42,12 +45,8 @@ try {
       botId,
       signal: AbortSignal.timeout(30000),
     };
-    await connector.discoverTools(context);
-    const unavailable = await connector.resolveCall(
-      { tool: `mcp__${slug}__unavailable`, args: {}, executionId: "diagnostic-unavailable" },
-      context,
-    );
-    if (unavailable) {
+    const discovery = await connector.discoverServerStatus(context, assignment.server.id);
+    if (discovery !== "ok") {
       report(
         JSON.stringify({
           code: "connection_unavailable",
@@ -77,16 +76,11 @@ try {
       );
       return;
     }
-    let result = false;
-    let error = false;
-    for await (const event of connector.execute(resolved.call, context)) {
-      if (event.type === "result") result = true;
-      if (event.type === "error") error = true;
-    }
+    const events: ConnectorEvent[] = [];
+    for await (const event of connector.execute(resolved.call, context)) events.push(event);
     report(
       JSON.stringify({
-        code: error ? "execution_failed" : "read_only_execution_checked",
-        result,
+        ...diagnosticExecutionResult(events),
         gitSha: env.gitSha,
       }),
     );

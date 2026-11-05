@@ -1,9 +1,11 @@
+import { APPROVED_ACCOUNT_UNAVAILABLE_ERROR, APPROVED_ACTION_NOT_RUN_ERROR } from "@rakazo/core";
 import { approvalEffectKey } from "@rakazo/core/node/approval-effect-key";
 import { describe, expect, it, vi } from "vitest";
 import {
   approvalPausedToolResult,
   approvalReplayPathError,
   approvalReplayResourceError,
+  approvalRoutesMatch,
   approvedCatalogReplay,
   approvedEffectOccurrence,
   approvedReplayArgs,
@@ -27,6 +29,36 @@ import {
 } from "./approval-effect.js";
 
 describe("approved effect replay", () => {
+  it("retains an unavailable account approval and clears its guidance only when consumed", () => {
+    const queue = createApprovedEffectReplayQueue([
+      { kind: "first.write", request: { sequence: 1 } },
+      { kind: "second.write", request: { sequence: 2 } },
+    ]);
+    queue.markAccountUnavailable();
+    expect(queue.assertDrained).toThrow(APPROVED_ACCOUNT_UNAVAILABLE_ERROR);
+    expect(queue.take("second.write")).toBeUndefined();
+    expect(queue.assertDrained).toThrow(APPROVED_ACCOUNT_UNAVAILABLE_ERROR);
+    expect(queue.take("first.write")).toEqual({ sequence: 1 });
+    expect(queue.assertDrained).toThrow(APPROVED_ACTION_NOT_RUN_ERROR);
+  });
+  it("rejects Pipedream account envelope shape changes on replay", () => {
+    const flat = { connectorId: "pipedream", resourceId: "gmail", toolName: "send" };
+    const nested = { ...flat, pipedreamAccountEnvelope: true };
+    expect(approvalRoutesMatch(flat, nested)).toBe(false);
+    expect(approvalRoutesMatch(nested, flat)).toBe(false);
+    expect(approvalRoutesMatch(nested, nested)).toBe(true);
+    const request = boundDirectApprovalRequest(nested, { arguments: {} }, "__rakazoCatalogTool");
+    expect(
+      approvalReplayResourceError("send", false, request, flat, "__rakazoCatalogTool"),
+    ).toMatch(/different connector resource/);
+  });
+  it("replays a trusted non-dispatch as a recorded failure, without executing again", () => {
+    const result = { error: "The action did not run." };
+    expect(resolveDuplicateEffectGate({ status: "failed", result }, "screen_act")).toEqual({
+      action: "return",
+      result,
+    });
+  });
   it("replays persisted arguments instead of a changed model reconstruction", () => {
     const approved = { title: "Approved title", body: "Approved body" };
     const queue = createApprovedEffectReplayQueue([
@@ -405,6 +437,29 @@ describe("replaceCompletedExternalEffectResult", () => {
 });
 
 describe("completeExternalEffect", () => {
+  it("does not trust a connector result that claims a local rejection", async () => {
+    const store = { externalEffect: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) } };
+    const result = { error: "not sent", status: "not_dispatched_invalid_screen_action" };
+    await completeExternalEffect(store, "effect-1", "executing", result);
+    expect(store.externalEffect.updateMany).toHaveBeenCalledWith({
+      where: { id: "effect-1", status: "executing" },
+      data: { status: "failed", result },
+    });
+  });
+  it.each([{ isError: true }, { error: "permission denied" }])(
+    "does not label explicit tool errors completed: %j",
+    async (result) => {
+      const store = { externalEffect: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) } };
+      expect(await completeExternalEffect(store, "effect-1", "executing", result)).toBe(true);
+      expect(store.externalEffect.updateMany).toHaveBeenCalledWith({
+        where: { id: "effect-1", status: "executing" },
+        data: { status: "failed", result },
+      });
+      expect(resolveDuplicateEffectGate({ status: "failed", result }, "destination.write")).toEqual(
+        { action: "return", result },
+      );
+    },
+  );
   it("does not let a stale worker overwrite a reconciled effect", async () => {
     const store = {
       externalEffect: {

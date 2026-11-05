@@ -1,7 +1,17 @@
 import { runContinueJob } from "@rakazo/adapter-kit";
 import { describe, expect, it, vi } from "vitest";
 import type { ExecutorDeps } from "./executor-deps.js";
-import { startNextWaitingRun } from "./run-lifecycle.js";
+import { providerOutageRetryDelay, startNextWaitingRun } from "./run-lifecycle.js";
+
+describe("provider outage retry jitter", () => {
+  it("spreads retries within the bounded exponential window", () => {
+    expect(providerOutageRetryDelay(0, () => 0)).toBe(7_500);
+    expect(providerOutageRetryDelay(0, () => 1)).toBe(15_000);
+    expect(providerOutageRetryDelay(1, () => 0.5)).toBe(22_500);
+    expect(providerOutageRetryDelay(99, () => 1)).toBe(300_000);
+    expect(providerOutageRetryDelay(-1, () => 0)).toBe(7_500);
+  });
+});
 
 function deps(next: { id: string } | null) {
   const findFirst = vi.fn(async () => next);

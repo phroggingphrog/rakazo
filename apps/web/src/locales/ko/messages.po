@@ -13,6 +13,25 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
+#: src/pages/RoutineRunHistory.tsx
+msgid "Actions need review"
+msgstr "검토가 필요한 작업이 있습니다"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Remove saved connected_account selector"
+msgstr "저장된 connected_account 선택 항목 제거"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Leave this off if connected_account is an argument the tool needs."
+msgstr "도구에 connected_account 인수가 필요한 경우 이 옵션을 끈 상태로 두세요."
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "No Pipedream accounts are connected."
+msgstr "연결된 Pipedream 계정이 없습니다."
+
 #: src/pages/shell/sidebar-roster.tsx
 msgid " (unread)"
 msgstr " (읽지 않음)"
@@ -6140,6 +6159,18 @@ msgstr "오늘"
 #: src/pages/AccountSettingsOverlay.tsx
 msgid "Tokens"
 msgstr "토큰"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Arguments are saved with this setup."
+msgstr "인수는 이 설정과 함께 저장됩니다."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested."
+msgstr "선택한 작업에 필요한 필드를 확인하세요. 비밀번호, 토큰 또는 기타 비밀 정보를 입력하지 말고 연동 설정에서 인증을 구성하세요. 인수는 아직 작업에 대해 검증되거나 테스트되지 않았습니다."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Enter a valid JSON object up to 8 KB."
+msgstr "최대 8 KB의 유효한 JSON 객체를 입력하세요."
 
 #: src/pages/RoutineEditor.tsx
 msgid "Tool arguments (JSON)"

@@ -13,7 +13,9 @@ import { phoneCallSettings } from "@rakazo/core";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 import { stopOnShutdownSignals } from "@rakazo/core/node/shutdown-signals";
 import { startWorkerHealth, watchEventLoopStalls } from "./health.js";
+import { workerRoutineNotifications } from "./routine-notifications.js";
 import { createWorkerSecretStore } from "./secret-store.js";
+import { stopWorkerResources } from "./shutdown.js";
 
 loadRootEnv();
 await unwrapEnvFromKeyManager();
@@ -32,6 +34,7 @@ import {
   createDeadJobPruner,
   createIdleComputerSweeper,
   createJobReconciler,
+  createMemoryRoutineScheduleReconciler,
   createMessagingContextLoader,
   createModelCreditReconciler,
   createPaymentWalletProvider,
@@ -57,6 +60,7 @@ import {
   isMessagingSurfaceEnabled,
   isPipedreamEnabled,
   McpConnector,
+  McpSessionCleanupError,
   McpOAuthBroker,
   mcpStdioOptionsFromEnv,
   messagingEnvFromProcess,
@@ -66,12 +70,14 @@ import {
   PostgresRealtimeFanout,
   PrismaPushTokenStore,
   pipedreamConfigFromEnv,
+  publishRoutineScheduleIntents,
   RunJobPublisher,
   RunStarter,
   RunWorkerHost,
   reconcileCloudAgents,
   reconcileComputerUpdates,
   reconcilePurchases,
+  reconcileTerminalMcpEffects,
   resolveDeploymentModel,
   resolvePiSessionRoot,
   resolveSandboxProvider,
@@ -234,6 +240,7 @@ async function main() {
     secrets,
     {},
     allowPrivateEndpoint,
+    resolveEncryptionKey(process.env),
   );
   const stack = createConnectorStack(undefined, [
     installedConnectors,
@@ -284,8 +291,15 @@ async function main() {
     jobs,
     enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
   });
+  const routineNotifications = workerRoutineNotifications({
+    prisma,
+    notifications,
+    jobs,
+    durable: !inMemoryJobs,
+  });
 
   const executor = createRunExecutor({
+    ...routineNotifications.executor,
     proactive,
     maxUploadSizeBytes: uploadSizeFromEnv(process.env),
     prisma,
@@ -373,6 +387,7 @@ async function main() {
     notifications,
   });
   const reconciler = createJobReconciler({
+    ...routineNotifications.reconciler,
     prisma,
     jobs,
     events,
@@ -384,6 +399,13 @@ async function main() {
     }),
     reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
     reconcilePurchases: () => reconcilePurchases({ prisma, jobs, paymentWallet }),
+    reconcileRoutineSchedules: inMemoryJobs
+      ? createMemoryRoutineScheduleReconciler(prisma, inMemoryJobs)
+      : () => publishRoutineScheduleIntents(pool),
+    reconcileTerminalEffects: async () => {
+      const recovered = await reconcileTerminalMcpEffects(prisma);
+      if (recovered > 0) logger.warn("Terminal external effects need review", { count: recovered });
+    },
     reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
     reconcileRoutineRetryNotices: inMemoryJobs
       ? undefined
@@ -416,22 +438,24 @@ async function main() {
     stopping = true;
     shutdown.abort();
     stopStallWatch();
-    try {
-      await stopHealth?.();
-      await reconciler.stop();
-      await jobHost.stop();
-      await jobs.close();
-      await secrets.close();
-      await realtime.close();
-      await mcp.close();
-      await installedConnectors.close();
-      await prisma.$disconnect().catch(() => undefined);
-      await pool.end().catch(() => undefined);
-    } finally {
-      await analytics?.flush();
-      await shutdownPiTelemetry();
-      await logger.flush({ timeoutMs: 2_000 });
-    }
+    await stopWorkerResources({
+      drain: async () => {
+        await stopHealth?.();
+        await reconciler.stop();
+        await jobHost.stop();
+        await jobs.close();
+      },
+      mcp: () => mcp.close(),
+      mcpDrained: (error) => error instanceof McpSessionCleanupError,
+      installed: () => installedConnectors.close(),
+      secrets: () => secrets.close(),
+      realtime: () => realtime.close(),
+      database: () => prisma.$disconnect(),
+      pool: () => pool.end(),
+      analytics: () => analytics?.flush(),
+      telemetry: () => shutdownPiTelemetry(),
+      logger: () => logger.flush({ timeoutMs: 2_000 }),
+    });
   };
   stopOnShutdownSignals(stop);
   // graphile-worker fires completeJob()/failJobs() without awaiting them. When

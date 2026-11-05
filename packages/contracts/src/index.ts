@@ -44,3 +44,4 @@ export * from "./settings-scope.js";
 export * from "./terminal.js";
 export * from "./user-devices.js";
 export * from "./voice-errors.js";
+export * from "./setup-plan.js";

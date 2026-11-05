@@ -1728,7 +1728,7 @@ describe("installed MCP sessions last for a whole run", () => {
 
     await expect(
       callTool(provider, second.context, "resume", { executionId }),
-    ).resolves.toMatchObject([{ type: "error", message: /Paused execution is unknown/ }]);
+    ).resolves.toMatchObject([{ type: "error", outcome: "unknown", message: /outcome could not be verified/ }]);
     expect(new Set(server.toolCalls.map((call) => call.session))).toEqual(
       new Set(["session-1", "session-2"]),
     );
@@ -1784,7 +1784,7 @@ describe("installed MCP sessions last for a whole run", () => {
     // JSON-RPC error response: the connection itself is still healthy.
     await expect(
       callTool(provider, context, "resume", { executionId: "other" }),
-    ).resolves.toMatchObject([{ type: "error", message: /Paused execution is unknown/ }]);
+    ).resolves.toMatchObject([{ type: "error", outcome: "unknown", message: /outcome could not be verified/ }]);
     expect(server.deletes).toEqual([]);
 
     const resume = await callTool(provider, context, "resume", { executionId });

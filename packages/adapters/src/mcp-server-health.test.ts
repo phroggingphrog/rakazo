@@ -6,6 +6,8 @@ import {
   MCP_DYNAMIC_REGISTRATION_UNSUPPORTED,
   mcpServerHealthDto,
   recordMcpServerHealth,
+  recordMcpAuthFailure,
+  MCP_AUTH_INTERVENTION_REASON,
 } from "./mcp-server-health.js";
 
 function fakePrisma(updateMany = vi.fn().mockResolvedValue({ count: 1 })) {
@@ -16,7 +18,41 @@ afterEach(() => {
   installLogger(createLogger({ service: "rakazo", level: "off", sinks: [] }));
 });
 
+describe("recordMcpAuthFailure", () => {
+  it("atomically ignores stale failures and stores only a fixed sanitized reason", async () => {
+    const row = { revision: 2, authFailureRevision: null as number | null };
+    const updateMany = vi.fn(async ({ where, data }) => {
+      if (where.id === "server-1" && where.revision === row.revision) {
+        row.authFailureRevision = data.authFailureRevision;
+        return { count: 1 };
+      }
+      return { count: 0 };
+    });
+    const { prisma } = fakePrisma(updateMany);
+    await recordMcpAuthFailure(prisma, "server-1", 1);
+    expect(row.authFailureRevision).toBeNull();
+    await recordMcpAuthFailure(prisma, "server-1", 2);
+    expect(row.authFailureRevision).toBe(2);
+    expect(updateMany.mock.calls[1]![0]).toEqual({
+      where: { id: "server-1", revision: 2 },
+      data: {
+        authFailureRevision: 2,
+        healthStatus: "error",
+        healthMessage: MCP_AUTH_INTERVENTION_REASON,
+        healthToolCount: null,
+        healthCheckedAt: expect.any(Date),
+      },
+    });
+  });
+});
+
 describe("recordMcpServerHealth", () => {
+  it("conditions observations on the credential revision without mutating it", async () => {
+    const { prisma, updateMany } = fakePrisma();
+    await recordMcpServerHealth(prisma, "server-1", { status: "ok", toolCount: 3 }, 7);
+    expect(updateMany.mock.calls[0]![0].where).toEqual({ id: "server-1", revision: 7 });
+    expect(updateMany.mock.calls[0]![0].data).not.toHaveProperty("revision");
+  });
   it("writes only the health columns for the server id, stamping the check time", async () => {
     const { prisma, updateMany } = fakePrisma();
     const before = Date.now();

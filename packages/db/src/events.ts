@@ -180,6 +180,8 @@ export type FinalizeRunInput = FinalizeRunBase &
         outcome: "completed";
         blocks: MessageBlock[];
         markUnread?: boolean;
+        /** Persist a recovery intent for a routine's completed message. */
+        routineCompletionNotification?: boolean;
       }
     | {
         outcome: "failed";
@@ -847,6 +849,7 @@ async function commitAnswerRunInput(
     spaceId: input.spaceId,
     kind: "request_secret",
     status: "intended",
+    dispatchClaimToken: null,
   };
   if (
     dismissed &&
@@ -962,11 +965,11 @@ async function commitAnswerRunInput(
     if (pendingAsk.instructionUpdate) {
       if (editedInstructions !== undefined) {
         const stored = await tx.externalEffect.findUniqueOrThrow({
-          where: { id: approvalEffect!.id },
+          where: { id: approvalEffect!.id, dispatchClaimToken: null },
         });
         const request = stored.request as Record<string, Prisma.InputJsonValue>;
         await tx.externalEffect.update({
-          where: { id: approvalEffect!.id },
+          where: { id: approvalEffect!.id, dispatchClaimToken: null },
           data: {
             request: { ...request, instructions: editedInstructions },
             idempotencyKey: approvalEffectKey(input.runId, approvalEffect!.kind, {
@@ -978,10 +981,17 @@ async function commitAnswerRunInput(
       }
     }
     const allowed = approvalAnswer === "allow" || approvalAnswer === "always";
-    await tx.externalEffect.update({
-      where: { id: approvalEffect!.id },
+    const answeredEffect = await tx.externalEffect.updateMany({
+      where: {
+        id: approvalEffect!.id,
+        runId: input.runId,
+        spaceId: input.spaceId,
+        status: "intended",
+        dispatchClaimToken: null,
+      },
       data: { status: allowed ? "approved" : "denied" },
     });
+    if (answeredEffect.count !== 1) throw new Error("Approval changed before it could be answered");
     // "Always" on a fetch card allows that site, never every site the tool can reach, and on a
     // batch allows each action in it, never every action the batch tool can run.
     const site = alwaysAllowedSite(approvalEffect!);
@@ -1025,6 +1035,7 @@ async function commitAnswerRunInput(
         spaceId: input.spaceId,
         kind: "request_secret",
         status: "intended",
+        dispatchClaimToken: null,
       },
       data: {
         status: "approved",
@@ -1765,6 +1776,9 @@ async function finalizeRunOnce(
         status: "running",
         leaseOwner: input.leaseOwner,
         leaseFence: input.leaseFence,
+        ...(input.outcome === "completed" && input.routineCompletionNotification
+          ? { trigger: "routine", routineId: { not: null } }
+          : {}),
       },
       data: {
         status: input.outcome,
@@ -1828,6 +1842,7 @@ async function finalizeRunOnce(
       });
     }
     let firstResponse = false;
+    let completedMessageId: string | undefined;
     const replyBlocks =
       input.outcome === "completed"
         ? completedRunBlocks(input.blocks, writableRun?.startedAt ?? null, now)
@@ -1843,6 +1858,7 @@ async function finalizeRunOnce(
           ? { markUnread: input.markUnread }
           : { clientNonce: partialReplyClientNonce(input.runId) }),
       });
+      if (input.outcome === "completed") completedMessageId = message.id;
       const response = await appendEventInTransaction(tx, {
         spaceId: input.spaceId,
         threadId: input.threadId,
@@ -1879,6 +1895,22 @@ async function finalizeRunOnce(
       });
     }
     const continuationRunId = await createPendingSteeringRun(tx, input);
+    if (
+      input.outcome === "completed" &&
+      input.routineCompletionNotification &&
+      completedMessageId &&
+      !continuationRunId &&
+      writableRun
+    ) {
+      await tx.routineNotificationIntent.create({
+        data: {
+          spaceId: input.spaceId,
+          userId: writableRun.userId,
+          runId: input.runId,
+          messageId: completedMessageId,
+        },
+      });
+    }
     await tx.bot.update({ where: { id: input.botId }, data: { updatedAt: now } });
     return { threadId: lastEvent.threadId, seq: lastEvent.seq, continuationRunId, firstResponse };
   }, FINALIZE_TRANSACTION_OPTIONS);

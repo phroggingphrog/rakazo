@@ -2,7 +2,7 @@ import { normalizedHttpUrl } from "@rakazo/core/egress";
 import { executeCloudAgentTool } from "./cloud-agent-service.js";
 import { collectLogIds } from "./composio-connector.js";
 import { connectApp } from "./connect-app.js";
-import { addMcpServerFromTool } from "./mcp-server-tool.js";
+import { addMcpServerFromTool, STDIO_MCP_FORBIDDEN_ERROR } from "./mcp-server-tool.js";
 import type { RunContext } from "./run-context.js";
 import { runScopedToolExecutionId } from "./run-effects.js";
 import { flushProgress, publishMidTurnNarration, showNarrationStatus } from "./run-progress.js";
@@ -28,39 +28,59 @@ export async function connectorTool(ctx: RunContext, call: ToolCall) {
   const { name, args, effectKey, connectorCall } = call;
   if (deps.connector) {
     let result: unknown = { error: `unknown tool ${name}` };
-    for await (const event of deps.connector.execute(
+    let connectorUncertain = false;
+    const deferLogIds = Boolean(call.pipedream || connectorCall.route?.installedMcp);
+    const pendingLogIds: string[] = [];
+    const recordLogId = async (logId: string) => {
+      await deps.events.append({
+        spaceId: run.spaceId,
+        threadId: thread.id,
+        botId: bot.id,
+        runId: run.id,
+        type: "effect.recorded",
+        payload: { tool: name, logId },
+      });
+    };
+    const connector = call.pipedream?.provider ?? deps.connector;
+    const connectorContext = call.pipedream
+      ? { ...context, connectedConnections: [call.pipedream.account] }
+      : context;
+    for await (const event of connector.execute(
       { ...connectorCall, tool: name, args, executionId: effectKey },
-      context,
+      call.monitorSourceRecheck ? { ...connectorContext, monitorSourceRecheck: true } : connectorContext,
     )) {
       if (event.type === "result") {
         result = event.data;
         const logIds = collectLogIds(event.data);
         for (const logId of logIds) {
-          await deps.events.append({
-            spaceId: run.spaceId,
-            threadId: thread.id,
-            botId: bot.id,
-            runId: run.id,
-            type: "effect.recorded",
-            payload: { tool: name, logId },
-          });
+          if (deferLogIds) pendingLogIds.push(logId);
+          else await recordLogId(logId);
         }
       }
       if (event.type === "error") {
+        if (
+          event.outcome === "unknown" &&
+          (call.monitorSourceRecheck || connectorCall.route?.connectorId === "mcp" || connectorCall.route?.connectorId === "installed" || call.pipedream)
+        )
+          connectorUncertain = true;
         result = { error: event.message };
         for (const logId of event.logIds ?? []) {
-          await deps.events.append({
-            spaceId: run.spaceId,
-            threadId: thread.id,
-            botId: bot.id,
-            runId: run.id,
-            type: "effect.recorded",
-            payload: { tool: name, logId },
-          });
+          if (deferLogIds) pendingLogIds.push(logId);
+          else await recordLogId(logId);
         }
       }
     }
-    return call.finish(result);
+    if (connectorUncertain)
+      return call.monitorSourceRecheck
+        ? call.finishMonitorUncertain()
+        : call.finishConnectorUncertain();
+    const finished = await call.finish(result);
+    if (
+      deferLogIds &&
+      !(finished && typeof finished === "object" && "uncertain" in finished && finished.uncertain)
+    )
+      for (const logId of pendingLogIds) await recordLogId(logId);
+    return finished;
   }
   return call.finish({ error: `unknown tool ${name}` });
 }
@@ -86,6 +106,8 @@ export const integrationTools: ToolHandlers = {
   async add_mcp_server(ctx, call) {
     const { deps, run, bot } = ctx;
     const { args, executionId } = call;
+    if (args.transport === "stdio")
+      return call.finishStdioMcpForbidden({ error: STDIO_MCP_FORBIDDEN_ERROR });
     return call.finish(await addMcpServerFromTool(deps, run, bot.id, args, executionId));
   },
   async connect_app(ctx, call) {

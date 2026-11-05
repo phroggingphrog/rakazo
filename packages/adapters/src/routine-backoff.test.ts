@@ -20,7 +20,7 @@ interface Row {
   accountFailures: number;
 }
 
-function fakeRoutine(overrides: Partial<Row> = {}) {
+function fakeRoutine(overrides: Partial<Row> = {}, versioned = false) {
   const row: Row = {
     active: true,
     crons: ["*/1 * * * *"],
@@ -32,10 +32,15 @@ function fakeRoutine(overrides: Partial<Row> = {}) {
   };
   const routine = {
     count: vi.fn(async () => (row.accountFailures > 0 ? 1 : 0)),
-    findUnique: vi.fn(async () => ({ ...row })),
+    findFirst: vi.fn(async () => ({ ...row })),
     update: vi.fn(async ({ data }: { data: Partial<Row> }) => Object.assign(row, data)),
   };
-  const lock = vi.fn(async () => []);
+  const lock = vi.fn(async (parts: TemplateStringsArray) => {
+    const query = parts.join(" ");
+    if (query.includes("current_setting")) return [{ bypass: "off" }];
+    if (query.includes("routine_schedule_gate")) return [{ enabled: versioned }];
+    return [];
+  });
   const prisma = {
     routine,
     $transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>) =>
@@ -108,7 +113,7 @@ describe("backOffRoutineAfterAccountError", () => {
 
     await backOffRoutineAfterAccountError(deps, "routine-1", NOW);
 
-    expect(lock).toHaveBeenCalledOnce();
+    expect(lock.mock.calls.some(([query]) => String(query).includes("FOR UPDATE"))).toBe(true);
     expect(row.accountFailures).toBe(3);
     // 20 minutes after 09:00:30, the next whole minute.
     const resume = new Date("2026-03-02T09:21:00.000Z");
@@ -135,6 +140,22 @@ describe("backOffRoutineAfterAccountError", () => {
     await backOffRoutineAfterAccountError(deps, "routine-1", NOW);
 
     expect(row.nextRunAt).toEqual(new Date(NOW.getTime() + 5 * MINUTE));
+  });
+
+  it("uses the outbox instead of a legacy wake for versioned backoff", async () => {
+    const { row, deps, enqueue } = fakeRoutine({}, true);
+    await backOffRoutineAfterAccountError(deps, "routine-1", NOW);
+    expect(row.accountFailures).toBe(1);
+    expect(row.nextRunAt).toEqual(new Date("2026-03-02T09:06:00.000Z"));
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does not reschedule an unsupported versioned watch", async () => {
+    const { row, deps, enqueue } = fakeRoutine({ crons: [], watch: { kind: "files" } }, true);
+    await backOffRoutineAfterAccountError(deps, "routine-1", NOW);
+    expect(row.accountFailures).toBe(0);
+    expect(row.nextRunAt).toEqual(new Date("2026-03-02T09:01:00.000Z"));
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("holds a frequent routine until the provider's reset, at most a day", async () => {

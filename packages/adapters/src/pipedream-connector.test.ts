@@ -30,6 +30,7 @@ const TEST_NETWORK = { resolveHostname: async () => [{ address: "203.0.113.10", 
 function pipedreamMcpFetch(
   toolsByApp: Record<string, string[]>,
   calls: Array<{ app: string | null; name: string; args: unknown }> = [],
+  schemas: Record<string, Record<string, unknown>> = {},
 ) {
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
@@ -61,7 +62,7 @@ function pipedreamMcpFetch(
           tools: (toolsByApp[app ?? ""] ?? []).map((name) => ({
             name,
             description: `Run ${name}`,
-            inputSchema: {
+            inputSchema: schemas[name] ?? {
               type: "object",
               properties: { text: { type: "string", description: `schema-marker-${app}-${name}` } },
               required: ["text"],
@@ -613,6 +614,128 @@ describe("PipedreamConnector", () => {
     return { tools, events, accounts };
   }
 
+  it("preserves provider-native account fields for direct and catalog calls", async () => {
+    const calls: Array<{ app: string | null; name: string; args: unknown }> = [];
+    const schema = {
+      type: "object",
+      properties: {
+        connected_account: { type: "integer" },
+        rakazo_connected_account: { type: "boolean" },
+        text: { type: "string" },
+      },
+      required: ["connected_account", "text"],
+    };
+    const fetch = pipedreamMcpFetch(
+      { gmail: ["send_email", ...Array.from({ length: 20 }, (_, i) => `tool_${i}`)] },
+      calls,
+      { send_email: schema },
+    );
+    const connector = new PipedreamConnector(FAKE_CONFIG, { ...TEST_NETWORK, fetch });
+    const context = gmailContext("apn_work", "apn_home");
+    const tools = await connector.discoverTools(context);
+    const wrapper = tools.find((tool) => tool.name === "pipedream_execute_tool")!;
+    const args = {
+      connected_account: 42,
+      rakazo_connected_account: true,
+      rakazo_connected_account_2: "apn_home",
+      text: "hello",
+    };
+    const resolved = await connector.resolveCall(
+      {
+        tool: wrapper.name,
+        args: { id: "send_email", arguments: args },
+        executionId: "catalog",
+        route: wrapper.route,
+      },
+      context,
+    );
+    expect(resolved?.call.route?.pipedreamAccountSelector).toBe("rakazo_connected_account_2");
+    expect(resolved?.tool.inputSchema.properties).toMatchObject({
+      connected_account: { type: "integer" },
+      rakazo_connected_account: { type: "boolean" },
+    });
+    const events = [];
+    for await (const event of connector.execute(resolved!.call, context)) events.push(event);
+    expect(events).toEqual([expect.objectContaining({ type: "result" })]);
+    expect(calls).toEqual([
+      {
+        app: "gmail",
+        name: "send_email",
+        args: { connected_account: 42, rakazo_connected_account: true, text: "hello" },
+      },
+    ]);
+  });
+
+  it("keeps an unsupported pattern schema discoverable and returns an explicit error", async () => {
+    const calls: Array<{ app: string | null; name: string; args: unknown }> = [];
+    const fetch = pipedreamMcpFetch({ gmail: ["send_email"] }, calls, {
+      send_email: {
+        type: "object",
+        properties: { text: { type: "string" } },
+        patternProperties: { "(a+)+$": { type: "string" } },
+      },
+    });
+    const connector = new PipedreamConnector(FAKE_CONFIG, { ...TEST_NETWORK, fetch });
+    const context = gmailContext("apn_work", "apn_home");
+    const [tool] = await connector.discoverTools(context);
+    expect(tool?.route?.pipedreamAccountSelectorUnsupported).toBe(true);
+    const events = [];
+    for await (const event of connector.execute(
+      { tool: tool!.name, args: { text: "hello" }, executionId: "unsupported", route: tool!.route },
+      context,
+    ))
+      events.push(event);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringMatching(/schema.*selecting/i),
+      }),
+    ]);
+    expect(calls).toEqual([]);
+  });
+
+  it.each([{ maxProperties: 1 }, { propertyNames: { enum: ["text"] } }])(
+    "preserves constrained provider arguments in a separate account envelope",
+    async (constraint) => {
+      const calls: Array<{ app: string | null; name: string; args: unknown }> = [];
+      const fetch = pipedreamMcpFetch(
+        { gmail: ["send_email", ...Array.from({ length: 20 }, (_, i) => `tool_${i}`)] },
+        calls,
+        {
+          send_email: {
+            type: "object",
+            properties: { text: { type: "string" } },
+            required: ["text"],
+            additionalProperties: false,
+            ...constraint,
+          },
+        },
+      );
+      const connector = new PipedreamConnector(FAKE_CONFIG, { ...TEST_NETWORK, fetch });
+      const context = gmailContext("apn_work", "apn_home");
+      const wrapper = (await connector.discoverTools(context)).find(
+        (tool) => tool.name === "pipedream_execute_tool",
+      )!;
+      const resolved = await connector.resolveCall(
+        {
+          tool: wrapper.name,
+          args: {
+            id: "send_email",
+            arguments: { connected_account: "apn_home", arguments: { text: "hello" } },
+          },
+          executionId: "envelope",
+          route: wrapper.route,
+        },
+        context,
+      );
+      expect(resolved?.call.route?.pipedreamAccountEnvelope).toBe(true);
+      const events = [];
+      for await (const event of connector.execute(resolved!.call, context)) events.push(event);
+      expect(events).toEqual([expect.objectContaining({ type: "result" })]);
+      expect(calls).toEqual([{ app: "gmail", name: "send_email", args: { text: "hello" } }]);
+    },
+  );
+
   it("pins a single approved account without asking the model to choose", async () => {
     const calls: Array<{ app: string | null; name: string; args: unknown }> = [];
     const { tools, events, accounts } = await runGmail(
@@ -628,6 +751,19 @@ describe("PipedreamConnector", () => {
     expect(calls).toEqual([{ app: "gmail", name: "send_email", args: { text: "hello" } }]);
     expect(accounts.length).toBeGreaterThan(0);
     expect(new Set(accounts)).toEqual(new Set(["apn_work"]));
+  });
+
+  it("asks to refresh an unmarked singleton call with an ambiguous old account argument", async () => {
+    const calls: Array<{ app: string | null; name: string; args: unknown }> = [];
+    const { events } = await runGmail(
+      pipedreamMcpFetch({ gmail: ["send_email"] }, calls),
+      gmailContext("apn_work"),
+      { text: "hello", connected_account: "apn_home" },
+    );
+    expect(events).toEqual([
+      expect.objectContaining({ type: "error", message: expect.stringMatching(/refresh/i) }),
+    ]);
+    expect(calls).toEqual([]);
   });
 
   it.each(["apn_work", "apn_home"])(

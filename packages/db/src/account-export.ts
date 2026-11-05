@@ -1,4 +1,5 @@
 import type { AccountExportManifest, AccountExportRecord } from "@rakazo/contracts";
+import { portableSetupPlanDraft } from "@rakazo/contracts";
 import type { Prisma, PrismaClient } from "./client.js";
 import { runAsTenant } from "./row-security.js";
 
@@ -346,9 +347,12 @@ async function* spaceRecords(
 
   const routines = await prisma.routine.findMany({
     where: { ...tenant, botId: { in: [...botIds] } },
+    include: { protectedContent: { select: { text: true } } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
-  for (const routine of routines)
+  for (const routine of routines) {
+    if (routine.protected && !routine.protectedContent)
+      throw new Error("Protected routine content is unavailable for export.");
     yield {
       type: "routine",
       id: routine.id,
@@ -356,6 +360,7 @@ async function* spaceRecords(
       threadId: ownThread(routine.threadId),
       name: routine.name,
       prompt: routine.prompt,
+      ...(routine.protectedContent ? { protectedPurpose: routine.protectedContent.text } : {}),
       crons: routine.crons,
       timezone: routine.timezone,
       active: routine.active,
@@ -367,6 +372,26 @@ async function* spaceRecords(
       watch: json(routine.watch),
       createdAt: iso(routine.createdAt),
     };
+  }
+
+  for (let cursor = ""; ; ) {
+    const plans = await prisma.setupPlan.findMany({
+      where: { ...tenant, id: { gt: cursor } },
+      orderBy: { id: "asc" },
+      take: PAGE,
+    });
+    for (const plan of plans) {
+      yield {
+        type: "setup_plan",
+        id: plan.id,
+        draft: portableSetupPlanDraft(plan.draft),
+        createdAt: iso(plan.createdAt),
+        updatedAt: iso(plan.updatedAt),
+      };
+    }
+    if (plans.length < PAGE) break;
+    cursor = plans.at(-1)!.id;
+  }
 
   const scratchpad = await prisma.scratchpadItem.findMany({
     where: { ...tenant, botId: { in: [...botIds] } },

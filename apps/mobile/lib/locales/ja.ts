@@ -1,4 +1,8 @@
 export const JA_MESSAGES: Record<string, string> = {
+  "Arguments are saved with this setup.": "引数はこの設定とともに保存されます。",
+  "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested.":
+    "選択した操作に必要な項目を確認してください。パスワード、トークン、その他の秘密情報は入力せず、連携の設定で認証を構成してください。引数はまだ操作に対して検証もテストもされていません。",
+  "Enter a valid JSON object up to 8 KB.": "8 KB以下の有効なJSONオブジェクトを入力してください。",
   "How other bots see it": "他のボットからの見え方",
   "Share to": "共有先",
   "{count} files": "{count}個のファイル",
@@ -1152,6 +1156,7 @@ export const JA_MESSAGES: Record<string, string> = {
   "Always open {site}": "{site} を常に開く",
   "Trusted sites": "信頼済みサイト",
   "Run history": "実行履歴",
+  "Actions need review": "確認が必要な操作があります",
   "No reply": "返信なし",
   "No runs yet": "実行はまだありません",
   "Load older runs": "過去の実行を読み込む",

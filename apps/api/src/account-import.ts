@@ -25,7 +25,9 @@ import {
   resolveBotAvatarSet,
 } from "@rakazo/contracts";
 import { organicAvatarFamily } from "@rakazo/core";
+import type { PrismaClient } from "@rakazo/db";
 import {
+  contentEncryptionOf,
   createRepos,
   createSpaceForMember,
   InvalidSpaceNameError,
@@ -40,6 +42,7 @@ import { getLogger } from "@rakazo/logging";
 import { Unzip, UnzipInflate } from "fflate";
 import type { Hono } from "hono";
 import { cancelBody } from "./http-body.js";
+import { importSetupPlan } from "./setup-plan-import.js";
 import type { SpaceDeletionDeps } from "./space-deletion.js";
 import { deleteSpaceWithContent } from "./space-deletion.js";
 
@@ -68,6 +71,21 @@ export class AccountImportError extends Error {
     super(message);
     this.name = "AccountImportError";
   }
+}
+
+export async function createImportedRoutine(
+  prisma: PrismaClient,
+  data: Prisma.RoutineUncheckedCreateInput,
+  owner: { spaceId: string; userId: string; routineId: string },
+  protectedPurpose: string | null | undefined,
+) {
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT set_config('app.scheduler_protocol', '2', true)`;
+    await tx.routine.create({ data });
+    if (protectedPurpose != null) {
+      await tx.protectedExecutionContent.create({ data: { ...owner, text: protectedPurpose } });
+    }
+  });
 }
 
 const unreadable = () => new AccountImportError("The file is not a readable Rakazo export.");
@@ -621,28 +639,41 @@ class AccountImporter implements ArchiveSink {
       }
       case "routine": {
         const botId = space.mapped(record.botId);
-        await prisma.routine.create({
-          data: {
-            id: newId(),
-            spaceId,
-            botId,
-            userId,
-            threadId: space.optional(record.threadId),
-            name: record.name,
-            prompt: record.prompt,
-            crons: record.crons,
-            timezone: record.timezone,
-            // Nothing fires on the new install until its owner turns the routine on.
-            active: false,
-            notify: record.notify,
-            messageProvider: record.messageProvider,
-            modelProvider: record.modelProvider,
-            modelId: record.modelId,
-            thinkingLevel: record.thinkingLevel,
-            watch: jsonValue(record.watch),
-            createdAt: new Date(record.createdAt),
-          },
-        });
+        if (record.protectedPurpose != null && !contentEncryptionOf(prisma)?.ring.encryptWrites)
+          throw new AccountImportError("Protected routines require content encryption.");
+        const importedId = newId();
+        const data = {
+          id: importedId,
+          spaceId,
+          botId,
+          userId,
+          threadId: space.optional(record.threadId),
+          name: record.name,
+          prompt: record.prompt,
+          protected: record.protectedPurpose != null,
+          crons: record.crons,
+          timezone: record.timezone,
+          // Nothing fires on the new install until its owner turns the routine on.
+          active: false,
+          notify: record.notify,
+          messageProvider: record.messageProvider,
+          modelProvider: record.modelProvider,
+          modelId: record.modelId,
+          thinkingLevel: record.thinkingLevel,
+          watch: jsonValue(record.watch),
+          createdAt: new Date(record.createdAt),
+        };
+        await createImportedRoutine(
+          prisma,
+          data,
+          { spaceId, userId, routineId: importedId },
+          record.protectedPurpose,
+        );
+        return;
+      }
+      case "setup_plan": {
+        const id = newId();
+        await importSetupPlan(prisma, { spaceId, userId }, id, record);
         return;
       }
       case "scratchpad_item": {

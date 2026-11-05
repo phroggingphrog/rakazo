@@ -54,6 +54,8 @@ export interface RemoteMcpOptions extends RemoteTransportDependencies, RemoteUrl
   endpoint: string;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  /** Called immediately before the SDK begins a tools/call request. */
+  onToolDispatch?: () => void;
   /** Reuse one MCP session for every call that carries the same scope (one run
    * and one server) instead of opening a session per call. Requires `sessionPool`. */
   sessionScope?: string;
@@ -99,7 +101,7 @@ export async function listRemoteMcpTools(options: RemoteMcpOptions): Promise<Con
       readOnly: tool.annotations?.readOnlyHint,
       batch: composioToolBatch(tool.name),
     }));
-  return withScopedMcpClient(options, list);
+  return withScopedMcpClient(options, list, true);
 }
 
 /** Follow `tools/list` cursors, bounded by the shared page and tool caps. */
@@ -122,8 +124,13 @@ export async function callRemoteMcpTool(
   args: Record<string, unknown>,
   projectResult?: (result: unknown) => unknown,
 ): Promise<unknown> {
-  return withScopedMcpClient(options, (client, signal) =>
-    callMcpTool(client, signal, toolName, args, projectResult),
+  return withScopedMcpClient(
+    options,
+    (client, signal) => {
+      options.onToolDispatch?.();
+      return callMcpTool(client, signal, toolName, args, projectResult);
+    },
+    false,
   );
 }
 
@@ -146,18 +153,23 @@ async function callMcpTool(
   };
   // Providers may extract a bounded domain result before duplicate MCP text
   // and structured content consume the budget. The final limit still applies.
-  return limitRemoteMcpPayload(projectResult ? projectResult(envelope) : envelope);
+  const limited = limitRemoteMcpPayload(projectResult ? projectResult(envelope) : envelope);
+  if (result.isError === true && limited && typeof limited === "object" && !Array.isArray(limited))
+    return { ...limited, isError: true };
+  return limited;
 }
 
 /** One client per call, or the run-scoped session when `options` carries one. */
 function withScopedMcpClient<T>(
   options: RemoteMcpOptions,
   run: (client: Client, signal: AbortSignal | undefined) => Promise<T>,
+  retrySessionGone: boolean,
 ): Promise<T> {
   if (options.sessionPool && options.sessionScope !== undefined) {
     return options.sessionPool.withSession(
       options as RemoteMcpOptions & { sessionScope: string },
       run,
+      retrySessionGone,
     );
   }
   return withRemoteMcpClient(options, run);
@@ -239,6 +251,7 @@ export class RemoteMcpSessionCache {
   async withSession<T>(
     options: RemoteMcpOptions & { sessionScope: string },
     run: (client: Client, signal: AbortSignal | undefined) => Promise<T>,
+    retrySessionGone = true,
   ): Promise<T> {
     const key = remoteMcpSessionKey(options);
     for (let attempt = 0; ; attempt += 1) {
@@ -248,15 +261,12 @@ export class RemoteMcpSessionCache {
         const signal = combineSignals(options.signal, AbortSignal.timeout(MCP_TIMEOUT_MS));
         return await run(session.client, signal);
       } catch (error) {
-        // The server rejected the session id before running the request, so a
-        // fresh session can replay it once without doubling a write. Closing the
-        // dead session (a bounded DELETE, then teardown) must not delay the
-        // replay or the error, so it runs in the background.
-        if (attempt === 0 && isMcpSessionGoneError(error)) {
+        // A 404 may arrive after a tool ran, so only discovery can replay it.
+        // Retire the broken session without delaying the retry or error.
+        if (isMcpSessionGoneError(error)) {
           void this.drop(session);
-          continue;
-        }
-        if (brokeMcpSession(session, error)) void this.drop(session);
+          if (retrySessionGone && attempt === 0) continue;
+        } else if (brokeMcpSession(session, error)) void this.drop(session);
         throw error;
       } finally {
         session.inFlight -= 1;
@@ -736,8 +746,7 @@ export function limitRemoteMcpPayload(value: unknown): unknown {
   };
 }
 
-/** Whether the server rejected the request because it no longer knows the
- * session: the request never ran there, so a fresh session may replay it. */
+/** Recognize a response indicating that the server no longer knows the session. */
 export function isMcpSessionGoneError(error: unknown): boolean {
   if (!(error instanceof StreamableHTTPError)) return false;
   return (

@@ -6,6 +6,7 @@ import type {
   ConnectorProvider,
   ConnectorTool,
   JobPublisher,
+  ManagedConnectorProvider,
   PaymentWalletProvider,
   SandboxProvider,
   SecretStore,
@@ -15,7 +16,7 @@ import type { RoutineWatch, RoutineWatchState } from "@rakazo/contracts";
 import { RoutineWatchSchema, RoutineWatchStateSchema } from "@rakazo/contracts";
 import type { ActionApprovalRule } from "@rakazo/core";
 import { connectorKindFromToolName, redactSecrets, watchToolRefusal } from "@rakazo/core";
-import type { ComputerMode, PrismaClient, ThreadEvents } from "@rakazo/db";
+import type { ComputerMode, Prisma, PrismaClient, ThreadEvents } from "@rakazo/db";
 import {
   appendEventInTransaction,
   createThreadMessageInTransaction,
@@ -28,8 +29,11 @@ import { scheduleComputerSleep } from "./computer-idle.js";
 import { ComputerBusyError, provisionComputer } from "./computer-lifecycle.js";
 import { resolveBotWorkspaceCwd, teamBotWorkspaceDirectory } from "./computer-support.js";
 import { connectedContext, selectRunConnections } from "./connection-context.js";
+import { assertConnectorToolArgs } from "./lazy-tool-catalog.js";
 import { nativeShellCommandArgv, usesNativeShell } from "./native-shell.js";
+import { preparePipedreamAccount } from "./pipedream-binding.js";
 import { loadPurchaseRedactions } from "./purchase-service.js";
+import { completeRoutineWatchAttempt } from "./routine-watch-attempt.js";
 
 /**
  * The checker behind a routine's "when something changes" trigger. It never
@@ -57,6 +61,7 @@ export type RoutineWatchDeps = {
   events: ThreadEvents;
   dataDir?: string;
   connector?: ConnectorProvider;
+  connectors?: { managed(id: string): ManagedConnectorProvider | undefined };
   /** The shell tool's desktop-protection guard: why a command is refused on a graphical computer. */
   commandRefusal?: (command: string) => string | undefined;
   /** Decrypts Vault credentials. Absent, a command watch runs without them. */
@@ -73,11 +78,117 @@ export type RoutineWatchTarget = {
   watchState: unknown;
 };
 
-/** Thrown when a check cannot be completed; the routine is paused and the bot says why. */
+/** A check failed; a definite failure pauses the routine and reports why. */
 export class RoutineWatchError extends Error {}
+
+/** An external check may have started but did not report a definite outcome. */
+export class RoutineWatchUncertain extends RoutineWatchError {}
 
 /** Thrown when a check cannot run yet for a passing reason; it is retried shortly, not paused. */
 export class RoutineWatchRetry extends Error {}
+
+/** Capture an owner-selected account; client-supplied binding metadata is never trusted. */
+export async function prepareRoutineWatchBinding(
+  deps: {
+    prisma: PrismaClient;
+    connector?: ConnectorProvider;
+    connectors?: { managed(id: string): ManagedConnectorProvider | undefined } & Partial<ConnectorProvider>;
+  },
+  target: { spaceId: string; userId: string; botId: string },
+  watch: RoutineWatch,
+  previous?: RoutineWatch | null,
+): Promise<{ watch: RoutineWatch; recheck?: (tx: Prisma.TransactionClient) => Promise<boolean> }> {
+  let { pipedreamConnectionId } = watch;
+  const { pipedreamConnectionId: _requested, pipedreamBinding: _ignored, ...rest } = watch;
+  if (watch.kind !== "tool") return { watch: rest };
+  const retained = previous?.tool === watch.tool ? previous?.pipedreamBinding : undefined;
+  if (!pipedreamConnectionId && retained && stableStringify(previous?.args) === stableStringify(watch.args))
+    return { watch: { ...rest, pipedreamBinding: retained } };
+  if (!pipedreamConnectionId && retained) {
+    const oldId = previous?.args?.id;
+    if ((retained.catalog ?? previous?.tool?.endsWith("pipedream_execute_tool")) && oldId !== watch.args?.id)
+      throw new RoutineWatchError("The integration tool changed. Choose the account again.");
+    pipedreamConnectionId = retained.connectionId;
+  }
+  const aggregate = deps.connector ?? (typeof deps.connectors?.discoverTools === "function"
+    ? deps.connectors as ConnectorProvider : undefined);
+  if (!aggregate) throw new RoutineWatchError("Could not identify the integration tool. Try again.");
+  const routine = { ...target, id: "watch-bind", watch, watchState: null };
+  const aggregateContext = await toolContext(deps.prisma, routine);
+  const visible = (await aggregate.discoverTools(aggregateContext)).find((item) => item.name === watch.tool);
+  if (!visible?.route) throw new RoutineWatchError("Could not identify the integration tool. Try again.");
+  if (visible.route.connectorId !== "pipedream") {
+    if (pipedreamConnectionId) throw new RoutineWatchError("The selected account does not provide this tool.");
+    return { watch: rest };
+  }
+  if (!pipedreamConnectionId && !previous && visible.route.resourceId) {
+    const accounts = aggregateContext.connectedConnections?.filter((row) =>
+      row.connectorId === "pipedream" && row.externalId === visible.route?.resourceId) ?? [];
+    if (accounts.length === 1) pipedreamConnectionId = accounts[0]!.id;
+  }
+  if (!pipedreamConnectionId) throw new RoutineWatchError("Choose the connected account for this change check.");
+  const connector = deps.connectors?.managed("pipedream");
+  const connection = await deps.prisma.connection.findFirst({
+    where: {
+      id: pipedreamConnectionId,
+      userId: target.userId,
+      spaceId: target.spaceId,
+      connectorId: "pipedream",
+      status: "connected",
+    },
+    select: { provider: true },
+  });
+  if (!connector || !connection)
+    throw new RoutineWatchError("Choose a connected account for this check.");
+  const ctx = context(routine);
+  const selection = await preparePipedreamAccount({
+    prisma: deps.prisma,
+    connector,
+    context: ctx,
+    app: connection.provider,
+    connectionId: pipedreamConnectionId,
+    ...(!watch.pipedreamConnectionId && retained ? { previous: retained } : {}),
+  });
+  if (!selection) throw new RoutineWatchError("The selected account changed. Choose it again.");
+  const scoped = { ...ctx, connectedConnections: [selection.account] };
+  const catalog = visible.route.toolName === "__catalog_execute";
+  if (!catalog && visible.route.resourceId !== connection.provider)
+    throw new RoutineWatchError("The selected account does not provide this tool.");
+  const resolved = await resolvePinnedPipedreamWatch(selection.provider, scoped, watch,
+    connection.provider, visible.route.toolName, catalog);
+  if (!resolved?.tool.route?.resourceId || resolved.tool.route.resourceId !== connection.provider)
+    throw new RoutineWatchError("The selected account does not provide this tool.");
+  assertWatchToolReadOnly(resolved.tool.name, declaredRead(resolved.tool));
+  return {
+    watch: {
+      ...rest,
+      pipedreamBinding: {
+        ...selection.binding,
+        app: connection.provider,
+        toolName: resolved.tool.route.toolName,
+        catalog,
+      },
+    },
+    recheck: selection.recheck,
+  };
+}
+
+async function resolvePinnedPipedreamWatch(
+  provider: ConnectorProvider, ctx: AdapterContext, watch: RoutineWatch,
+  app: string, toolName: string, catalog: boolean,
+) {
+  const call = { tool: watch.tool ?? "", args: watch.args ?? {}, executionId: ctx.operationId };
+  if (catalog) return provider.resolveCall?.({ ...call, route: {
+    connectorId: "pipedream", toolName: "__catalog_execute" } }, ctx);
+  const found = (await provider.discoverTools(ctx)).find((item) =>
+    item.route?.resourceId === app && item.route.toolName === toolName);
+  if (found) {
+    assertConnectorToolArgs(found.inputSchema, call.args);
+    return { call: { ...call, route: found.route }, tool: found };
+  }
+  return provider.resolveCall?.({ ...call, args: { id: `${app}:${encodeURIComponent(toolName)}`,
+    arguments: call.args }, route: { connectorId: "pipedream", toolName: "__catalog_execute" } }, ctx);
+}
 
 export type RoutineWatchOutcome = {
   state: RoutineWatchState;
@@ -339,6 +450,7 @@ function context(routine: RoutineWatchTarget): AdapterContext {
     userId: routine.userId,
     botId: routine.botId,
     inlineLargeOutput: true,
+    legacyPipedreamWatchSelection: true,
     signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
   };
 }
@@ -562,8 +674,9 @@ async function run(
       else if (event.type === "exit") code = event.code;
     }
   } catch (error) {
-    throw new RoutineWatchError(`The check could not run on the computer: ${errorText(error)}`);
+    throw new RoutineWatchUncertain(`The check could not run on the computer: ${errorText(error)}`);
   }
+  if (code === -1) throw new RoutineWatchUncertain("The check did not report an exit status.");
   return { stdout, stderr, code };
 }
 
@@ -574,11 +687,29 @@ async function readTool(
 ): Promise<Reading> {
   const connector = deps.connector;
   if (!connector) throw new RoutineWatchError("No integrations are available to check.");
-  const ctx = await toolContext(deps.prisma, routine);
+  let ctx = await toolContext(deps.prisma, routine);
+  let executor = connector;
+  const binding = watch.pipedreamBinding;
+  let selected: Awaited<ReturnType<typeof preparePipedreamAccount>>;
+  if (binding) {
+    const managed = deps.connectors?.managed("pipedream");
+    if (!managed) throw new RoutineWatchError("Reconnect the account for this change check.");
+    selected = await preparePipedreamAccount({
+      prisma: deps.prisma,
+      connector: managed,
+      context: ctx,
+      app: binding.app,
+      connectionId: binding.connectionId,
+      previous: binding,
+    });
+    if (!selected) throw new RoutineWatchError("The connected account changed. Choose it again.");
+    executor = selected.provider;
+    ctx = { ...ctx, connectedConnections: [selected.account] };
+  }
   const toolName = watch.tool ?? "";
   let tools: Awaited<ReturnType<ConnectorProvider["discoverTools"]>>;
   try {
-    tools = await connector.discoverTools(ctx);
+    tools = await executor.discoverTools(ctx);
   } catch (error) {
     throw new RoutineWatchError(`Could not list the integration's tools: ${errorText(error)}`);
   }
@@ -586,11 +717,24 @@ async function readTool(
   ctx.signal = AbortSignal.timeout(CHECK_TIMEOUT_MS);
   const call = { tool: toolName, args: watch.args ?? {}, executionId: ctx.operationId };
   const tool = tools.find((candidate) => candidate.name === toolName);
-  const resolved = tool
-    ? { call: { ...call, route: tool.route }, tool }
-    : await connector.resolveCall?.(call, ctx).catch(() => undefined);
+  const resolved = binding
+    ? await resolvePinnedPipedreamWatch(executor, ctx, watch, binding.app, binding.toolName,
+        binding.catalog ?? toolName.endsWith("pipedream_execute_tool"))
+    : tool
+      ? { call: { ...call, route: tool.route }, tool }
+      : await executor.resolveCall?.(call, ctx).catch(() => undefined);
   if (!resolved) {
     throw new RoutineWatchError(`No connected integration has a tool named ${toolName}.`);
+  }
+  if (binding) {
+    if (
+      resolved.tool.route?.connectorId !== "pipedream" ||
+      resolved.tool.route.resourceId !== binding.app ||
+      resolved.tool.route.toolName !== binding.toolName
+    )
+      throw new RoutineWatchError("The integration tool changed. Choose the account again.");
+  } else if (resolved.tool.route?.connectorId === "pipedream") {
+    throw new RoutineWatchError("Choose the connected account for this change check.");
   }
   const refusal = watchToolRefusal({
     toolName: resolved.tool.name,
@@ -605,12 +749,29 @@ async function readTool(
     })) as ActionApprovalRule[],
   });
   if (refusal) throw new RoutineWatchError(refusal);
+  if (binding) {
+    const valid = await deps.prisma.$transaction(async (tx) => {
+      if (!(await selected!.recheck(tx))) return false;
+      const rows = await tx.$queryRaw<Array<{ watch: unknown }>>`
+        SELECT watch FROM routines WHERE id = ${routine.id} AND "spaceId" = ${routine.spaceId}
+          AND "userId" = ${routine.userId} AND active FOR SHARE`;
+      return rows.length === 1 &&
+        stableStringify(parseRoutineWatch(rows[0]!.watch)) === stableStringify(watch);
+    });
+    if (!valid) throw new RoutineWatchError("The change check changed. Try again.");
+  }
   let data: unknown;
   let failure: string | null = null;
+  let receivedResult = false;
   try {
-    for await (const event of connector.execute(resolved.call, ctx)) {
-      if (event.type === "result") data = event.data;
-      else if (event.type === "error") failure = event.message;
+    for await (const event of executor.execute(
+      binding ? { ...resolved.call, tool: binding.toolName } : resolved.call,
+      ctx,
+    )) {
+      if (event.type === "result") {
+        data = event.data;
+        receivedResult = true;
+      } else if (event.type === "error") failure = event.message;
     }
   } catch (error) {
     failure = errorText(error);
@@ -620,7 +781,8 @@ async function readTool(
     if (result.isError === true || result.error != null)
       failure = toolResultText(result.error ?? data);
   }
-  if (failure) throw new RoutineWatchError(`${toolName} failed: ${clip(failure)}`);
+  if (failure) throw new RoutineWatchUncertain(`${toolName} failed: ${clip(failure)}`);
+  if (!receivedResult) throw new RoutineWatchUncertain(`${toolName} did not report a result.`);
   if (watch.track) return readItems(data, watch.track);
   // The fingerprint covers the whole result; only the note the bot reads is unwrapped.
   return {
@@ -690,6 +852,7 @@ export async function tickRoutineWatch(
   routine: TickRoutine,
   target: { threadId: string; botId: string },
   scheduledAt: Date,
+  generation?: string,
 ): Promise<RoutineWatchTick> {
   const watch = parseRoutineWatch(routine.watch);
   const previous = parseRoutineWatchState(routine.watchState);
@@ -699,32 +862,29 @@ export async function tickRoutineWatch(
     if (!watch) throw new RoutineWatchError("The change trigger's settings are not valid.");
     outcome = await checkRoutineWatch(deps, routine, now);
   } catch (error) {
+    if (generation && error instanceof RoutineWatchUncertain) throw error;
     if (error instanceof RoutineWatchRetry) {
       const retryAt = new Date(now.getTime() + RETRY_AFTER_MS);
-      const deferred = await deps.prisma.routine.updateMany({
-        where: { id: routine.id, active: true, nextRunAt: scheduledAt },
-        data: { nextRunAt: retryAt },
+      const deferred = await commitWatchUpdate(deps, routine.id, scheduledAt, generation, {
+        nextRunAt: retryAt,
       });
-      if (deferred.count === 1) await deps.jobs.enqueue(routineWakeupJob(routine.id, retryAt));
+      if (deferred && !generation) await deps.jobs.enqueue(routineWakeupJob(routine.id, retryAt));
       return { run: false };
     }
     const reason = error instanceof Error ? error.message : String(error);
-    const paused = await deps.prisma.routine.updateMany({
-      where: { id: routine.id, active: true, nextRunAt: scheduledAt },
-      data: {
-        active: false,
-        nextRunAt: null,
-        watchState: {
-          checkedAt: now.toISOString(),
-          outcome: "failed",
-          fingerprint: previous?.fingerprint ?? null,
-          ...(previous?.entries ? { entries: previous.entries } : {}),
-          detail: reason,
-        } satisfies RoutineWatchState,
-      },
+    const paused = await commitWatchUpdate(deps, routine.id, scheduledAt, generation, {
+      active: false,
+      nextRunAt: null,
+      watchState: {
+        checkedAt: now.toISOString(),
+        outcome: "failed",
+        fingerprint: previous?.fingerprint ?? null,
+        ...(previous?.entries ? { entries: previous.entries } : {}),
+        detail: reason,
+      } satisfies RoutineWatchState,
     });
-    if (paused.count === 1) {
-      await deps.jobs.cancel(routineJobKey(routine.id)).catch(() => undefined);
+    if (paused) {
+      if (!generation) await deps.jobs.cancel(routineJobKey(routine.id)).catch(() => undefined);
       await postRoutineWatchMessage(deps, {
         spaceId: routine.spaceId,
         ...target,
@@ -746,11 +906,11 @@ export async function tickRoutineWatch(
       note: `${ROUTINE_WATCH_NOTE_START}${describeRoutineWatch(watch)}).\nWhat changed since the last check:\n${outcome.state.detail ?? "(no detail)"}`,
     };
   }
-  const claimed = await deps.prisma.routine.updateMany({
-    where: { id: routine.id, active: true, nextRunAt: scheduledAt },
-    data: { nextRunAt, watchState: outcome.state },
+  const claimed = await commitWatchUpdate(deps, routine.id, scheduledAt, generation, {
+    nextRunAt,
+    watchState: outcome.state,
   });
-  if (claimed.count !== 1) return { run: false };
+  if (!claimed) return { run: false };
   if (watch.loud) {
     await postRoutineWatchMessage(deps, {
       spaceId: routine.spaceId,
@@ -762,8 +922,25 @@ export async function tickRoutineWatch(
           : `${routine.name} routine: no changes`,
     });
   }
-  await deps.jobs.enqueue(routineWakeupJob(routine.id, nextRunAt));
+  if (!generation) await deps.jobs.enqueue(routineWakeupJob(routine.id, nextRunAt));
   return { run: false };
+}
+
+async function commitWatchUpdate(
+  deps: RoutineWatchTickDeps,
+  routineId: string,
+  scheduledAt: Date,
+  generation: string | undefined,
+  data: Prisma.RoutineUpdateManyMutationInput,
+): Promise<boolean> {
+  const where = { id: routineId, active: true, nextRunAt: scheduledAt };
+  if (!generation) return (await deps.prisma.routine.updateMany({ where, data })).count === 1;
+  return deps.prisma.$transaction(async (tx) => {
+    await completeRoutineWatchAttempt(tx, { routineId, generation, scheduledFor: scheduledAt });
+    const updated = await tx.routine.updateMany({ where, data });
+    if (updated.count !== 1) throw new Error("Routine watch changed before completion");
+    return true;
+  });
 }
 
 /** A line in the routine's thread without a model run. */

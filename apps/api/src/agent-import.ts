@@ -44,6 +44,7 @@ import {
   createThreadMessageInTransaction,
 } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
+import { routineSchedulerMode } from "./routines.js";
 
 type Reader = Pick<Prisma.TransactionClient, "memoryDocument" | "agentSkill" | "mcpServer">;
 type Stored = Awaited<ReturnType<SecretStore["put"]>> | null;
@@ -112,6 +113,7 @@ export type AgentImportServices<PreparedKey = unknown> = {
     actor: Actor,
     bot: { id: string; thread: { id: string } | null },
     row: Routine,
+    options?: { versioned?: boolean },
   ) => Promise<void>;
   notifyThread: (threadId: string, seq: number) => Promise<void>;
 };
@@ -417,7 +419,7 @@ export async function createImportedBot<PreparedKey>(
 
   const record: ImportRecord = { mcpServers: [] };
   const credentials: { provider: string }[] = [];
-  const routineRows: Routine[] = [];
+  const routineRows: { row: Routine; versioned: boolean }[] = [];
   const setup: AgentImportSetupItem[] = [];
   const added: { threadId: string; seq: number }[] = [];
   const announceAdded = async (
@@ -564,6 +566,12 @@ export async function createImportedBot<PreparedKey>(
         return from ? [[from, skillIds.includes(item.id) ? item.name : from]] : [];
       }),
     ]);
+    const versioned = routines.length > 0 ? await routineSchedulerMode(tx) : false;
+    if (versioned && routines.some((routine) => routine.active && routine.watch)) {
+      throw new ORPCError("CONFLICT", {
+        message: "Versioned routine watch execution is unavailable.",
+      });
+    }
     for (const routine of routines) {
       const routineInput = {
         ...routine,
@@ -573,7 +581,7 @@ export async function createImportedBot<PreparedKey>(
       const row = await tx.routine.create({
         data: services.routineRowData(actor, routineInput, services.routineNextRunAt(routineInput)),
       });
-      routineRows.push(row);
+      routineRows.push({ row, versioned });
       setup.push({ kind: "routine", routineId: row.id, name: row.name });
     }
     if (plan.model?.status === "needs_key" && !model) {
@@ -640,9 +648,9 @@ export async function createImportedBot<PreparedKey>(
     await services.notifyThread(event.threadId, event.seq).catch(settle("imported card notice"));
   }
   const thread = bot.threadId ? { id: bot.threadId } : null;
-  for (const row of routineRows) {
+  for (const { row, versioned } of routineRows) {
     await services
-      .announceRoutine(actor, { id: bot.id, thread }, row)
+      .announceRoutine(actor, { id: bot.id, thread }, row, { versioned })
       .catch(settle("imported routine notice"));
   }
   return bot;

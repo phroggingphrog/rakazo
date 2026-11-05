@@ -13,6 +13,25 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
+#: src/pages/RoutineRunHistory.tsx
+msgid "Actions need review"
+msgstr "İncelenmesi gereken işlemler var"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Remove saved connected_account selector"
+msgstr "Kaydedilmiş connected_account seçicisini kaldır"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Leave this off if connected_account is an argument the tool needs."
+msgstr "Araç connected_account bağımsız değişkenine ihtiyaç duyuyorsa bunu kapalı bırakın."
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "No Pipedream accounts are connected."
+msgstr "Bağlı Pipedream hesabı yok."
+
 #: src/pages/shell/sidebar-roster.tsx
 msgid " (unread)"
 msgstr " (okunmadı)"
@@ -6140,6 +6159,18 @@ msgstr "Bugün"
 #: src/pages/AccountSettingsOverlay.tsx
 msgid "Tokens"
 msgstr "Token"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Arguments are saved with this setup."
+msgstr "Bağımsız değişkenler bu kurulumla birlikte kaydedilir."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested."
+msgstr "Seçilen işlem için gerekli alanları gözden geçirin. Parola, belirteç veya başka gizli bilgiler girmeyin; kimlik doğrulamayı entegrasyonda yapılandırın. Bağımsız değişkenler henüz işleme göre doğrulanmadı veya test edilmedi."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Enter a valid JSON object up to 8 KB."
+msgstr "En fazla 8 KB boyutunda geçerli bir JSON nesnesi girin."
 
 #: src/pages/RoutineEditor.tsx
 msgid "Tool arguments (JSON)"

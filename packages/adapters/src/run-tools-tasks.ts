@@ -219,6 +219,10 @@ export const taskTools: ToolHandlers = {
   async schedule_update(ctx, call) {
     const { deps, run, bot, thread } = ctx;
     const { args } = call;
+    const command = commandWatchFromTool(args.watch);
+    const refusal = command === undefined ? undefined : protectedComputerLifecycleRefusal(command);
+    if (ctx.computer.graphical && refusal)
+      return call.finish({ error: desktopProtectionGuardMessage(refusal) });
     return call.finish(
       await updateScheduleFromTool(deps, {
         spaceId: run.spaceId,
@@ -239,6 +243,7 @@ export const taskTools: ToolHandlers = {
           delayMinutes: args.delayMinutes,
           delaySeconds: args.delaySeconds,
           startAt: args.startAt,
+          watch: args.watch,
         }),
       }),
     );

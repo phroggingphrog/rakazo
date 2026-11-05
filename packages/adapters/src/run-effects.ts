@@ -1,21 +1,31 @@
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   isToolEffectIdempotencyKey,
   legacyScopedToolEffectIdempotencyKey,
   stableJsonValue,
 } from "@rakazo/core/node/approval-effect-key";
 import type { Prisma } from "@rakazo/db";
-import { assertRunCanWriteHistory, RUN_TURN_CHECKPOINT_KIND } from "@rakazo/db";
+import type { ConnectorRoute } from "@rakazo/adapter-kit";
+import type { PipedreamAccountBinding } from "@rakazo/adapter-kit";
+import {
+  assertRunCanWriteHistory,
+  RUN_TURN_CHECKPOINT_KIND,
+  RunHistoryWriteError,
+} from "@rakazo/db";
 import {
   boundDirectApprovalDetails,
+  approvalRoutesMatch,
   catalogApprovalConnectorId,
   catalogApprovalDetails,
   catalogApprovalInnerArgs,
   catalogExecuteToolName,
   catalogIdForRoute,
-  claimApprovedEffect,
-  claimIntendedEffect,
   completeExternalEffect,
   parseCatalogApprovalTarget,
+  pipedreamAccountBinding,
+  replaceCompletedExternalEffectResult,
+  settleUncertainEffect,
 } from "./approval-effect.js";
 import { USE_TOOL } from "./builtin-tool-bridge.js";
 import type { ExecutorDeps } from "./executor-deps.js";
@@ -144,6 +154,54 @@ export function isSubagentToolExecution(executionId: string): boolean {
   return agent !== undefined && agent !== "main";
 }
 
+type McpReplayBinding = {
+  route: ConnectorRoute | undefined;
+  args: Record<string, unknown>;
+};
+
+/** This is the same digest already used by the ordinary effect idempotency key. */
+export function mcpEffectiveArgsFingerprint(args: Record<string, unknown>): string {
+  return createHash("sha256").update(stableJsonValue(args)).digest("hex");
+}
+
+function matchingMcpRoute(request: unknown, liveRoute: ConnectorRoute | undefined): boolean {
+  const stored =
+    boundDirectApprovalDetails(request, CATALOG_APPROVAL_TOOL)?.route ??
+    catalogApprovalDetails(request, CATALOG_APPROVAL_TOOL)?.route;
+  return Boolean(
+    stored?.connectorId === "mcp" &&
+      liveRoute?.connectorId === "mcp" &&
+      stored.resourceId && stored.toolName && liveRoute.resourceId && liveRoute.toolName &&
+      Number.isSafeInteger(stored.resourceRevision) && (stored.resourceRevision as number) > 0 &&
+      Number.isSafeInteger(liveRoute.resourceRevision) && (liveRoute.resourceRevision as number) > 0 &&
+      approvalRoutesMatch(stored, {
+        connectorId: liveRoute.connectorId,
+        resourceId: liveRoute.resourceId,
+        toolName: liveRoute.toolName,
+        resourceRevision: liveRoute.resourceRevision,
+      }),
+  );
+}
+
+function mcpStoredArgsFingerprint(request: unknown) {
+  const direct = boundDirectApprovalDetails(request, CATALOG_APPROVAL_TOOL);
+  if (direct) return mcpEffectiveArgsFingerprint(direct.args);
+  const catalog = catalogApprovalDetails(request, CATALOG_APPROVAL_TOOL);
+  if (
+    catalog?.route?.connectorId !== "mcp" ||
+    !catalog.route.resourceId ||
+    !catalog.route.toolName ||
+    !Number.isSafeInteger(catalog.route.resourceRevision) ||
+    (catalog.route.resourceRevision as number) < 1
+  )
+    return undefined;
+  const fingerprint = (catalog.route as { __rakazoEffectiveArgsSha256V1?: unknown })
+    .__rakazoEffectiveArgsSha256V1;
+  return typeof fingerprint === "string" && /^[a-f0-9]{64}$/.test(fingerprint)
+    ? fingerprint
+    : undefined;
+}
+
 export async function recordEffect(
   deps: ExecutorDeps,
   run: { id: string; spaceId: string; threadId: string; botId: string },
@@ -153,6 +211,11 @@ export async function recordEffect(
   legacyIdempotencyKey?: string,
   consumedIds?: Set<string>,
   batchActions?: string[],
+  mcpBinding?: McpReplayBinding,
+  pipedreamRoute?: ConnectorRoute,
+  pipedreamBinding?: PipedreamAccountBinding,
+  installedMcpRoute?: ConnectorRoute,
+  installedApprovedRequest?: unknown,
 ) {
   if (kind === RUN_TURN_CHECKPOINT_KIND) throw new Error("Unsupported tool effect kind");
   const existing = await deps.prisma.externalEffect.findUnique({
@@ -164,6 +227,58 @@ export async function recordEffect(
     throw new Error("Stored tool execution does not belong to this run.");
   }
   if (existing) {
+    if (installedMcpRoute) {
+      const stored = boundDirectApprovalDetails(existing.request, CATALOG_APPROVAL_TOOL)?.route ??
+        catalogApprovalDetails(existing.request, CATALOG_APPROVAL_TOOL)?.route;
+      const live = installedMcpRoute.resourceId ? {
+        connectorId: installedMcpRoute.connectorId,
+        resourceId: installedMcpRoute.resourceId,
+        toolName: installedMcpRoute.toolName,
+        resourceRevision: installedMcpRoute.resourceRevision,
+        installedMcpBinding: installedMcpRoute.installedMcpBinding,
+      } : undefined;
+      if (existing.kind !== kind || !approvalRoutesMatch(stored, live) ||
+        (installedApprovedRequest !== undefined && !isDeepStrictEqual(existing.request, installedApprovedRequest)))
+        return { duplicate: true, effect: existing, uncertainIdentity: true };
+    }
+    if (pipedreamRoute) {
+      const stored =
+        boundDirectApprovalDetails(existing.request, CATALOG_APPROVAL_TOOL)?.route ??
+        catalogApprovalDetails(existing.request, CATALOG_APPROVAL_TOOL)?.route;
+      const live = pipedreamRoute.resourceId
+        ? {
+            connectorId: pipedreamRoute.connectorId,
+            resourceId: pipedreamRoute.resourceId,
+            toolName: pipedreamRoute.toolName,
+            resourceRevision: pipedreamRoute.resourceRevision,
+            pipedreamAccountEnvelope: pipedreamRoute.pipedreamAccountEnvelope,
+            pipedreamAccountSelector: pipedreamRoute.pipedreamAccountSelector,
+            pipedreamSingletonConnectionId: pipedreamRoute.pipedreamSingletonConnectionId,
+          }
+        : undefined;
+      const savedBinding = pipedreamAccountBinding(stored?.pipedreamAccountBinding);
+      if (
+        (stored && !approvalRoutesMatch(stored, live)) ||
+        !savedBinding || !pipedreamBinding ||
+        savedBinding.connectionId !== pipedreamBinding.connectionId ||
+        savedBinding.generation !== pipedreamBinding.generation ||
+        savedBinding.namespace !== pipedreamBinding.namespace ||
+        savedBinding.providerEpoch !== pipedreamBinding.providerEpoch
+      )
+        return { duplicate: true, effect: existing, uncertainIdentity: true };
+    }
+    if (mcpBinding) {
+      let matches = false;
+      try {
+        const storedArgs = mcpStoredArgsFingerprint(existing.request);
+        matches = existing.kind === kind && matchingMcpRoute(existing.request, mcpBinding.route) &&
+          storedArgs !== undefined && storedArgs === mcpEffectiveArgsFingerprint(mcpBinding.args);
+      } catch {
+        // Cannot prove the saved arguments describe this operation.
+      }
+      if (!matches)
+        return { duplicate: true, effect: existing, uncertainIdentity: true };
+    }
     consumedIds?.add(existing.id);
     await deps.events.append({
       spaceId: run.spaceId,
@@ -192,7 +307,65 @@ export async function recordEffect(
     });
     if (oldPi?.runId === run.id && oldPi.spaceId === run.spaceId) {
       // A bare Pi call id does not say which agent owned it. Its outcome is uncertain.
+      if (mcpBinding || installedMcpRoute) return { duplicate: true, effect: oldPi, uncertainIdentity: true };
       throw uncertainEffectError(kind);
+    }
+  }
+  if (mcpBinding) {
+    const candidates = await deps.prisma.externalEffect.findMany({
+      where: { runId: run.id, spaceId: run.spaceId, kind },
+      orderBy: { createdAt: "asc" },
+    });
+    for (const candidate of candidates) {
+      if (
+        consumedIds?.has(candidate.id) ||
+        isToolEffectIdempotencyKey(candidate.idempotencyKey, run.id, kind)
+      )
+        continue;
+      try {
+        const fingerprint = mcpStoredArgsFingerprint(candidate.request);
+        if (fingerprint && fingerprint !== mcpEffectiveArgsFingerprint(mcpBinding.args)) continue;
+      } catch {
+        // An unparseable legacy request cannot establish a different occurrence.
+      }
+      // A legacy key does not identify an occurrence; matching it would guess which call ran.
+      return { duplicate: true, effect: candidate, uncertainIdentity: true };
+    }
+  }
+  if (pipedreamRoute) {
+    const candidates = await deps.prisma.externalEffect.findMany({
+      where: { runId: run.id, spaceId: run.spaceId, kind },
+      orderBy: { createdAt: "asc" },
+    });
+    for (const candidate of candidates) {
+      if (
+        consumedIds?.has(candidate.id) ||
+        isToolEffectIdempotencyKey(candidate.idempotencyKey, run.id, kind)
+      )
+        continue;
+      // A legacy key does not identify a durable occurrence, even if reconstructed arguments differ.
+      return { duplicate: true, effect: candidate, uncertainIdentity: true };
+    }
+  }
+  if (installedMcpRoute) {
+    const candidates = await deps.prisma.externalEffect.findMany({
+      where: { runId: run.id, spaceId: run.spaceId, kind },
+      orderBy: { createdAt: "asc" },
+    });
+    for (const candidate of candidates) {
+      if (
+        candidate.runId !== run.id || candidate.spaceId !== run.spaceId || candidate.kind !== kind ||
+        consumedIds?.has(candidate.id) ||
+        isToolEffectIdempotencyKey(candidate.idempotencyKey, run.id, kind)
+      ) continue;
+      const savedRoute = boundDirectApprovalDetails(candidate.request, CATALOG_APPROVAL_TOOL)?.route ??
+        catalogApprovalDetails(candidate.request, CATALOG_APPROVAL_TOOL)?.route;
+      if (savedRoute && (
+        savedRoute.connectorId !== installedMcpRoute.connectorId ||
+        savedRoute.resourceId !== installedMcpRoute.resourceId ||
+        savedRoute.toolName !== installedMcpRoute.toolName
+      )) continue;
+      return { duplicate: true, effect: candidate, uncertainIdentity: true };
     }
   }
   if (legacyIdempotencyKey && legacyIdempotencyKey !== idempotencyKey && expectedRequest) {
@@ -293,8 +466,26 @@ export function claimEffect(
   effectId: string,
   from: "approved" | "intended",
 ) {
-  const claim = from === "approved" ? claimApprovedEffect : claimIntendedEffect;
-  return underRunLease(deps, runId, (tx) => claim(tx, effectId));
+  return underRunLease(deps, runId, async (tx) => {
+    const lease = runLeaseFor(deps, runId);
+    const assertActiveLease = async () => {
+      if (!lease) return;
+      const active = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM runs
+        WHERE id = ${runId} AND status = 'running'
+          AND "leaseOwner" = ${lease.owner} AND "leaseFence" = ${lease.fence}
+          AND "leaseExpiresAt" AT TIME ZONE 'UTC' > clock_timestamp()`;
+      if (active.length !== 1) throw new RunHistoryWriteError();
+    };
+    await assertActiveLease();
+    const claimed = await tx.externalEffect.updateMany({
+      where: { id: effectId, runId, status: from, dispatchClaimToken: null },
+      data: { status: "executing" },
+    });
+    // The effect row can be locked by another transaction until after lease expiry.
+    if (claimed.count === 1) await assertActiveLease();
+    return claimed.count === 1;
+  });
 }
 
 /** Writes that let a tool's side effect go ahead check the attempt's lease in the same transaction. */
@@ -302,11 +493,15 @@ function underRunLease<T>(
   deps: ExecutorDeps,
   runId: string,
   write: (tx: Prisma.TransactionClient) => Promise<T>,
+  options?: { requireRunning?: boolean },
 ): Promise<T> {
   const lease = runLeaseFor(deps, runId);
+  if (deps.runLease && !lease) throw new RunHistoryWriteError();
   if (!lease) return write(deps.prisma);
   return deps.prisma.$transaction(async (tx) => {
-    await assertRunCanWriteHistory(tx, runId, { lease });
+    const run = await assertRunCanWriteHistory(tx, runId, { lease });
+    if (options?.requireRunning && (run?.status !== "running" || run.leaseOwner !== lease.owner))
+      throw new RunHistoryWriteError();
     return write(tx);
   });
 }
@@ -324,7 +519,128 @@ export async function completeEffect(
     "details" in result
       ? (result as { details: unknown }).details
       : result;
-  return completeExternalEffect(deps.prisma, effectId, expectedStatus, storedResult as never);
+  const runId = deps.runLease?.runId;
+  if (!runId) return completeExternalEffect(deps.prisma, effectId, expectedStatus, storedResult);
+  return underRunLease(
+    deps,
+    runId,
+    (tx) => completeExternalEffect(tx, effectId, expectedStatus, storedResult, runId),
+    { requireRunning: true },
+  );
+}
+
+export type LocalRejectionReason =
+  | "invalid_screen_action"
+  | "invalid_shared_memory"
+  | "computer_unavailable"
+  | "stdio_mcp_forbidden"
+  | "instruction_precondition_failed";
+
+const LOCAL_REJECTION_KINDS: Record<LocalRejectionReason, readonly string[]> = {
+  invalid_screen_action: ["user_computer_act"],
+  invalid_shared_memory: ["save_shared_memory"],
+  computer_unavailable: ["user_computer_shell", "user_computer_act", "user_computer_observe"],
+  stdio_mcp_forbidden: ["add_mcp_server"],
+  instruction_precondition_failed: ["update_bot"],
+};
+
+/** Only a trusted local handler may call this before dispatching any action. */
+export async function settleLocalEffectRejection(
+  deps: ExecutorDeps,
+  runId: string,
+  effectId: string,
+  expectedStatus: "intended" | "executing",
+  result: { error: string },
+  reason: LocalRejectionReason,
+): Promise<boolean> {
+  const lease = runLeaseFor(deps, runId);
+  if (!lease) throw new RunHistoryWriteError();
+  return deps.prisma.$transaction(async (tx) => {
+    await assertRunCanWriteHistory(tx, runId, { lease });
+    const run = await tx.run.findUnique({
+      where: { id: runId },
+      select: {
+        status: true,
+        leaseOwner: true,
+        leaseFence: true,
+        leaseExpiresAt: true,
+        spaceId: true,
+        userId: true,
+      },
+    });
+    if (
+      run?.status !== "running" ||
+      run.leaseOwner !== lease.owner ||
+      run.leaseFence !== lease.fence ||
+      !run.leaseExpiresAt ||
+      run.leaseExpiresAt <= new Date()
+    )
+      throw new RunHistoryWriteError();
+    const settled = await tx.externalEffect.updateMany({
+      where: {
+        id: effectId,
+        runId,
+        dispatchClaimToken: null,
+        kind: { in: [...LOCAL_REJECTION_KINDS[reason]] },
+        status: expectedStatus,
+      },
+      data: { status: "failed", result },
+    });
+    if (settled.count === 1) {
+      await tx.$executeRaw`
+        INSERT INTO local_effect_rejections ("effectId", "runId", "spaceId", "userId", reason)
+        VALUES (${effectId}, ${runId}, ${run.spaceId}, ${run.userId}, ${reason})`;
+    }
+    return settled.count === 1;
+  });
+}
+
+export function settleInvalidScreenAction(
+  deps: ExecutorDeps,
+  runId: string,
+  effectId: string,
+  expectedStatus: "intended" | "executing",
+  result: { error: string },
+) {
+  return settleLocalEffectRejection(
+    deps,
+    runId,
+    effectId,
+    expectedStatus,
+    result,
+    "invalid_screen_action",
+  );
+}
+
+/** Mark an interrupted effect uncertain only while this attempt still owns the run. */
+export function settleRunEffectUncertainty(
+  deps: ExecutorDeps,
+  runId: string,
+  effectId: string,
+  toolName: string,
+  args?: Record<string, unknown>,
+) {
+  return underRunLease(
+    deps,
+    runId,
+    (tx) => settleUncertainEffect(tx, effectId, toolName, args, runId),
+    { requireRunning: true },
+  );
+}
+
+/** Update a previously completed effect only under the active attempt's lease. */
+export function replaceRunEffectResult(
+  deps: ExecutorDeps,
+  runId: string,
+  effectId: string,
+  result: unknown,
+) {
+  return underRunLease(
+    deps,
+    runId,
+    (tx) => replaceCompletedExternalEffectResult(tx, effectId, result, runId),
+    { requireRunning: true },
+  );
 }
 
 export function uncertainEffectError(toolName: string): Error {

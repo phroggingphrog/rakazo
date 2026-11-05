@@ -13,6 +13,9 @@ export const MISSING_TOOL_FINAL_RESPONSE_ERROR =
 export const APPROVED_ACTION_NOT_RUN_ERROR =
   "The model did not run the approved action. Try again.";
 
+export const APPROVED_ACCOUNT_UNAVAILABLE_ERROR =
+  "The approved action could not resume because its connected account could not be confirmed. Stop this run if needed, then send a new message to request a fresh review. Check the destination first if an earlier attempt may have run.";
+
 export const MODEL_OUTPUT_LIMIT_ERROR = "The model hit its output limit before writing a response.";
 
 /** The model ran out of output tokens partway through its reply, even after continuing it. */
@@ -103,6 +106,7 @@ export function userRunError(error: unknown): string {
 const MODEL_OUTPUT_RUN_ERRORS = new Set([
   MISSING_TOOL_FINAL_RESPONSE_ERROR,
   APPROVED_ACTION_NOT_RUN_ERROR,
+  APPROVED_ACCOUNT_UNAVAILABLE_ERROR,
 ]);
 /** App advice whose fix is connecting a model. */
 const MODEL_CONNECTION_RUN_ERRORS = new Set([

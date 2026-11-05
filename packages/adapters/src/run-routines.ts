@@ -6,12 +6,14 @@ import {
   runContinueJob,
   TransientModelError,
 } from "@rakazo/adapter-kit";
+import { WorkspaceMonitorSchema } from "@rakazo/contracts";
 import {
   displayName,
   expandSkillReferencesInPrompt,
   isOneShotRoutineCrons,
   nextRoutineRunDateAcross,
 } from "@rakazo/core";
+import { runAsSystemInTransaction } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { sanitizedError } from "@rakazo/logging/monitoring";
 import { protectedComputerLifecycleRefusal } from "./desktop-command-guard.js";
@@ -19,9 +21,11 @@ import type { ExecutorDeps } from "./executor-deps.js";
 import { routineRunModelPin } from "./model-selection.js";
 import { findPendingRoutineTick, routineTimerNonce } from "./routine-coalescing.js";
 import { tickRoutineWatch } from "./routine-watch.js";
+import { claimRoutineWatchAttempt, completeRoutineWatchAttempt } from "./routine-watch-attempt.js";
 import { isUniqueViolation } from "./run-messages.js";
 import { notifyRun } from "./run-notifications.js";
 import { listAgentSkillRecords } from "./skill-tools.js";
+import { workspaceMonitorPrompt } from "./workspace-monitoring.js";
 
 /** A routine run stopped by a transient model error gets one more try this much later. */
 const ROUTINE_RETRY_DELAY_MS = 12 * 60_000;
@@ -112,19 +116,32 @@ async function notifyFailedRoutineRun(
   );
 }
 
-export async function wakeRoutine(deps: ExecutorDeps, routineId: string, scheduledFor: string) {
+export async function wakeRoutine(
+  deps: ExecutorDeps,
+  routineId: string,
+  scheduledFor: string,
+  generation?: string,
+) {
+  if (
+    generation !== undefined &&
+    (!/^[1-9][0-9]{0,18}$/.test(generation) || BigInt(generation) > 9_223_372_036_854_775_807n)
+  )
+    throw new Error("Invalid routine schedule generation");
   const scheduledAt = new Date(scheduledFor);
   if (!Number.isFinite(scheduledAt.getTime())) return;
   const routine = await deps.prisma.routine.findUnique({
     where: { id: routineId },
   });
   if (!routine?.active || routine.nextRunAt?.getTime() !== scheduledAt.getTime()) return;
-  if (await deferFutureRoutine(deps.jobs, routineId, scheduledAt)) return;
+  if (generation && scheduledAt.getTime() > Date.now() + 1_000)
+    throw new Error("Versioned routine wake arrived before its scheduled time");
+  if (!generation && (await deferFutureRoutine(deps.jobs, routineId, scheduledAt))) return;
   const bot = await deps.prisma.bot.findUnique({
     where: { id: routine.botId },
     include: { thread: true },
   });
   if (bot?.archivedAt) {
+    if (generation) throw new Error("Versioned routine requires archived-bot reconciliation");
     // Archiving pauses a bot's routines; re-pause one that slipped back to active.
     await deps.prisma.routine.updateMany({
       where: { id: routine.id, active: true },
@@ -152,6 +169,15 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
       })
     : null;
   const thread = targetThread ?? bot.thread;
+  if (generation && routine.watch != null) {
+    const watchClaim = await claimRoutineWatchAttempt(deps.prisma, {
+      routineId,
+      generation,
+      scheduledFor: scheduledAt,
+    });
+    if (watchClaim === "disabled") throw new Error("Routine watch is awaiting scheduler cutover");
+    if (watchClaim !== "claimed") return;
+  }
   // A change trigger checks first, without a model; only news becomes a run.
   const watchTick =
     routine.watch == null
@@ -161,6 +187,7 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
           routine,
           { threadId: thread.id, botId: bot.id },
           scheduledAt,
+          generation,
         );
   if (watchTick && !watchTick.run) return;
   // A schedule with no valid parseable cron among its crons (e.g. a
@@ -181,10 +208,32 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
     spaceId: routine.spaceId,
     userId: routine.userId,
   });
+  const monitor = routine.monitor == null ? null : WorkspaceMonitorSchema.parse(routine.monitor);
   const routinePrompt =
     expandSkillReferencesInPrompt(routine.prompt, skillRecords) +
-    (watchTick?.run ? watchTick.note : "");
+    (watchTick?.run ? watchTick.note : "") +
+    (monitor ? `\n\n${workspaceMonitorPrompt(monitor.kind)}` : "");
   const claimed = await deps.prisma.$transaction(async (tx) => {
+    if (generation) {
+      const gate = await runAsSystemInTransaction(
+        tx,
+        "check the versioned routine scheduling gate",
+        () =>
+          tx.$queryRaw<
+            Array<{ enabled: boolean }>
+          >`SELECT enabled FROM routine_schedule_gate WHERE id FOR SHARE`,
+      );
+      if (!gate[0]?.enabled)
+        throw new Error("Versioned routine wake is awaiting scheduler cutover");
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM routines WHERE id = ${routineId}
+          AND "scheduleGeneration" = ${generation}::bigint FOR UPDATE`;
+      if (!locked.length) return null;
+      await tx.$queryRaw`SELECT set_config('app.scheduler_protocol', '2', true)`;
+      if (watchTick?.run) {
+        await completeRoutineWatchAttempt(tx, { routineId, generation, scheduledFor: scheduledAt });
+      }
+    }
     const updated = await tx.routine.updateMany({
       where: {
         id: routine.id,
@@ -199,15 +248,23 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
         ...(watchTick?.run ? { watchState: watchTick.state } : {}),
       },
     });
-    if (updated.count !== 1) return null;
+    if (updated.count !== 1) {
+      if (generation && watchTick?.run) throw new Error("Routine watch changed before completion");
+      return null;
+    }
     // The claim locks the row, so this is the model that was committed when it fired.
     const currentModel = await tx.routine.findUnique({
       where: { id: routine.id },
       select: { modelProvider: true, modelId: true, thinkingLevel: true },
     });
-    if (!currentModel) return null;
+    if (!currentModel) {
+      if (generation && watchTick?.run) throw new Error("Routine watch changed before completion");
+      return null;
+    }
     const timerTick = routine.watch == null && !isOneShotRoutineCrons(routine.crons);
-    const timerNonce = timerTick ? routineTimerNonce(routine.id, scheduledFor) : undefined;
+    const timerNonce = timerTick
+      ? routineTimerNonce(routine.id, scheduledFor, generation)
+      : undefined;
     if (timerNonce) {
       const pending = await findPendingRoutineTick(tx, {
         routineId: routine.id,
@@ -254,7 +311,7 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
   });
   if (!claimed) return;
   if (claimed === "fired") {
-    if (nextRunAt) await deps.jobs.enqueue(routineWakeupJob(routine.id, nextRunAt));
+    if (nextRunAt && !generation) await deps.jobs.enqueue(routineWakeupJob(routine.id, nextRunAt));
     return;
   }
   if ("cancelledEvents" in claimed && claimed.cancelledEvents) {
@@ -297,13 +354,14 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
   } catch {
     // Best effort: the run is already queued.
   }
-  if (isOneShotRoutineCrons(routine.crons)) {
+  // A versioned claim commits the next generation to the outbox itself.
+  if (!generation && isOneShotRoutineCrons(routine.crons)) {
     try {
       await deps.jobs.cancel(routineJobKey(routine.id));
     } catch {
       // Best effort: the run is already queued for continuation.
     }
-  } else if (nextRunAt) {
+  } else if (!generation && nextRunAt) {
     await deps.jobs.enqueue(routineWakeupJob(routine.id, nextRunAt));
   }
 }

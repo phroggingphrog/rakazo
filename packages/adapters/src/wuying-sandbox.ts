@@ -24,6 +24,7 @@ import {
   WorkspaceTooLargeError,
 } from "@rakazo/adapter-kit";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
+import { getLogger } from "@rakazo/logging";
 import { boundedComputerActions, computerObservation } from "./computer-support.js";
 import { normalizeDesktopWorkspacePath } from "./desktop-sandbox-paths.js";
 import { McpSession } from "./mcp-transport.js";
@@ -159,7 +160,7 @@ export class WuyingMcpTools implements WuyingDesktopTools {
   }
 
   private reset(session: McpSession) {
-    void session.close();
+    void session.close().catch(() => getLogger().warn("Computer gateway session cleanup failed"));
     this.session = undefined;
   }
 }

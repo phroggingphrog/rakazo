@@ -13,6 +13,25 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 
+#: src/pages/RoutineRunHistory.tsx
+msgid "Actions need review"
+msgstr "Некоторые действия требуют проверки"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Remove saved connected_account selector"
+msgstr "Удалить сохранённый селектор connected_account"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Leave this off if connected_account is an argument the tool needs."
+msgstr "Оставьте этот параметр выключенным, если инструменту нужен аргумент connected_account."
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "No Pipedream accounts are connected."
+msgstr "Нет подключённых аккаунтов Pipedream."
+
 #: src/pages/shell/sidebar-roster.tsx
 msgid " (unread)"
 msgstr " (непрочитано)"
@@ -6140,6 +6159,18 @@ msgstr "Сегодня"
 #: src/pages/AccountSettingsOverlay.tsx
 msgid "Tokens"
 msgstr "Токены"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Arguments are saved with this setup."
+msgstr "Аргументы сохраняются вместе с этой настройкой."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested."
+msgstr "Проверьте поля, необходимые для выбранной операции. Не вводите пароли, токены и другие секретные данные; настройте аутентификацию в интеграции. Аргументы ещё не проверены на соответствие операции и не протестированы."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Enter a valid JSON object up to 8 KB."
+msgstr "Введите корректный объект JSON размером не более 8 КБ."
 
 #: src/pages/RoutineEditor.tsx
 msgid "Tool arguments (JSON)"

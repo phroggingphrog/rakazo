@@ -13,6 +13,25 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
+#: src/pages/RoutineRunHistory.tsx
+msgid "Actions need review"
+msgstr "कुछ कार्रवाइयों की समीक्षा ज़रूरी है"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Remove saved connected_account selector"
+msgstr "सहेजा गया connected_account चयनकर्ता हटाएँ"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Leave this off if connected_account is an argument the tool needs."
+msgstr "अगर टूल को connected_account आर्ग्युमेंट चाहिए, तो इसे बंद रखें।"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "No Pipedream accounts are connected."
+msgstr "कोई Pipedream खाता कनेक्ट नहीं है।"
+
 #: src/pages/shell/sidebar-roster.tsx
 msgid " (unread)"
 msgstr " (अपठित)"
@@ -6140,6 +6159,18 @@ msgstr "आज"
 #: src/pages/AccountSettingsOverlay.tsx
 msgid "Tokens"
 msgstr "टोकन"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Arguments are saved with this setup."
+msgstr "आर्ग्युमेंट इस सेटअप के साथ सहेजे जाते हैं।"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested."
+msgstr "चुने गए ऑपरेशन के लिए आवश्यक फ़ील्ड जाँचें। पासवर्ड, टोकन या अन्य गोपनीय जानकारी दर्ज न करें; इंटीग्रेशन में प्रमाणीकरण सेट करें। आर्ग्युमेंट अभी ऑपरेशन के अनुसार सत्यापित या परीक्षण नहीं किए गए हैं।"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Enter a valid JSON object up to 8 KB."
+msgstr "अधिकतम 8 KB का मान्य JSON ऑब्जेक्ट दर्ज करें।"
 
 #: src/pages/RoutineEditor.tsx
 msgid "Tool arguments (JSON)"

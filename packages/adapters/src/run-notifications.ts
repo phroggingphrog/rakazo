@@ -61,6 +61,7 @@ export async function notifyRun(
   options: { retryOnFailure?: boolean } = {},
 ) {
   if (
+    run.trigger === "protected_setup_v2" ||
     !deps.notifications ||
     (isBackgroundRunTrigger(run.trigger) && message.kind !== "help" && message.kind !== "takeover")
   )
@@ -104,7 +105,9 @@ export async function notifyRun(
 }
 
 export function runSendsFinishNotification(trigger: string): boolean {
-  return trigger !== "created" && !isBackgroundRunTrigger(trigger);
+  return (
+    trigger !== "created" && trigger !== "protected_setup_v2" && !isBackgroundRunTrigger(trigger)
+  );
 }
 
 /** User-facing text for completion notifications; empty when only tool/step activity remains. */

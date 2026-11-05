@@ -162,6 +162,23 @@ vi.mock("../components/run-error-sheet", () => ({
 }));
 vi.mock("../components/native-symbol", () => ({ NativeSymbol: () => null }));
 vi.mock("../components/row-accessories", () => ({ Chevron: () => null }));
+vi.mock("../components/email-monitor-setup", () => ({
+  EmailMonitorSetup: ({ botId }: { botId: string }) =>
+    createElement("div", { "data-testid": "email-monitor-setup" }, botId),
+}));
+vi.mock("../components/routine-rearm", () => ({
+  RoutineRearm: ({ onSave, onCancel }: { onSave: (date: Date) => void; onCancel: () => void }) =>
+    createElement(
+      "div",
+      null,
+      createElement("button", { type: "button", onClick: onCancel }, "Cancel rearm"),
+      createElement(
+        "button",
+        { type: "button", onClick: () => onSave(new Date("2099-11-04T10:30:00.000Z")) },
+        "Save rearm",
+      ),
+    ),
+}));
 
 const routine = (id: string, name: string, partial: Partial<Routine> = {}) => ({
   id,
@@ -203,6 +220,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
   vi.useRealTimers();
   queryClient.clear();
 });
@@ -247,7 +265,11 @@ function profileRpc(
   }: {
     bot?: () => Promise<unknown>;
     update?: () => Promise<unknown>;
-    updateRoutine?: (input: { routineId: string; active: boolean }) => Promise<unknown>;
+    updateRoutine?: (input: {
+      routineId: string;
+      active: boolean;
+      runAt?: string;
+    }) => Promise<unknown>;
     removeRoutine?: (input: { routineId: string }) => Promise<unknown>;
     history?: (input: { routineId: string; before?: unknown }) => Promise<unknown>;
     computer?: () => Promise<unknown>;
@@ -614,7 +636,9 @@ describe("routines screen", () => {
   const rowFor = (label: string) =>
     container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
   const rowTexts = () =>
-    [...container.querySelectorAll("button[aria-label]")].map((node) => node.textContent);
+    [...container.querySelectorAll("button[aria-label]")]
+      .filter((node) => node.getAttribute("aria-label") !== "Set up email monitor")
+      .map((node) => node.textContent);
 
   it("lists routines oldest first with their schedule, state and switch", async () => {
     // The server's order and the next run don't decide the order.
@@ -646,7 +670,7 @@ describe("routines screen", () => {
     });
   });
 
-  it("shows a spinner, then the empty text, with no list or button", async () => {
+  it("shows a spinner, then the empty text and monitor setup entry", async () => {
     let load!: (rows: unknown) => void;
     profileRpc(() => new Promise((resolve) => (load = resolve)));
     await render(createElement(RoutinesScreen));
@@ -655,8 +679,16 @@ describe("routines screen", () => {
 
     await act(async () => load([]));
     expect(container.querySelector("progress")).toBeNull();
-    expect(container.textContent).toBe("Ask this Bot in chat to set up a routine.");
-    expect(container.querySelector("button")).toBeNull();
+    expect(container.textContent).toContain("Ask this Bot in chat to set up a routine.");
+    expect(container.textContent).toContain("Set up email monitor");
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('button[aria-label="Set up email monitor"]')!
+        .click();
+    });
+    expect(container.querySelector('[data-testid="email-monitor-setup"]')?.textContent).toBe(
+      "bot-fixture",
+    );
   });
 
   it("offers Try Again after a failed read and its retry, and reloads", async () => {
@@ -809,6 +841,74 @@ describe("routines screen", () => {
       "Could not update routine",
       "This one-shot already ran.",
     );
+  });
+
+  it("asks for a new time before rearming a completed one-shot", async () => {
+    const completed = routine("once", "Reminder", {
+      active: false,
+      crons: ["@once"],
+      lastRunAt: "2026-10-01T10:00:00.000Z",
+      nextRunAt: null,
+    });
+    const updateRoutine = vi.fn(async () => ({
+      ...completed,
+      active: true,
+      nextRunAt: "2099-11-04T10:30:00.000Z",
+    }));
+    profileRpc(async () => [completed], { updateRoutine });
+    await render(createElement(RoutinesScreen));
+    await act(async () => switchFor("Reminder")!.click());
+    expect(updateRoutine).not.toHaveBeenCalled();
+    expect(switchFor("Reminder")!.checked).toBe(false);
+    await act(async () => button("Cancel rearm")!.click());
+    expect(updateRoutine).not.toHaveBeenCalled();
+    await act(async () => switchFor("Reminder")!.click());
+    await act(async () => button("Save rearm")!.click());
+    expect(updateRoutine).toHaveBeenCalledExactlyOnceWith({
+      routineId: "once",
+      active: true,
+      runAt: "2099-11-04T10:30:00.000Z",
+    });
+    expect(switchFor("Reminder")!.checked).toBe(true);
+  });
+
+  it("does not rearm a routine from a previous account", async () => {
+    const completed = routine("once", "Reminder", {
+      active: false,
+      crons: ["@once"],
+      nextRunAt: null,
+    });
+    const updateRoutine = vi.fn(async () => completed);
+    profileRpc(async () => [completed], { updateRoutine });
+    await render(createElement(RoutinesScreen));
+    await act(async () => switchFor("Reminder")!.click());
+    session.generation += 1;
+    await act(async () => button("Save rearm")!.click());
+    expect(updateRoutine).not.toHaveBeenCalled();
+  });
+
+  it("sends only one rearm when save is pressed twice before the first render", async () => {
+    const completed = routine("once", "Reminder", {
+      active: false,
+      crons: ["@once"],
+      nextRunAt: null,
+    });
+    let finish!: (value: unknown) => void;
+    const updateRoutine = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    profileRpc(async () => [completed], { updateRoutine });
+    await render(createElement(RoutinesScreen));
+    await act(async () => switchFor("Reminder")!.click());
+    await act(async () => {
+      button("Save rearm")!.click();
+      button("Save rearm")!.click();
+    });
+    expect(updateRoutine).toHaveBeenCalledTimes(1);
+    await act(async () => finish({ ...completed, active: true }));
   });
 
   it("stays quiet about a failed save a newer tap replaced", async () => {
@@ -974,6 +1074,7 @@ describe("routine detail", () => {
   });
 
   it("reads again once a save running when it opened finishes", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     let save!: (row: unknown) => void;
     params.current = { botId: "bot-fixture", name: "Fixture" };
     profileRpc(async () => [routine("r1", "Morning digest"), routine("r2", "Weekly report")], {
@@ -1007,6 +1108,7 @@ describe("routine detail", () => {
   });
 
   it("waits for a fresh read before calling a routine that isn't cached yet gone", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     // The bot's list was read earlier, before the routine was created elsewhere.
     params.current = { botId: "bot-fixture", name: "Fixture" };
     profileRpc(async () => []);
@@ -1025,8 +1127,37 @@ describe("routine detail", () => {
     expect(container.textContent).toContain("Check the inbox");
   });
 
+  it("waits for the deferred read after a save before declaring a routine missing", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    let save!: (row: unknown) => void;
+    profileRpc(async () => [routine("r2", "Weekly report")], {
+      updateRoutine: () => new Promise((resolve) => (save = resolve)),
+    });
+    params.current = { botId: "bot-fixture", name: "Fixture" };
+    await render(createElement(RoutinesScreen));
+    await act(async () =>
+      container
+        .querySelector<HTMLInputElement>('input[aria-label="Active: Weekly report"]')!
+        .click(),
+    );
+    act(() => root.unmount());
+    root = createRoot(container);
+
+    let load!: (rows: unknown) => void;
+    profileRpc(() => new Promise((resolve) => (load = resolve)));
+    params.current = { botId: "bot-fixture", botName: "Fixture", routineId: "r1" };
+    await render(createElement(RoutineDetail));
+    expect(container.querySelector("progress")).toBeTruthy();
+    await act(async () => save(routine("r2", "Weekly report", { active: false })));
+    expect(container.querySelector("progress")).toBeTruthy();
+    expect(container.textContent).not.toContain("This routine no longer exists");
+    await act(async () => load([routine("r2", "Weekly report")]));
+    expect(container.textContent).toContain("This routine no longer exists");
+  });
+
   it("shows the load error, not a missing routine, when the fresh read fails", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     params.current = { botId: "bot-fixture", name: "Fixture" };
     profileRpc(async () => []);
     await render(createElement(BotProfile));
@@ -1038,15 +1169,87 @@ describe("routine detail", () => {
     });
     params.current = { botId: "bot-fixture", botName: "Fixture", routineId: "r1" };
     await render(createElement(RoutineDetail));
+    expect(container.querySelector("progress")).toBeTruthy();
+    expect(container.textContent).not.toContain("This routine no longer exists");
     await act(async () => vi.advanceTimersByTimeAsync(ROUTINES_RETRY_MS));
     expect(container.textContent).toContain("offline");
     expect(container.textContent).not.toContain("This routine no longer exists");
+  });
+
+  it("marks a missing routine gone after a successful read in the same millisecond", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    params.current = { botId: "bot-fixture", name: "Fixture" };
+    profileRpc(async () => []);
+    await render(createElement(BotProfile));
+    act(() => root.unmount());
+    root = createRoot(container);
+
+    let load!: (rows: unknown) => void;
+    profileRpc(() => new Promise((resolve) => (load = resolve)));
+    params.current = { botId: "bot-fixture", botName: "Fixture", routineId: "r1" };
+    await render(createElement(RoutineDetail));
+    expect(container.querySelector("progress")).toBeTruthy();
+    await act(async () => load([]));
+    expect(container.textContent).toContain("This routine no longer exists");
   });
 
   it("says when the routine is gone", async () => {
     profileRpc(async () => [routine("r2", "Weekly report")]);
     await render(createElement(RoutineDetail));
     expect(container.textContent).toContain("This routine no longer exists");
+  });
+
+  it.each([
+    ["unknown", "Notification status unknown"],
+    ["pending", "Notification queued"],
+    ["submitting", "Notification submission started; outcome pending"],
+    ["uncertain", "Notification delivery unknown"],
+    ["undeliverable", "No available push recipient"],
+    ["cancelled", "Notification cancelled"],
+    ["blocked", "Notification blocked before sending"],
+    ["expo_accepted", "Push accepted by Expo; device delivery not confirmed"],
+    ["expo_receipt_ok", "Expo receipt was successful; device display not confirmed"],
+    ["expo_receipt_error", "Expo reported a push delivery error"],
+    ["expo_receipt_unavailable", "Expo receipt unavailable; device delivery not confirmed"],
+  ] as const)("shows routine notification state %s", async (notification, label) => {
+    const run = {
+      id: "run-1",
+      botId: "bot-fixture",
+      groupId: null,
+      status: "completed",
+      error: null,
+      createdAt: "2026-01-02T12:00:00Z",
+      startedAt: null,
+      completedAt: null,
+      messageId: null,
+      notification,
+    };
+    profileRpc(async () => [routine("r1", "Morning digest")], {
+      history: async () => ({ runs: [run], nextCursor: null }),
+    });
+    await render(createElement(RoutineDetail));
+    expect(container.textContent).toContain(label);
+  });
+
+  it("explains exhausted notification preparation", async () => {
+    const run = {
+      id: "run-1",
+      botId: "bot-fixture",
+      groupId: null,
+      status: "completed",
+      error: null,
+      createdAt: "2026-01-02T12:00:00Z",
+      startedAt: null,
+      completedAt: null,
+      messageId: null,
+      notification: "blocked",
+      notificationRetryExhausted: true,
+    };
+    profileRpc(async () => [routine("r1", "Morning digest")], {
+      history: async () => ({ runs: [run], nextCursor: null }),
+    });
+    await render(createElement(RoutineDetail));
+    expect(container.textContent).toContain("Notification not sent; preparation retries exhausted");
   });
 
   it("lists the routine's runs and opens a reply at its message", async () => {
@@ -1060,22 +1263,32 @@ describe("routine detail", () => {
       startedAt: "2026-01-02T12:00:00Z",
       completedAt: "2026-01-02T12:01:22Z",
       messageId: "reply-1",
+      notification: "expo_accepted",
     };
     profileRpc(async () => [routine("r1", "Morning digest")], {
       history: async () => ({
         runs: [
           run,
           { ...run, id: "run-2", groupId: "group-1", messageId: "reply-2" },
-          { ...run, id: "run-3", status: "failed", error: "504: timed out", messageId: null },
+          {
+            ...run,
+            id: "run-3",
+            status: "failed",
+            error: "504: timed out",
+            messageId: null,
+            notification: "uncertain",
+          },
         ],
         nextCursor: null,
       }),
     });
     await render(createElement(RoutineDetail));
     expect(container.textContent).toContain("Run history");
+    expect(container.textContent).toContain("Push accepted by Expo; device delivery not confirmed");
     expect(container.textContent).not.toContain("1m 22s");
     expect(container.textContent).not.toContain("Done");
     expect(container.textContent).toContain("summary: 504: timed out");
+    expect(container.textContent).toContain("Notification delivery unknown");
     expect(container.textContent).not.toContain("Load older runs");
     const rows = [...container.querySelectorAll("button")].filter((node) =>
       node.textContent?.includes("Jan 2,"),

@@ -1,4 +1,8 @@
 export const ZH_MESSAGES: Record<string, string> = {
+  "Arguments are saved with this setup.": "参数会随此设置一起保存。",
+  "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested.":
+    "请检查所选操作需要的字段。不要输入密码、令牌或其他密钥；请在集成中配置身份验证。参数尚未根据操作进行验证或测试。",
+  "Enter a valid JSON object up to 8 KB.": "请输入不超过 8 KB 的有效 JSON 对象。",
   "How other bots see it": "其他机器人如何了解它",
   "Share to": "分享到",
   "{count} files": "{count} 个文件",
@@ -1139,6 +1143,7 @@ export const ZH_MESSAGES: Record<string, string> = {
   "Always open {site}": "始终打开 {site}",
   "Trusted sites": "受信任的网站",
   "Run history": "运行记录",
+  "Actions need review": "有操作需要检查",
   "No reply": "未回复",
   "No runs yet": "还没有运行记录",
   "Load older runs": "加载更早的运行记录",

@@ -75,6 +75,199 @@ function noGroupMemberships() {
 }
 
 describe("spawned bot creation", () => {
+  it("does not commit the bot or task when initial run creation fails", async () => {
+    const committed = { bot: false, task: false, run: false };
+    const message = vi
+      .spyOn(await import("@rakazo/db"), "createThreadMessageInTransaction")
+      .mockResolvedValue({} as never);
+    const tx = {
+      thread: { findFirstOrThrow: vi.fn(async () => ({ id: "thread-gap" })) },
+      task: { create: vi.fn(async () => ({ id: "staged-task" })) },
+      run: {
+        create: vi.fn(async () => {
+          throw new Error("synthetic run transaction failure");
+        }),
+      },
+    };
+    const createBot = vi.fn(
+      async (_actor: unknown, options: { seed?: (tx: unknown, id: string) => Promise<void> }) => {
+        await options.seed?.(tx, "child-gap");
+        committed.bot = true;
+        committed.task = true;
+        committed.run = true;
+        return { id: "child-gap", name: "Scout", threadId: "thread-gap" };
+      },
+    );
+    const repos = vi.spyOn(await import("@rakazo/db"), "createRepos").mockReturnValue({
+      createBot,
+    } as unknown as ReturnType<typeof createRepos>);
+    const prisma = {
+      bot: { findUnique: vi.fn(async () => null) },
+      run: { findUnique: vi.fn(async () => null) },
+      $transaction: vi.fn(async () => {
+        throw new Error("synthetic run transaction failure");
+      }),
+    } as unknown as PrismaClient;
+    try {
+      await expect(
+        spawnBot(
+          { prisma, jobs: { enqueue: vi.fn() } as unknown as JobPublisher },
+          {
+            spawnedBy: { id: "parent", name: "Parent", spaceId: "space", userId: "owner" },
+            runId: "parent-run",
+            spawnKey: "gap-key",
+            name: "Scout",
+            prompt: "Do the task",
+          },
+        ),
+      ).rejects.toThrow("synthetic run transaction failure");
+      expect(committed).toEqual({ bot: false, task: false, run: false });
+      expect(tx.task.create).toHaveBeenCalledOnce();
+      expect(tx.run.create).toHaveBeenCalledOnce();
+      expect(message).toHaveBeenCalledOnce();
+    } finally {
+      message.mockRestore();
+      repos.mockRestore();
+    }
+  });
+
+  it("commits the prompted run with its bot and reuses it on a same-key retry", async () => {
+    const message = vi
+      .spyOn(await import("@rakazo/db"), "createThreadMessageInTransaction")
+      .mockResolvedValue({} as never);
+    const savedRun = { id: "child-run", taskId: "child-task" };
+    let committed = false;
+    const taskCreate = vi.fn(async () => ({ id: "child-task" }));
+    const runCreate = vi.fn(async () => savedRun);
+    const tx = {
+      thread: { findFirstOrThrow: vi.fn(async () => ({ id: "child-thread" })) },
+      task: { create: taskCreate },
+      run: { create: runCreate },
+    };
+    const createBot = vi.fn(
+      async (_actor: unknown, options: { seed?: (tx: unknown, id: string) => Promise<void> }) => {
+        if (committed) throw new Error("synthetic duplicate");
+        await options.seed?.(tx, "child");
+        committed = true;
+        return { id: "child", name: "Scout", threadId: "child-thread" };
+      },
+    );
+    const repos = vi
+      .spyOn(await import("@rakazo/db"), "createRepos")
+      .mockReturnValue({ createBot } as unknown as ReturnType<typeof createRepos>);
+    const fallback = vi.fn();
+    const prisma = {
+      bot: {
+        findUnique: vi.fn(async () =>
+          committed ? { id: "child", name: "Scout", thread: { id: "child-thread" } } : null,
+        ),
+      },
+      run: { findUnique: vi.fn(async () => (committed ? savedRun : null)) },
+      $transaction: fallback,
+    } as unknown as PrismaClient;
+    const enqueue = vi.fn(async () => undefined);
+    const deps = { prisma, jobs: { enqueue } as unknown as JobPublisher };
+    const input = {
+      spawnedBy: { id: "parent", name: "Parent", spaceId: "space", userId: "owner" },
+      runId: "parent-run",
+      spawnKey: "same-key",
+      name: "Scout",
+      prompt: "Do the task",
+    };
+    try {
+      const first = await spawnBot(deps, input);
+      const retry = await spawnBot(deps, input);
+      expect(first).toMatchObject({
+        botId: "child",
+        initialRun: { runId: "child-run", taskId: "child-task", wakeRequest: "returned" },
+      });
+      expect(retry).toMatchObject({
+        botId: "child",
+        duplicate: true,
+        initialRun: { runId: "child-run", taskId: "child-task" },
+      });
+      expect(taskCreate).toHaveBeenCalledOnce();
+      expect(runCreate).toHaveBeenCalledOnce();
+      expect(runCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            botId: "child",
+            threadId: "child-thread",
+            userId: "owner",
+            clientNonce: "spawn:same-key",
+            status: "queued",
+            trigger: "spawn",
+          }),
+        }),
+      );
+      expect(message).toHaveBeenCalledWith(
+        tx,
+        expect.objectContaining({
+          threadId: "child-thread",
+          runId: "parent-run",
+          blocks: [{ kind: "text", text: "Do the task" }],
+        }),
+      );
+      expect(fallback).not.toHaveBeenCalled();
+      expect(enqueue).toHaveBeenCalledTimes(2);
+      expect(enqueue.mock.calls[0]).toEqual(enqueue.mock.calls[1]);
+    } finally {
+      message.mockRestore();
+      repos.mockRestore();
+    }
+  });
+
+  it("repairs a previously created bot that has no initial run", async () => {
+    const message = vi
+      .spyOn(await import("@rakazo/db"), "createThreadMessageInTransaction")
+      .mockResolvedValue({} as never);
+    const repos = vi.spyOn(await import("@rakazo/db"), "createRepos").mockReturnValue({
+      createBot: vi.fn(async () => {
+        throw new Error("synthetic existing bot");
+      }),
+    } as unknown as ReturnType<typeof createRepos>);
+    const taskCreate = vi.fn(async () => ({ id: "legacy-task" }));
+    const runCreate = vi.fn(async () => ({ id: "legacy-run", taskId: "legacy-task" }));
+    const tx = { task: { create: taskCreate }, run: { create: runCreate } };
+    const prisma = {
+      bot: {
+        findUnique: vi.fn(async () => ({
+          id: "legacy-bot",
+          name: "Scout",
+          thread: { id: "legacy-thread" },
+        })),
+      },
+      run: { findUnique: vi.fn(async () => null) },
+      $transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(tx)),
+    } as unknown as PrismaClient;
+    try {
+      const result = await spawnBot(
+        { prisma, jobs: { enqueue: vi.fn() } as unknown as JobPublisher },
+        {
+          spawnedBy: { id: "parent", name: "Parent", spaceId: "space", userId: "owner" },
+          runId: "parent-run",
+          spawnKey: "legacy-key",
+          name: "Scout",
+          prompt: "Resume work",
+        },
+      );
+      expect(result).toMatchObject({
+        botId: "legacy-bot",
+        duplicate: true,
+        initialRun: { runId: "legacy-run", taskId: "legacy-task" },
+      });
+      expect(runCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ botId: "legacy-bot", clientNonce: "spawn:legacy-key" }),
+        }),
+      );
+      expect(message).toHaveBeenCalledOnce();
+    } finally {
+      message.mockRestore();
+      repos.mockRestore();
+    }
+  });
+
   it("returns the existing child when a spawn is retried", async () => {
     const findUnique = vi.fn().mockResolvedValue({
       id: "child-1",
@@ -89,7 +282,7 @@ describe("spawned bot creation", () => {
         findUnique,
       },
       deploymentSettings: { findUnique: vi.fn().mockResolvedValue(null) },
-      run: { findUnique: vi.fn().mockResolvedValue({ id: "child-run-1" }) },
+      run: { findUnique: vi.fn().mockResolvedValue({ id: "child-run-1", taskId: "child-task-1" }) },
       $transaction: vi.fn().mockRejectedValue(new Error("unique spawn key")),
     } as unknown as PrismaClient;
 
@@ -128,8 +321,61 @@ describe("spawned bot creation", () => {
       botId: "child-1",
       name: "Scout",
       threadId: "thread-1",
+      initialRun: {
+        runId: "child-run-1",
+        taskId: "child-task-1",
+        wakeRequest: "returned",
+        note: "The wake request returned; check this run's status for execution and completion.",
+      },
     });
     expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("reports an unknown wake outcome and retains the same run on a retry", async () => {
+    const enqueue = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("connection lost after admission"))
+      .mockResolvedValueOnce(undefined);
+    const prisma = {
+      bot: {
+        count: vi.fn().mockResolvedValue(0),
+        findFirst: vi.fn().mockResolvedValue({ id: "parent-1" }),
+        findUnique: vi.fn().mockResolvedValue({
+          id: "child-1",
+          name: "Scout",
+          thread: { id: "thread-1" },
+        }),
+      },
+      deploymentSettings: { findUnique: vi.fn().mockResolvedValue(null) },
+      run: { findUnique: vi.fn().mockResolvedValue({ id: "child-run-1", taskId: "child-task-1" }) },
+      $transaction: vi.fn().mockRejectedValue(new Error("unique spawn key")),
+    } as unknown as PrismaClient;
+    const deps = { prisma, jobs: { enqueue } as unknown as JobPublisher };
+    const input = {
+      spawnedBy: { id: "parent-1", name: "Chief", spaceId: "workspace-1", userId: "user-1" },
+      runId: "run-1",
+      spawnKey: "tool-call-1",
+      name: "Scout",
+      prompt: "Investigate the request",
+    };
+
+    const first = await spawnBot(deps, input);
+    expect(first).toMatchObject({
+      ok: true,
+      botId: "child-1",
+      initialRun: { runId: "child-run-1", taskId: "child-task-1", wakeRequest: "unknown" },
+    });
+    expect("initialRun" in first && first.initialRun?.note).toContain(
+      "do not create another bot or task",
+    );
+
+    const retry = await spawnBot(deps, input);
+    expect(retry).toMatchObject({
+      botId: "child-1",
+      initialRun: { runId: "child-run-1", taskId: "child-task-1", wakeRequest: "returned" },
+    });
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(enqueue.mock.calls[0]).toEqual(enqueue.mock.calls[1]);
   });
 
   it("passes computerMode through to createBot", async () => {
@@ -291,9 +537,10 @@ describe("destroyBot", () => {
     const removeArtifact = vi.fn().mockResolvedValue(undefined);
     const findArtifacts = vi.fn().mockResolvedValue([{ storageKey: "stored-artifact" }]);
     const deleteArtifacts = vi.fn().mockResolvedValue({ count: 1 });
+    const queryRaw = vi.fn().mockResolvedValue([{ id: "bot-1" }]);
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
-        $queryRaw: vi.fn().mockResolvedValue([{ id: "bot-1" }]),
+        $queryRaw: queryRaw,
         chatGroup: {
           findMany: vi.fn().mockResolvedValue([]),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
@@ -339,6 +586,10 @@ describe("destroyBot", () => {
     );
 
     expect(transaction).toHaveBeenCalledOnce();
+    expect(String(queryRaw.mock.calls[0]?.[0])).toContain("app.scheduler_protocol");
+    expect(queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteBot.mock.invocationCallOrder[0]!,
+    );
     expect(releaseComputers).toHaveBeenCalledWith({
       where: {
         OR: [{ controlBotId: "bot-1" }, { executionBotId: "bot-1" }],
@@ -2053,7 +2304,11 @@ describe("archiveBot", () => {
       where: { id: "bot-1" },
       data: { archivedAt: expect.any(Date), pinned: false },
     });
-    expect(groupCleanup.$queryRaw).not.toHaveBeenCalled();
+    expect(groupCleanup.$queryRaw).toHaveBeenCalledOnce();
+    expect(String(groupCleanup.$queryRaw.mock.calls[0]?.[0])).toContain("app.scheduler_protocol");
+    expect(groupCleanup.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      disableRoutines.mock.invocationCallOrder[0]!,
+    );
     expect(groupCleanup.chatGroup.deleteMany).not.toHaveBeenCalled();
     expect(groupCleanup.chatGroupMember.deleteMany).not.toHaveBeenCalled();
     // The archived bot's cancelled run never reads a waiting one-time answer.

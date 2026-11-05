@@ -15,6 +15,10 @@ export interface AdapterContext {
   runId?: string;
   /** A change check compares whole results, so an oversize MCP result is returned inline (capped), never as a stored receipt. */
   inlineLargeOutput?: boolean;
+  /** Recheck a monitor's MCP source and assignment around its read. Not a revocation fence. */
+  monitorSourceRecheck?: boolean;
+  /** Permit an unambiguous legacy Pipedream account reference in a nonapproval watch. */
+  legacyPipedreamWatchSelection?: boolean;
   /** Opaque fence for releasing a graphical screen without tearing down its replacement. */
   screenLeaseId?: string;
   /** Retain a completed run's screen for reuse by this bot. */
@@ -291,6 +295,41 @@ export interface ConnectorRoute {
   resourceRevision?: string | number;
   /** Source label for lazy catalog name indexes. Never exposed as a model schema field. */
   catalogGroup?: string;
+  /** Discovery identified this installed resource as MCP rather than API or GraphQL. */
+  installedMcp?: boolean;
+  installedMcpBinding?: InstalledMcpBinding;
+  /** Pipedream's injected account chooser; null means discovery added no chooser. */
+  pipedreamAccountSelector?: string | null;
+  /** Local connection selected when discovery found a single Pipedream account. */
+  pipedreamSingletonConnectionId?: string;
+  /** The provider schema reserves every supported flat account chooser name. */
+  pipedreamAccountSelectorUnsupported?: boolean;
+  /** Provider arguments are nested separately from Pipedream's account chooser. */
+  pipedreamAccountEnvelope?: boolean;
+  /** Existing catalog validation cannot safely parse this provider schema. */
+  pipedreamAccountCatalogUnsupported?: boolean;
+}
+
+/** Non-secret, equality-only generations for an installed MCP source and its access. */
+export interface InstalledMcpBinding {
+  version: 1;
+  installId: string;
+  sourceGeneration: string;
+  availability: "home" | "all" | "space";
+  spaceGeneration: string | null;
+  secretUsed: boolean;
+  secretId: string | null;
+  secretGeneration: string | null;
+  credentialFingerprint: string | null;
+}
+
+/** Non-secret local identity for one approved Pipedream account. */
+export interface PipedreamAccountBinding {
+  version: 1;
+  connectionId: string;
+  generation: string;
+  namespace: string;
+  providerEpoch: string;
 }
 
 export interface ConnectorCall {
@@ -304,7 +343,7 @@ export interface ConnectorCall {
 export type ConnectorEvent =
   | { type: "log"; message: string }
   | { type: "result"; data: unknown }
-  | { type: "error"; message: string; logIds?: string[] };
+  | { type: "error"; message: string; logIds?: string[]; outcome?: "unknown" };
 
 export interface ConnectorCapabilities {
   discover: boolean;
@@ -750,7 +789,7 @@ export interface VoiceTranscribeRequest {
 
 export interface BackgroundJobPayloads {
   "run.continue": { runId: string };
-  "routine.wakeup": { routineId: string; scheduledFor: string };
+  "routine.wakeup": { routineId: string; scheduledFor: string; generation?: string };
   /** Run a failed routine run once more; the payload names the failed run. */
   "routine.retry": { runId: string };
   "computer.sleep": { computerId: string };
@@ -766,7 +805,12 @@ export interface BackgroundJobPayloads {
   "cloud_agent.poll": { agentId: string };
   "purchase.poll": { purchaseId: string };
   /** Read an Expo push receipt; the token is identified by its digest, never stored. */
-  "push.receipt": { userId: string; ticketId: string; tokenDigest: string };
+  "push.receipt": {
+    userId: string;
+    ticketId: string;
+    tokenDigest: string;
+    routine?: { intentId: string; spaceId: string };
+  };
   /** Proactive core: apply a scope's stored events, decide its due group, hand over wakes, fire timers. */
   "proactive.apply": { scope: string };
   "proactive.decide": { scope: string };

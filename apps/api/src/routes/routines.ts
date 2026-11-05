@@ -1,26 +1,33 @@
 import { ORPCError } from "@orpc/server";
 import { routineJobKey, routineWakeupJob, runContinueJob } from "@rakazo/adapter-kit";
-import { parseRoutineWatch, stableStringify, validateRoutineWatch } from "@rakazo/adapters";
+import {
+  isRoutineWatchUncertainError,
+  parseRoutineWatch,
+  prepareRoutineWatchBinding,
+  ROUTINE_WATCH_UNCERTAIN_MESSAGE,
+  stableStringify,
+  validateRoutineWatch,
+} from "@rakazo/adapters";
 import { canonicalPiProviderId } from "@rakazo/contracts";
 import {
   expandSkillReferencesInPrompt,
   hasMixedOneShotSchedule,
   isOneShotRoutineCrons,
 } from "@rakazo/core";
-import { IsolationError, Prisma } from "@rakazo/db";
+import { IsolationError, Prisma, runAsSystemInTransaction } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { assertRoutineModel } from "../model-pins.js";
 import { listRoutineRuns } from "../routine-runs.js";
 import {
   assertRoutineSchedule,
+  createRoutineScheduled,
   createRoutineTestRun,
   firstWatchCheck,
   listRoutinesDto,
   mapRoutine,
   nextRoutineDate,
   routineDto,
-  routineNextRunAt,
-  routineRowData,
+  routineSchedulerMode,
   routineTestRunNonce,
   routineTestTarget,
 } from "../routines.js";
@@ -58,9 +65,28 @@ export function routinesRoutes(ctx: RouterContext) {
         await repos.getBot(context.actor, input.botId);
         return listRoutinesDto(deps, context.actor, input.botId);
       }),
+      watchAttempt: authed.routines.watchAttempt.handler(async ({ context, input }) =>
+        deps.prisma.$transaction(async (tx) => {
+          const owned = await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM routines WHERE id = ${input.routineId}
+              AND "spaceId" = ${context.actor.spaceId} AND "userId" = ${context.actor.userId}
+            FOR SHARE`;
+          if (!owned.length) throw new ORPCError("NOT_FOUND");
+          const attempts = await runAsSystemInTransaction(
+            tx,
+            "inspect an owner's routine watch",
+            () =>
+              tx.$queryRaw<Array<{ state: string }>>`
+              SELECT state FROM routine_watch_attempts
+              WHERE "routineId" = ${input.routineId} AND state = 'uncertain' LIMIT 1`,
+          );
+          return { state: attempts.length ? ("uncertain" as const) : ("none" as const) };
+        }),
+      ),
       create: authed.routines.create.handler(async ({ context, input }) => {
         assertRoutineSchedule(input);
         const bot = await repos.getBot(context.actor, input.botId);
+        let preparedWatch: Awaited<ReturnType<typeof prepareRoutineWatchBinding>> | undefined;
         if (input.watch) {
           try {
             await validateRoutineWatch(
@@ -69,6 +95,11 @@ export function routinesRoutes(ctx: RouterContext) {
               { ...context.actor, botId: bot.id },
               bot.computer,
             );
+            preparedWatch = await prepareRoutineWatchBinding(
+              deps,
+              { ...context.actor, botId: bot.id },
+              input.watch,
+            );
           } catch (error) {
             throw new ORPCError("BAD_REQUEST", {
               message: error instanceof Error ? error.message : "Invalid change trigger.",
@@ -76,10 +107,13 @@ export function routinesRoutes(ctx: RouterContext) {
           }
         }
         await assertRoutineModel(deps, context.actor, input, codexCatalog);
-        const row = await deps.prisma.routine.create({
-          data: routineRowData(context.actor, input, routineNextRunAt(input)),
-        });
-        await announceRoutine(context.actor, bot, row);
+        const { row, versioned } = await createRoutineScheduled(
+          deps.prisma,
+          context.actor,
+          preparedWatch ? { ...input, watch: preparedWatch.watch } : input,
+          preparedWatch?.recheck,
+        );
+        await announceRoutine(context.actor, bot, row, { versioned });
         return mapRoutine(row);
       }),
       update: authed.routines.update.handler(async ({ context, input }) => {
@@ -93,6 +127,10 @@ export function routinesRoutes(ctx: RouterContext) {
           },
         });
         if (!existing) throw new ORPCError("NOT_FOUND");
+        if (existing.protected && input.active === true)
+          throw new ORPCError("CONFLICT", {
+            message: "Protected setup execution is not available yet.",
+          });
         const bot = await repos.getBot(context.actor, existing.botId);
         const active = input.active ?? existing.active;
         const crons = input.crons ?? existing.crons;
@@ -131,7 +169,7 @@ export function routinesRoutes(ctx: RouterContext) {
         if (modelChanged) {
           await assertRoutineModel(deps, context.actor, { modelProvider, modelId }, codexCatalog);
         }
-        const watch = input.watch === undefined ? parseRoutineWatch(existing.watch) : input.watch;
+        let preparedWatch: Awaited<ReturnType<typeof prepareRoutineWatchBinding>> | undefined;
         if (input.watch) {
           try {
             await validateRoutineWatch(
@@ -140,15 +178,25 @@ export function routinesRoutes(ctx: RouterContext) {
               { ...context.actor, botId: bot.id },
               bot.computer,
             );
+            preparedWatch = await prepareRoutineWatchBinding(
+              deps,
+              { ...context.actor, botId: bot.id },
+              input.watch,
+              parseRoutineWatch(existing.watch),
+            );
           } catch (error) {
             throw new ORPCError("BAD_REQUEST", {
               message: error instanceof Error ? error.message : "Invalid change trigger.",
             });
           }
         }
+        const watch =
+          input.watch === undefined
+            ? parseRoutineWatch(existing.watch)
+            : (preparedWatch?.watch ?? null);
         const watchChanged =
           input.watch !== undefined &&
-          stableStringify(input.watch) !== stableStringify(parseRoutineWatch(existing.watch));
+          stableStringify(watch) !== stableStringify(parseRoutineWatch(existing.watch));
         if (crons.length === 0 && !webhookEnabled && !githubEnabled && !messageProvider && !watch) {
           throw new ORPCError("BAD_REQUEST", {
             message: "Add a schedule, webhook, GitHub, message, or change trigger",
@@ -170,11 +218,6 @@ export function routinesRoutes(ctx: RouterContext) {
               message: "One-shot schedules must be created from chat.",
             });
           }
-          if (!existing.nextRunAt && existing.lastRunAt) {
-            throw new ORPCError("BAD_REQUEST", {
-              message: "This one-shot already ran.",
-            });
-          }
         }
         const scheduleChanged =
           (!existing.active && active) ||
@@ -188,7 +231,7 @@ export function routinesRoutes(ctx: RouterContext) {
             ? nextRoutineDate(crons, timezone)
             : null;
         let armedOneShotAt: Date | null = null;
-        if (active && isOneShotRoutineCrons(crons) && !existing.nextRunAt && !existing.lastRunAt) {
+        if (active && isOneShotRoutineCrons(crons) && !existing.nextRunAt) {
           if (!input.runAt) {
             throw new ORPCError("BAD_REQUEST", {
               message: "Add a run time for this one-shot.",
@@ -203,7 +246,7 @@ export function routinesRoutes(ctx: RouterContext) {
           armedOneShotAt = parsed;
         } else if (input.runAt !== undefined) {
           throw new ORPCError("BAD_REQUEST", {
-            message: "A run time is only for one-shots that have not run yet.",
+            message: "A run time is only for an unarmed one-shot.",
           });
         }
         const nextRunAt = !active
@@ -225,43 +268,70 @@ export function routinesRoutes(ctx: RouterContext) {
         // Re-check the parent in the write itself so an archive that lands after the read wins.
         // Model and schedule patches must also match the snapshot they were computed from, so a
         // tick that fired after the read is not rewound onto an occurrence that already ran.
-        const row = await deps.prisma.routine
-          .update({
-            where: {
-              id: existing.id,
-              bot: { archivedAt: null },
-              ...(touchesModel
-                ? {
-                    modelProvider: existing.modelProvider,
-                    modelId: existing.modelId,
-                    thinkingLevel: existing.thinkingLevel,
-                  }
-                : {}),
-              ...(writesSchedule ? { nextRunAt: existing.nextRunAt } : {}),
-              ...(writesActive ? { active: existing.active } : {}),
-            },
-            data: {
-              name: input.name,
-              prompt: input.prompt,
-              crons: input.crons,
-              timezone: input.timezone,
-              active: input.active,
-              notify: input.notify,
-              webhookEnabled: input.webhookEnabled,
-              githubEnabled: input.githubEnabled,
-              messageProvider: input.messageProvider,
-              ...(touchesModel ? { modelProvider, modelId, thinkingLevel } : {}),
-              // A changed watch starts from a fresh baseline.
-              ...(input.watch === undefined
-                ? {}
-                : {
-                    watch: (input.watch as Prisma.InputJsonValue | null) ?? Prisma.DbNull,
-                    ...(watchChanged ? { watchState: Prisma.DbNull } : {}),
-                  }),
-              ...(writesSchedule ? { nextRunAt } : {}),
-            },
+        const { row, versioned } = await deps.prisma
+          .$transaction(async (tx) => {
+            const versioned = await routineSchedulerMode(tx);
+            if (preparedWatch?.recheck && !(await preparedWatch.recheck(tx)))
+              throw new ORPCError("CONFLICT", {
+                message: "The selected account changed. Choose it again.",
+              });
+            if (versioned && active && watch && (scheduleChanged || watchChanged || writesActive)) {
+              throw new ORPCError("CONFLICT", {
+                message: "Versioned routine watch execution is unavailable.",
+              });
+            }
+            const row = await tx.routine.update({
+              where: {
+                id: existing.id,
+                bot: { archivedAt: null },
+                ...(input.watch !== undefined
+                  ? {
+                      watch: {
+                        equals: (existing.watch as Prisma.InputJsonValue | null) ?? Prisma.DbNull,
+                      },
+                    }
+                  : {}),
+                ...(touchesModel
+                  ? {
+                      modelProvider: existing.modelProvider,
+                      modelId: existing.modelId,
+                      thinkingLevel: existing.thinkingLevel,
+                    }
+                  : {}),
+                ...(writesSchedule ? { nextRunAt: existing.nextRunAt } : {}),
+                ...(writesActive ? { active: existing.active } : {}),
+                ...(armedOneShotAt
+                  ? { crons: { equals: existing.crons }, lastRunAt: existing.lastRunAt }
+                  : {}),
+              },
+              data: {
+                name: input.name,
+                prompt: input.prompt,
+                crons: input.crons,
+                timezone: input.timezone,
+                active: input.active,
+                notify: input.notify,
+                webhookEnabled: input.webhookEnabled,
+                githubEnabled: input.githubEnabled,
+                messageProvider: input.messageProvider,
+                ...(touchesModel ? { modelProvider, modelId, thinkingLevel } : {}),
+                ...(input.monitor === undefined ? {} : { monitor: input.monitor ?? Prisma.DbNull }),
+                // A changed watch starts from a fresh baseline.
+                ...(input.watch === undefined
+                  ? {}
+                  : {
+                      watch: (watch as Prisma.InputJsonValue | null) ?? Prisma.DbNull,
+                      ...(watchChanged ? { watchState: Prisma.DbNull } : {}),
+                    }),
+                ...(writesSchedule ? { nextRunAt } : {}),
+              },
+            });
+            return { row, versioned };
           })
           .catch(async (error: unknown) => {
+            if (isRoutineWatchUncertainError(error)) {
+              throw new ORPCError("CONFLICT", { message: ROUTINE_WATCH_UNCERTAIN_MESSAGE });
+            }
             if (isRecordNotFound(error)) {
               if (
                 (touchesModel || writesSchedule || writesActive) &&
@@ -296,7 +366,7 @@ export function routinesRoutes(ctx: RouterContext) {
           watchChanged ||
           existing.nextRunAt?.getTime() !== row.nextRunAt?.getTime() ||
           (!existing.nextRunAt && !!row.nextRunAt);
-        if (scheduleNeedsSync) {
+        if (scheduleNeedsSync && !versioned) {
           if (row.active && row.nextRunAt) {
             await deps.jobs.enqueue(routineWakeupJob(row.id, row.nextRunAt));
           } else {
@@ -314,7 +384,23 @@ export function routinesRoutes(ctx: RouterContext) {
           },
         });
         if (!existing) throw new IsolationError();
-        await deps.prisma.routine.delete({ where: { id: existing.id } });
+        await deps.prisma
+          .$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT set_config('app.scheduler_protocol', '2', true)`;
+            await tx.routine.delete({
+              where: {
+                id: existing.id,
+                spaceId: context.actor.spaceId,
+                userId: context.actor.userId,
+              },
+            });
+          })
+          .catch((error: unknown) => {
+            if (isRoutineWatchUncertainError(error)) {
+              throw new ORPCError("CONFLICT", { message: ROUTINE_WATCH_UNCERTAIN_MESSAGE });
+            }
+            throw error;
+          });
         await deps.jobs.cancel(routineJobKey(existing.id));
         return { ok: true as const };
       }),

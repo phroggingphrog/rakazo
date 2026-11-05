@@ -40,7 +40,10 @@ export async function loadAgentMemoryContext(
   const sections: string[] = [];
   let remainingBytes = maxBytes - fixedBytes;
   for (const document of documents) {
-    const heading = `${sections.length === 0 ? "" : "\n\n"}## ${document.scope}: ${document.path} (revision ${document.revision})\n`;
+    const updated = memoryTimestamp(document.updatedAt);
+    const freshness =
+      updated > 0 ? `; updated ${new Date(updated).toISOString()}` : "; updated unknown";
+    const heading = `${sections.length === 0 ? "" : "\n\n"}## ${document.scope}: ${document.path} (revision ${document.revision}${freshness})\n`;
     const headingBytes = byteLength(heading);
     if (headingBytes > remainingBytes) break;
     sections.push(heading);

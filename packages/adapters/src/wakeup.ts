@@ -6,7 +6,7 @@ import type {
   JobPublisher,
   JobWorkerHost,
 } from "@rakazo/adapter-kit";
-import { dispatchBackgroundJob } from "@rakazo/adapter-kit";
+import { dispatchBackgroundJob, parseBackgroundJob } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
 import { isTooManyDatabaseConnections, runAsSystem } from "@rakazo/db";
 import { getLogger, runCorrelatedJob, unwrapJobPayload, wrapJobPayload } from "@rakazo/logging";
@@ -14,11 +14,13 @@ import type { Runner, WorkerUtils } from "graphile-worker";
 import { makeWorkerUtils, run } from "graphile-worker";
 import type { Pool } from "pg";
 import { recordHistoryCompactAttemptsExhausted } from "./history-compaction.js";
+import { runLegacyRoutineWake } from "./routine-legacy-wake.js";
 import { RunExecutionHost } from "./run-execution.js";
 
 // Adapter-local task name: the shared job contract remains run.continue. Older
 // publishers can keep publishing it while a new worker drains the legacy queue.
 const INTERACTIVE_RUN_TASK = "run.interactive";
+const VERSIONED_ROUTINE_TASK = "routine.wakeup.v2";
 type RunLookup = Pick<PrismaClient, "run">;
 type Workload = "interactive" | "background" | "maintenance";
 
@@ -157,6 +159,14 @@ function dispatchJob(
   );
 }
 
+/** New schedule jobs must carry a generation; older workers do not register this task. */
+export function dispatchVersionedRoutineWake(handlers: BackgroundJobHandlers, payload: unknown) {
+  const job = parseBackgroundJob("routine.wakeup", payload);
+  if (job.name !== "routine.wakeup" || !job.payload.generation)
+    throw new Error("Versioned routine wake requires a schedule generation");
+  return dispatchJob(handlers, "routine.wakeup", job.payload);
+}
+
 /**
  * Install or upgrade graphile-worker's schema. Runs as the migration role during
  * `pnpm db:migrate`, so the runtime role only needs grants on that schema.
@@ -248,11 +258,31 @@ export class GraphileJobWorkerHost implements JobWorkerHost {
                 run: () => dispatchJob(handlers, name, unpacked.payload, execution),
               });
             if (name === "run.continue") await this.executions.execute(execute);
-            else await execute();
+            else if (name === "routine.wakeup") {
+              const job = parseBackgroundJob("routine.wakeup", unpacked.payload);
+              if (job.name !== "routine.wakeup") throw new Error("Invalid routine wake");
+              await runLegacyRoutineWake(
+                this.pgPool,
+                job.payload.routineId,
+                job.payload.scheduledFor,
+                execute,
+              );
+            } else await execute();
           },
         ]),
     );
     if (!this.options.workload) taskList[INTERACTIVE_RUN_TASK] = taskList["run.continue"]!;
+    if (!this.options.workload || this.options.workload === "maintenance") {
+      taskList[VERSIONED_ROUTINE_TASK] = async (payload: unknown) => {
+        const unpacked = unwrapJobPayload(payload);
+        await runCorrelatedJob({
+          name: VERSIONED_ROUTINE_TASK,
+          payload: unpacked.payload,
+          correlation: unpacked.correlation,
+          run: () => dispatchVersionedRoutineWake(handlers, unpacked.payload),
+        });
+      };
+    }
     const runner = await run({
       pgPool: this.pgPool,
       concurrency: this.options.concurrency ?? 4,
@@ -508,6 +538,7 @@ export class InMemoryJobQueue implements JobPublisher, JobWorkerHost {
   private readonly scheduled = new Map<ReturnType<typeof setTimeout>, QueuedJob>();
   private readonly keyed = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly active = new Set<Promise<void>>();
+  private readonly activeKeys = new Map<string, number>();
   private readonly failures = new Map<BackgroundJob["name"], number>();
   private readonly closingJobs: QueuedJob[] = [];
   private draining: Promise<void> | undefined;
@@ -540,20 +571,30 @@ export class InMemoryJobQueue implements JobPublisher, JobWorkerHost {
         return;
       }
     }
-    const delay = stored.availableAt ? Math.max(0, stored.availableAt.getTime() - Date.now()) : 0;
-    const timer = setTimeout(() => {
-      this.timers.delete(timer);
-      this.scheduled.delete(timer);
-      if (stored.replaceKey && this.keyed.get(stored.replaceKey) === timer) {
-        this.keyed.delete(stored.replaceKey);
-      }
-      const handlers = this.handlers;
-      if (!handlers) return;
-      void this.dispatch(handlers, stored);
-    }, delay);
-    this.timers.add(timer);
-    this.scheduled.set(timer, stored);
-    if (stored.replaceKey) this.keyed.set(stored.replaceKey, timer);
+    const schedule = () => {
+      const delay = stored.availableAt ? Math.max(0, stored.availableAt.getTime() - Date.now()) : 0;
+      const timer = setTimeout(
+        () => {
+          this.timers.delete(timer);
+          this.scheduled.delete(timer);
+          if (stored.replaceKey && this.keyed.get(stored.replaceKey) === timer) {
+            this.keyed.delete(stored.replaceKey);
+          }
+          if (stored.availableAt && stored.availableAt.getTime() > Date.now()) {
+            schedule();
+            return;
+          }
+          const handlers = this.handlers;
+          if (!handlers) return;
+          void this.dispatch(handlers, stored);
+        },
+        Math.min(delay, 2_147_483_647),
+      );
+      this.timers.add(timer);
+      this.scheduled.set(timer, stored);
+      if (stored.replaceKey) this.keyed.set(stored.replaceKey, timer);
+    };
+    schedule();
   }
 
   async cancel(replaceKey: string): Promise<void> {
@@ -578,6 +619,10 @@ export class InMemoryJobQueue implements JobPublisher, JobWorkerHost {
       maxAttempts: job.maxAttempts,
       availableAt: job.availableAt ? new Date(job.availableAt.getTime()) : undefined,
     };
+  }
+
+  hasPendingOrActive(replaceKey: string): boolean {
+    return this.existingJob(replaceKey) !== undefined || this.activeKeys.has(replaceKey);
   }
 
   /** Count one failed attempt on a keyed job that is still queued. */
@@ -631,6 +676,9 @@ export class InMemoryJobQueue implements JobPublisher, JobWorkerHost {
 
   private dispatch(handlers: BackgroundJobHandlers, job: QueuedJob): Promise<void> {
     const unpacked = unwrapJobPayload(job.payload);
+    if (job.replaceKey) {
+      this.activeKeys.set(job.replaceKey, (this.activeKeys.get(job.replaceKey) ?? 0) + 1);
+    }
     const active = runCorrelatedJob({
       name: job.name,
       payload: unpacked.payload,
@@ -640,7 +688,14 @@ export class InMemoryJobQueue implements JobPublisher, JobWorkerHost {
       this.failures.set(job.name, (this.failures.get(job.name) ?? 0) + 1);
     });
     this.active.add(active);
-    void active.finally(() => this.active.delete(active));
+    void active.finally(() => {
+      this.active.delete(active);
+      if (job.replaceKey) {
+        const count = this.activeKeys.get(job.replaceKey) ?? 0;
+        if (count <= 1) this.activeKeys.delete(job.replaceKey);
+        else this.activeKeys.set(job.replaceKey, count - 1);
+      }
+    });
     return active;
   }
 

@@ -14,6 +14,25 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Generator: @lingui/cli\n"
 
+#: src/pages/RoutineRunHistory.tsx
+msgid "Actions need review"
+msgstr "有操作需要檢查"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Remove saved connected_account selector"
+msgstr "移除已儲存的 connected_account 選取器"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Leave this off if connected_account is an argument the tool needs."
+msgstr "如果工具需要 connected_account 參數，請保持此選項關閉。"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "No Pipedream accounts are connected."
+msgstr "沒有已連接的 Pipedream 帳戶。"
+
 #: src/pages/shell/sidebar-roster.tsx
 msgid " (unread)"
 msgstr "（未讀）"
@@ -6141,6 +6160,18 @@ msgstr "今天"
 #: src/pages/AccountSettingsOverlay.tsx
 msgid "Tokens"
 msgstr "Token"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Arguments are saved with this setup."
+msgstr "參數會與此設定一同儲存。"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested."
+msgstr "請檢查所選操作需要的欄位。不要輸入密碼、權杖或其他機密資訊；請在整合服務中設定驗證。參數尚未針對操作驗證或測試。"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Enter a valid JSON object up to 8 KB."
+msgstr "請輸入不超過 8 KB 的有效 JSON 物件。"
 
 #: src/pages/RoutineEditor.tsx
 msgid "Tool arguments (JSON)"

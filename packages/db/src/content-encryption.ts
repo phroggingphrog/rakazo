@@ -49,6 +49,24 @@ interface ModelSpec {
 
 /** Further content columns (external messages, steering, skills, …) add an entry here. */
 export const ENCRYPTED_MODELS: Record<string, ModelSpec> = {
+  SetupTestAttempt: {
+    table: "setup_test_attempts",
+    fields: { snapshot: { plainKeys: new Set() } },
+    space: { column: "spaceId" },
+    ownerRelation: "user",
+  },
+  ProtectedExecutionContent: {
+    table: "protected_execution_content",
+    fields: { text: {} },
+    space: { column: "spaceId" },
+    ownerRelation: "user",
+  },
+  SetupPlan: {
+    table: "setup_plans",
+    fields: { draft: { plainKeys: new Set() }, requestPayload: { plainKeys: new Set() } },
+    space: { column: "spaceId" },
+    ownerRelation: "user",
+  },
   Message: {
     table: "messages",
     fields: { blocks: { plainKeys: MESSAGE_BLOCK_PLAIN_KEYS } },

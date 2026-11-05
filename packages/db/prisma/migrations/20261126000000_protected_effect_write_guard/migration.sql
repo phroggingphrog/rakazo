@@ -1,0 +1,4 @@
+-- UNSHIPPABLE RESERVED MIGRATION: NO CHANGES ARE INSTALLED.
+-- The tested protected-effect guard blocks ordinary run-id update cascades.
+-- Resolve or remove this reserved migration before release; protected execution
+-- remains disabled by the existing Run constraint and executor gate.

@@ -1,6 +1,7 @@
 import { t } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import type {
+  Connection,
   ModelCatalogEntry,
   ModelCredential,
   Routine,
@@ -50,6 +51,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { cronLabels } from "../lib/cron";
+import { localTimezone } from "../lib/local-timezone";
 import {
   connectedModelOptions,
   modelOptionKey,
@@ -73,7 +75,7 @@ export function routineNeedsOneShotArm(
   routine: Pick<Routine, "nextRunAt" | "lastRunAt">,
   crons: string[],
 ) {
-  return isOneShotRoutineCrons(crons) && !routine.nextRunAt && !routine.lastRunAt;
+  return isOneShotRoutineCrons(crons) && !routine.nextRunAt;
 }
 
 const SCHEDULE_PRESETS: CronFreq[] = [
@@ -118,6 +120,8 @@ export type RoutineWatchDraft = {
   tool: string;
   /** JSON object of arguments for the tool. */
   args: string;
+  pipedreamConnectionId?: string;
+  removeLegacyAccountSelector?: boolean;
   /** Comma-separated field names; see RoutineWatch.track. */
   track: string;
   everyMinutes: number;
@@ -131,6 +135,7 @@ export function emptyWatchDraft(): RoutineWatchDraft {
     command: "",
     tool: "",
     args: "{}",
+    pipedreamConnectionId: "",
     track: "",
     everyMinutes: ROUTINE_WATCH_DEFAULT_MINUTES,
     loud: false,
@@ -145,6 +150,7 @@ function watchDraftFromRoutine(watch: RoutineWatch | null): RoutineWatchDraft | 
     command: watch.command ?? "",
     tool: watch.tool ?? "",
     args: JSON.stringify(watch.args ?? {}),
+    pipedreamConnectionId: "",
     track: (watch.track ?? []).join(", "),
     everyMinutes: watch.everyMinutes,
     loud: watch.loud,
@@ -183,8 +189,32 @@ export function watchFromDraft(
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     return { error: t`Tool arguments must be a JSON object` };
   }
+  const toolArgs = { ...(args as Record<string, unknown>) };
+  if (draft.pipedreamConnectionId && draft.removeLegacyAccountSelector) {
+    const nested = toolArgs.arguments;
+    if (
+      draft.tool.trim() === "pipedream_execute_tool" &&
+      nested &&
+      typeof nested === "object" &&
+      !Array.isArray(nested)
+    ) {
+      const nativeArgs = { ...(nested as Record<string, unknown>) };
+      delete nativeArgs.connected_account;
+      toolArgs.arguments = nativeArgs;
+    } else {
+      delete toolArgs.connected_account;
+    }
+  }
   return {
-    watch: { ...base, tool: draft.tool.trim(), args: args as Record<string, unknown>, ...track },
+    watch: {
+      ...base,
+      tool: draft.tool.trim(),
+      args: toolArgs,
+      ...track,
+      ...(draft.pipedreamConnectionId
+        ? { pipedreamConnectionId: draft.pipedreamConnectionId }
+        : {}),
+    },
   };
 }
 
@@ -213,7 +243,10 @@ export function draftFromRoutine(routine: Routine): RoutineDraftState {
     githubEnabled: routine.githubEnabled,
     messageProvider: routine.messageProvider,
     active: routine.active,
-    runAtLocal: routineNeedsOneShotArm(routine, routine.crons) ? defaultArmRunAtLocal() : "",
+    runAtLocal:
+      routineNeedsOneShotArm(routine, routine.crons) && !routine.lastRunAt
+        ? defaultArmRunAtLocal()
+        : "",
     modelKey:
       routine.modelProvider && routine.modelId
         ? modelOptionKey(routine.modelProvider, routine.modelId)
@@ -376,6 +409,9 @@ export function RoutineEditor({
   const fieldId = useId();
   const [credentials, setCredentials] = useState<ModelCredential[]>([]);
   const [catalog, setCatalog] = useState<ModelCatalogEntry[]>([]);
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [connectionsError, setConnectionsError] = useState(false);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
   useEffect(() => {
     void Promise.all([rpc.models.credentials(), rpc.models.list()])
       .then(([nextCredentials, nextCatalog]) => {
@@ -384,6 +420,18 @@ export function RoutineEditor({
       })
       .catch(() => undefined);
   }, []);
+  useEffect(() => {
+    if (draft.watch?.kind !== "tool") return;
+    setConnectionsLoading(true);
+    void rpc.connections
+      .list()
+      .then((rows) => {
+        setConnections(rows);
+        setConnectionsError(false);
+      })
+      .catch(() => setConnectionsError(true))
+      .finally(() => setConnectionsLoading(false));
+  }, [draft.watch?.kind]);
   const modelOptions = connectedModelOptions(credentials, catalog);
   const selectedModel = draft.modelKey ? parseModelOptionKey(draft.modelKey) : null;
   const selectedEntry = selectedModel
@@ -412,7 +460,9 @@ export function RoutineEditor({
     Boolean(draft.watch);
   const canTest = Boolean(editing) && !saving && !running;
   const needsOneShotArm =
-    editing != null && routineNeedsOneShotArm(editing, draft.schedules.map(cronFromPreset));
+    editing != null &&
+    draft.active &&
+    routineNeedsOneShotArm(editing, draft.schedules.map(cronFromPreset));
 
   function addSchedule(freq: CronFreq) {
     const base = defaultCronPreset();
@@ -643,6 +693,10 @@ export function RoutineEditor({
           {draft.watch ? (
             <WatchTriggerCard
               watch={draft.watch}
+              connections={connections}
+              connectionsError={connectionsError}
+              connectionsLoading={connectionsLoading}
+              boundConnectionId={editing?.watch?.pipedreamBinding?.connectionId}
               state={editing?.watch ? editing.watchState : null}
               onChange={(watch) => onChange({ ...draft, watch })}
               onRemove={() => onChange({ ...draft, watch: null })}
@@ -658,14 +712,13 @@ export function RoutineEditor({
 
           {needsOneShotArm ? (
             <label htmlFor={`${fieldId}-run-at`} className="block text-sm text-muted-foreground">
-              <Trans>Run at</Trans>
+              <Trans>Run at</Trans> <span>({localTimezone()})</span>
               <Input
                 id={`${fieldId}-run-at`}
                 type="datetime-local"
                 value={draft.runAtLocal}
                 onChange={(e) => onChange({ ...draft, runAtLocal: e.target.value })}
-                aria-label={t`Run at`}
-                className="mt-2"
+                className="mt-2 h-11"
               />
             </label>
           ) : null}
@@ -771,17 +824,43 @@ export function RoutineEditor({
 
 function WatchTriggerCard({
   watch,
+  connections,
+  connectionsError,
+  connectionsLoading,
+  boundConnectionId,
   state,
   onChange,
   onRemove,
 }: {
   watch: RoutineWatchDraft;
+  connections: Connection[];
+  connectionsError: boolean;
+  connectionsLoading: boolean;
+  boundConnectionId?: string;
   state: Routine["watchState"];
   onChange: (watch: RoutineWatchDraft) => void;
   onRemove: () => void;
 }) {
-  const { t } = useLingui();
+  const { t, i18n } = useLingui();
   const id = useId();
+  let hasLegacyAccountField = false;
+  try {
+    const args: unknown = JSON.parse(watch.args);
+    if (args && typeof args === "object" && !Array.isArray(args)) {
+      const record = args as Record<string, unknown>;
+      const nested = record.arguments;
+      const candidate =
+        watch.tool.trim() === "pipedream_execute_tool" &&
+        nested &&
+        typeof nested === "object" &&
+        !Array.isArray(nested)
+          ? nested
+          : record;
+      hasLegacyAccountField = Object.hasOwn(candidate, "connected_account");
+    }
+  } catch {
+    // The editor reports invalid JSON when saving.
+  }
   const status = !state
     ? null
     : state.outcome === "failed"
@@ -843,16 +922,103 @@ function WatchTriggerCard({
               aria-label={t`Tool name`}
               placeholder="brain_changed"
               value={watch.tool}
-              onChange={(e) => onChange({ ...watch, tool: e.target.value })}
+              onChange={(e) =>
+                onChange({ ...watch, tool: e.target.value, removeLegacyAccountSelector: false })
+              }
               className="font-mono text-[13px]"
             />
             <Textarea
               aria-label={t`Tool arguments (JSON)`}
               value={watch.args}
-              onChange={(e) => onChange({ ...watch, args: e.target.value })}
+              onChange={(e) =>
+                onChange({ ...watch, args: e.target.value, removeLegacyAccountSelector: false })
+              }
               rows={2}
               className="font-mono text-[13px]"
             />
+            <label htmlFor={`${id}-account`} className="block text-[13.5px] text-muted-foreground">
+              <Trans>Account</Trans> (Pipedream)
+            </label>
+            <NativeSelect
+              id={`${id}-account`}
+              size="sm"
+              className="min-h-11"
+              disabled={connectionsLoading}
+              value={watch.pipedreamConnectionId ?? ""}
+              onChange={(event) =>
+                onChange({
+                  ...watch,
+                  pipedreamConnectionId: event.target.value,
+                  removeLegacyAccountSelector: false,
+                })
+              }
+            >
+              <NativeSelectOption value="">
+                {connectionsLoading
+                  ? t`Loading…`
+                  : boundConnectionId
+                    ? (connections.find((connection) => connection.id === boundConnectionId)
+                        ?.displayName ?? t`Reconnect`)
+                    : t`Optional`}
+              </NativeSelectOption>
+              {connections
+                .filter(
+                  (connection) =>
+                    connection.connectorId === "pipedream" && connection.status === "connected",
+                )
+                .map((connection) => (
+                  <NativeSelectOption key={connection.id} value={connection.id}>
+                    {connection.provider}: {connection.displayName}
+                  </NativeSelectOption>
+                ))}
+            </NativeSelect>
+            {!connectionsLoading &&
+            !connectionsError &&
+            (boundConnectionId || watch.tool.startsWith("pipedream_")) &&
+            !connections.some(
+              (connection) =>
+                connection.connectorId === "pipedream" && connection.status === "connected",
+            ) ? (
+              <p className="text-[12.5px] text-muted-foreground">
+                {i18n._({
+                  id: "No Pipedream accounts are connected.",
+                  message: "No Pipedream accounts are connected.",
+                })}
+              </p>
+            ) : null}
+            {watch.pipedreamConnectionId && hasLegacyAccountField ? (
+              <div>
+                <label
+                  htmlFor={`${id}-legacy-selector`}
+                  className="flex min-h-11 items-center gap-2 text-[13.5px] text-foreground"
+                >
+                  <Switch
+                    id={`${id}-legacy-selector`}
+                    checked={watch.removeLegacyAccountSelector ?? false}
+                    onCheckedChange={(removeLegacyAccountSelector) =>
+                      onChange({ ...watch, removeLegacyAccountSelector })
+                    }
+                    aria-describedby={`${id}-legacy-selector-help`}
+                  />
+                  {i18n._({
+                    id: "Remove saved connected_account selector",
+                    message: "Remove saved connected_account selector",
+                  })}
+                </label>
+                <p
+                  id={`${id}-legacy-selector-help`}
+                  className="text-[12.5px] text-muted-foreground"
+                >
+                  {i18n._({
+                    id: "Leave this off if connected_account is an argument the tool needs.",
+                    message: "Leave this off if connected_account is an argument the tool needs.",
+                  })}
+                </p>
+              </div>
+            ) : null}
+            {connectionsError ? (
+              <p className="text-destructive text-[12.5px]">{t`Could not load`}</p>
+            ) : null}
           </>
         ) : null}
         {watch.kind !== "files" ? (

@@ -96,6 +96,7 @@ import {
   MAX_RECALLED_MEMORIES,
   selectCompactedHistory,
 } from "./history-compaction.js";
+import { recoverStaleMcpEffects } from "./mcp-effect-claim.js";
 import { createMediaGenerationProvider } from "./media-generation-factory.js";
 import { loadAgentMemoryContext } from "./memory-context.js";
 import { HostedModelCreditsRequiredError } from "./model-credit-observer.js";
@@ -114,6 +115,7 @@ import { modelAcceptsImageInput } from "./model-vision.js";
 import { usesNativeShell } from "./native-shell.js";
 import { paymentWalletConnected } from "./payment-wallets.js";
 import { isRetiredModelCredentialError } from "./pi-oauth.js";
+import { prepareRunTaskForExecution } from "./protected-run-prompt.js";
 import { loadPurchaseRedactions } from "./purchase-service.js";
 import { loadReplyContext, messageToAgentHistoryText } from "./reply-context.js";
 import { backOffRoutineAfterAccountError } from "./routine-backoff.js";
@@ -489,6 +491,7 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
       const runSecrets = [...deps.secrets];
       let dispatchHandedOff = false;
       try {
+        await recoverStaleMcpEffects(deps, run);
         // Durable run ownership and its heartbeat now carry recovery. Model,
         // integration and computer setup must not occupy a queue dispatch slot.
         onRunStarted?.();
@@ -509,7 +512,7 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
           thread,
           messages,
           peerMessage,
-          task,
+          storedTask,
           storedConnections,
           main,
           settings,
@@ -566,6 +569,13 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
             userId: run.userId,
           }),
         ]);
+        const task = await prepareRunTaskForExecution(
+          deps.prisma,
+          run,
+          storedTask,
+          workerId,
+          fence,
+        );
         let runtimeProfileSnapshot = parseRunProfileSnapshot(run.runtimeProfileSnapshot);
         if (
           runtimeProfileSnapshot &&
@@ -1415,7 +1425,7 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
         };
         const pluginLine =
           connectedPlugins.length > 0
-            ? `Connected plugins: ${connectedPlugins.map((row) => `${row.displayName} (${row.connectorId}:${row.provider})`).join(", ")}. Prefer those plugin tools over the computer browser or web search when reading app data (repos, releases, mail, calendar, and similar).`
+            ? `Connected plugins: ${connectedPlugins.map((row) => `${row.displayName} (${row.connectorId}:${row.provider}${row.connectorId === "pipedream" ? `, local connection ID: ${row.id}` : ""})`).join(", ")}. Prefer those plugin tools over the computer browser or web search when reading app data (repos, releases, mail, calendar, and similar).`
             : "No plugins are connected yet.";
         const taughtSkillIndex = savedSkills.slice(0, 20);
         const taughtSkillsLine =

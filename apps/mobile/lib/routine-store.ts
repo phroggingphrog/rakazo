@@ -1,9 +1,9 @@
 import type { Routine } from "@rakazo/contracts";
 import { fetchFresh, writeSaved } from "@rakazo/core/query";
 import type { QueryFunction } from "@tanstack/react-query";
-import { hashKey, useQuery } from "@tanstack/react-query";
+import { hashKey, isCancelledError, useQuery } from "@tanstack/react-query";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import { captureApiRequestContext, rpc } from "./api";
 import { queryClient, rpcQuery } from "./query";
 import { createQueuedSave } from "./queued-save";
@@ -23,6 +23,35 @@ const saving = new Set<string>();
 const toggleErrors = new Map<string, (error: unknown) => void>();
 // Reads skipped while a save or delete ran, by cache key; they run once the last one ends.
 const skippedReads = new Map<string, string>();
+type ReadOutcome = { sequence: number; status: "success" | "error" | null };
+const noRead: ReadOutcome = { sequence: 0, status: null };
+const readOutcomes = new Map<string, ReadOutcome>();
+const readListeners = new Map<string, Set<() => void>>();
+const latestRead = new Map<string, number>();
+let nextRead = 0;
+let nextOutcome = 0;
+
+function subscribeToReads(scope: string, listener: () => void) {
+  const listeners = readListeners.get(scope) ?? new Set();
+  listeners.add(listener);
+  readListeners.set(scope, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      readListeners.delete(scope);
+      readOutcomes.delete(scope);
+    }
+  };
+}
+
+function finishRead(scope: string, request: number, status: "success" | "error") {
+  if (latestRead.get(scope) !== request) return;
+  latestRead.delete(scope);
+  const listeners = readListeners.get(scope);
+  if (!listeners?.size) return;
+  readOutcomes.set(scope, { sequence: ++nextOutcome, status });
+  for (const listener of listeners) listener();
+}
 
 /** The bot's routines in the shared in-memory cache, with one more try when a read fails. */
 function routinesQuery(botId: string) {
@@ -71,10 +100,17 @@ export async function loadBotRoutines(botId: string): Promise<void> {
     skippedReads.set(scope, botId);
     return;
   }
+  const request = ++nextRead;
+  latestRead.set(scope, request);
   try {
     await fetchFresh(queryClient, query, { reuse: true });
-  } catch {
-    // The cache keeps the failure for the screens to show.
+    finishRead(scope, request, "success");
+  } catch (error) {
+    if (isCancelledError(error)) {
+      if (latestRead.get(scope) === request) latestRead.delete(scope);
+    } else {
+      finishRead(scope, request, "error");
+    }
   }
 }
 
@@ -136,6 +172,42 @@ export function setRoutineActive(
   toggle.update(active);
 }
 
+/** Identify the server, account, space and bot used for a routine list. */
+export function routineScope(botId: string): string {
+  return hashKey(routinesQuery(botId).queryKey);
+}
+
+/** Rearm a one-shot at the time the owner selected, without an optimistic switch change. */
+export async function rearmBotRoutine(
+  botId: string,
+  routine: Routine,
+  runAt: Date,
+  expectedScope: string,
+): Promise<void> {
+  if (!Number.isFinite(runAt.getTime()) || runAt.getTime() <= Date.now()) {
+    throw new Error("Run time must be in the future.");
+  }
+  const { queryKey } = routinesQuery(botId);
+  const scope = hashKey(queryKey);
+  if (scope !== expectedScope) throw new Error("The account or space changed. Try again.");
+  const context = await captureApiRequestContext();
+  if (routineScope(botId) !== scope) throw new Error("The account or space changed. Try again.");
+  countWrite(scope, 1);
+  try {
+    const saved = await rpc(
+      "routines/update",
+      { routineId: routine.id, active: true, runAt: runAt.toISOString() },
+      { requestContext: context },
+    );
+    if (hashKey(routinesQuery(botId).queryKey) !== scope) return;
+    await writeSaved(queryClient, queryKey, (rows) =>
+      (rows ?? []).map((row) => (row.id === routine.id ? { ...row, ...saved } : row)),
+    );
+  } finally {
+    countWrite(scope, -1);
+  }
+}
+
 /** Deletes a routine; its row goes once the server confirms. */
 export async function removeBotRoutine(botId: string, routineId: string): Promise<void> {
   const { queryKey } = routinesQuery(botId);
@@ -162,8 +234,16 @@ export async function removeBotRoutine(botId: string, routineId: string): Promis
  * view it shows what is already known and reads again, then keeps reading while it stays.
  */
 export function useBotRoutines(botId: string, { poll = true }: { poll?: boolean } = {}) {
-  const [shownSince] = useState(Date.now);
-  const { data, error, dataUpdatedAt, errorUpdatedAt } = useQuery(
+  const scope = hashKey(routinesQuery(botId).queryKey);
+  const subscribe = useCallback(
+    (listener: () => void) => subscribeToReads(scope, listener),
+    [scope],
+  );
+  const getSnapshot = useCallback(() => readOutcomes.get(scope) ?? noRead, [scope]);
+  const outcome = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const shown = useRef({ scope, sequence: outcome.sequence });
+  if (shown.current.scope !== scope) shown.current = { scope, sequence: outcome.sequence };
+  const { data, error } = useQuery(
     { ...routinesQuery(botId), enabled: false, select: oldestFirst },
     queryClient,
   );
@@ -180,7 +260,7 @@ export function useBotRoutines(botId: string, { poll = true }: { poll?: boolean 
     routines: data,
     error,
     /** A read answered since this screen opened, so a missing routine is really gone. */
-    readSinceShown: dataUpdatedAt >= shownSince,
-    failedSinceShown: errorUpdatedAt >= shownSince && errorUpdatedAt > dataUpdatedAt,
+    readSinceShown: outcome.sequence > shown.current.sequence && outcome.status === "success",
+    failedSinceShown: outcome.sequence > shown.current.sequence && outcome.status === "error",
   };
 }

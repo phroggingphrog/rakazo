@@ -186,6 +186,14 @@ function fixture({
   };
   const createdAt = new Map<string, Date>();
   const externalEffect = {
+    count: vi.fn(
+      async ({ where }: { where: { runId: string; status: { in: string[] } } }) =>
+        effects.filter(
+          (effect) =>
+            (!effect.runId || effect.runId === where.runId) &&
+            where.status.in.includes(effect.status),
+        ).length,
+    ),
     findFirst: vi.fn(
       async ({
         where,
@@ -236,9 +244,22 @@ function fixture({
       Object.assign(effects.find((effect) => effect.id === where.id)!, data);
     }),
     updateMany: vi.fn(
-      async ({ where, data }: { where: { id: string; status: string }; data: Partial<Effect> }) => {
+      async ({
+        where,
+        data,
+      }: {
+        where: { id: string; runId?: string; kind?: string | { in: string[] }; status: string };
+        data: Partial<Effect>;
+      }) => {
         const effect = effects.find(
-          (effect) => effect.id === where.id && effect.status === where.status,
+          (effect) =>
+            effect.id === where.id &&
+            effect.status === where.status &&
+            (!where.runId || !effect.runId || effect.runId === where.runId) &&
+            (!where.kind ||
+              (typeof where.kind === "string"
+                ? effect.kind === where.kind
+                : where.kind.in.includes(effect.kind))),
         );
         if (!effect) return { count: 0 };
         Object.assign(effect, data);
@@ -428,8 +449,31 @@ function fixture({
     },
     externalEffect,
   };
+  const localRejections = new Map<string, string>();
   const transactionalPrisma = Object.assign(prisma, {
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn(async (query: TemplateStringsArray) =>
+      String(query).includes("FROM external_effects e")
+        ? effects
+            .filter((effect) => ["failed", "uncertain", "executing"].includes(effect.status))
+            .map((effect) => ({
+              status: effect.status,
+              reason: localRejections.get(effect.id) ?? null,
+            }))
+        : [],
+    ),
+    $executeRaw: vi.fn(
+      async (
+        _query: TemplateStringsArray,
+        effectId: string,
+        _runId: string,
+        _spaceId: string,
+        _userId: string,
+        reason: string,
+      ) => {
+        localRejections.set(effectId, reason);
+        return 1;
+      },
+    ),
     $transaction: async (action: (tx: typeof prisma) => unknown) => action(prisma),
   });
   const pauseRunForInput = vi.fn(async () => {
@@ -553,6 +597,7 @@ function fixture({
   return {
     prisma: transactionalPrisma,
     effects,
+    localRejections,
     web,
     fetchedUrls,
     fleetBots,
@@ -574,6 +619,7 @@ function fixture({
     commit,
     sharedMemoryState,
     pauseRunForInput,
+    finalizeRun,
     enqueue,
     async deliverInbound(promptText: string, busyTrigger?: string) {
       const pending: Array<Record<string, unknown>> = [];
@@ -745,13 +791,40 @@ describe("connector read-only metadata and approval enforcement", () => {
       advanceRevisionAfterRead: true,
     });
     f.setCalls([{ args: { path: "MEMORY.md", content: "New rule" }, executionId: "call-1" }]);
-    await f.run();
+    await f.run(true);
     expect(f.commit).toHaveBeenCalledWith(
       expect.objectContaining({ expectedRevision: 1 }),
       expect.anything(),
     );
     expect(f.sharedMemoryState.content).toBe("Someone else edited");
     expect(f.results.at(-1)).toEqual({ error: MEMORY_REVISION_CONFLICT_ERROR });
+    expect(f.localRejections.size).toBe(0);
+    expect(f.finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: expect.stringContaining("reconcile destination evidence"),
+      }),
+    );
+  });
+
+  it("does not trust a provider conflict message as proof that no memory write happened", async () => {
+    const f = fixture({ name: "save_shared_memory", builtin: true });
+    f.commit.mockImplementationOnce(async (request) => {
+      f.sharedMemoryState.content = request.content;
+      throw new Error(MEMORY_REVISION_CONFLICT_ERROR);
+    });
+    f.setCalls([
+      { args: { path: "MEMORY.md", content: "Written before error" }, executionId: "call-1" },
+    ]);
+    await f.run(true);
+    expect(f.sharedMemoryState.content).toBe("Written before error");
+    expect(f.localRejections.size).toBe(0);
+    expect(f.finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: expect.stringContaining("reconcile destination evidence"),
+      }),
+    );
   });
 
   it("rejects shared memory content over the size limit", async () => {
@@ -761,20 +834,32 @@ describe("connector read-only metadata and approval enforcement", () => {
     };
     const f = fixture({ name: "save_shared_memory", builtin: true });
     f.setCalls([{ args, executionId: "call-1" }]);
-    await f.run();
+    await f.run(true);
     expect(f.commit).not.toHaveBeenCalled();
     expect(f.pauseRunForInput).not.toHaveBeenCalled();
     expect(f.results.at(-1)).toEqual({
       error: `content exceeds ${MAX_SHARED_MEMORY_CHARS} characters`,
     });
+    expect(f.finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: expect.stringContaining("did not run because its input was invalid"),
+      }),
+    );
   });
 
   it("rejects a shared memory save without a path", async () => {
     const f = fixture({ name: "save_shared_memory", builtin: true });
     f.setCalls([{ args: { path: "  ", content: "ok" }, executionId: "call-1" }]);
-    await f.run();
+    await f.run(true);
     expect(f.commit).not.toHaveBeenCalled();
     expect(f.results.at(-1)).toEqual({ error: "path is required" });
+    expect(f.finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: expect.stringContaining("did not run because its input was invalid"),
+      }),
+    );
   });
 
   describe.each([false, true])("catalog = %s", (catalog) => {
@@ -1442,12 +1527,14 @@ describe("own instructions through update_bot", () => {
     await f.run();
     f.effects[0]!.status = "approved";
     f.instructionState.instructions = "Newer manual edit";
-    await f.run();
+    await f.run(true);
     expect(f.instructionState.instructions).toBe("Newer manual edit");
     expect(f.effects[0]).toMatchObject({
-      status: "completed",
+      status: "failed",
       result: { error: expect.stringContaining("Instructions changed") },
     });
+    expect(f.localRejections.get(f.effects[0]!.id)).toBe("instruction_precondition_failed");
+    expect(f.finalizeRun).toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed" }));
     expect(f.instructionState.instructionHistory).toHaveLength(0);
   });
   it("does not apply an approved change after cancellation wins the thread lock", async () => {
@@ -1613,6 +1700,19 @@ describe("own settings through update_bot", () => {
     f.setCalls([{ args: { thinkingLevel: "high" }, executionId: "call-1" }]);
     await f.run();
     expect(f.results[0]).toMatchObject({ error: expect.stringContaining("outside content") });
+    expect(f.prisma.bot.update).not.toHaveBeenCalled();
+  });
+  it("reads saved settings even if model discovery is unavailable", async () => {
+    const f = fixture({ name: "update_bot", builtin: true });
+    f.prisma.userModelCredential.findMany.mockRejectedValue(new Error("catalog unavailable"));
+    f.setCalls([{ args: {}, executionId: "call-1" }]);
+    await f.run();
+    expect(f.results[0]).toMatchObject({
+      name: "Assistant",
+      instructions: "Draft only",
+      models: [],
+      modelCatalogStatus: "unavailable",
+    });
     expect(f.prisma.bot.update).not.toHaveBeenCalled();
   });
   it("reads its settings when called with no fields", async () => {
@@ -2987,11 +3087,17 @@ describe("user_computer_shell", () => {
     });
     gateway.connected.mockResolvedValueOnce(device).mockResolvedValueOnce(null);
     f.setCalls([call("ls")]);
-    await f.run();
+    await f.run(true);
     expect(f.results).toEqual([
       { error: "The user's computer is not connected. Ask them to open the Rakazo desktop app." },
     ]);
     expect(requests).toEqual([]);
+    expect(f.finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: expect.stringContaining("computer could not be reached"),
+      }),
+    );
   });
 });
 
@@ -3128,9 +3234,44 @@ describe("user computer screen control", () => {
         executionId: "call-1",
       },
     ]);
-    await f.run();
+    await f.run(true);
     expect(f.pauseRunForInput).not.toHaveBeenCalled();
     expect(f.results).toEqual([{ error: expect.stringMatching(/^actions\.0/) }]);
+    expect(requests).toEqual([]);
+    expect(f.effects.find((effect) => effect.kind === "user_computer_act")?.status).toBe("failed");
+    expect(f.finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: expect.stringContaining("The requested action did not run"),
+      }),
+    );
+    const finalizations = f.finalizeRun.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    expect(finalizations.at(-1)?.[0]).not.toHaveProperty("partialReply");
+    await f.run(true);
+    expect(f.effects.filter((effect) => effect.kind === "user_computer_act")).toHaveLength(1);
+    expect(requests).toEqual([]);
+  });
+  it("keeps an approved malformed screen action auditable and never re-dispatches it", async () => {
+    const { gateway, requests } = devices();
+    const f = fixture({ ...ownRun, userDevices: gateway });
+    f.setCalls([
+      {
+        name: "user_computer_act",
+        args: { app: "TextEdit", actions: [{ kind: "drag" }] },
+        executionId: "call-approved",
+      },
+    ]);
+    await f.run();
+    expect(f.pauseRunForInput).toHaveBeenCalledOnce();
+    expect(requests).toEqual([]);
+    const effect = f.effects.find((row) => row.kind === "user_computer_act");
+    expect(effect?.status).toBe("intended");
+    effect!.status = "approved";
+    await f.run(true);
+    expect(effect?.status).toBe("failed");
+    expect(requests).toEqual([]);
+    await f.run(true);
+    expect(f.effects.filter((row) => row.kind === "user_computer_act")).toHaveLength(1);
     expect(requests).toEqual([]);
   });
 });

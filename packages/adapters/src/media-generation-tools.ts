@@ -144,6 +144,8 @@ export async function generateMediaFromTool(options: {
       const claim = await prisma.externalEffect.updateMany({
         where: {
           id: reservation.id,
+          kind: JOB_KIND,
+          dispatchClaimToken: null,
           OR: [
             { status: "media_pending" },
             { status: "media_polling", updatedAt: { lt: new Date(Date.now() - 5 * 60_000) } },
@@ -173,7 +175,12 @@ export async function generateMediaFromTool(options: {
     } catch (error) {
       if (polling)
         await prisma.externalEffect.updateMany({
-          where: { id: reservation.id, status: { not: "media_completed" } },
+          where: {
+            id: reservation.id,
+            kind: JOB_KIND,
+            dispatchClaimToken: null,
+            status: { not: "media_completed" },
+          },
           data: { status: "media_pending" },
         });
       throw error;
@@ -182,6 +189,8 @@ export async function generateMediaFromTool(options: {
       await prisma.externalEffect.updateMany({
         where: {
           id: reservation.id,
+          kind: JOB_KIND,
+          dispatchClaimToken: null,
           status: { not: "media_completed" },
           result: { equals: saved },
         },

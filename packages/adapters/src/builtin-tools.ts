@@ -156,6 +156,11 @@ const scheduleTimingSpecs = {
       command: { type: "string" },
       tool: { type: "string" },
       args: { type: "object" },
+      pipedreamConnectionId: {
+        type: "string",
+        description:
+          "Local connection ID for this Pipedream account. Provider arguments stay in args.",
+      },
       track: {
         type: "array",
         items: { type: "string" },
@@ -1210,7 +1215,7 @@ export const builtinAgentTools: ConnectorTool[] = [
   },
   {
     name: "proactive_set_interval",
-    description: "Set this bot fallback patrol interval in milliseconds, between five minutes and seven days.",
+    description: "Set this bot's fallback patrol interval in milliseconds. Use 0 to turn fallback patrol off; otherwise use five minutes to seven days. Other timers are unaffected.",
     inputSchema: { type: "object", properties: { fallbackMs: { type: "number" } }, required: ["fallbackMs"] },
   },
   {
@@ -1255,7 +1260,7 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "schedule_update",
     description:
-      "Edit one of this bot's schedules by routineId instead of cancelling and recreating it. Send only what changes. Timing fields replace the current timing; startAt alone moves the next run of the current repeat. active false pauses it.",
+      "Edit one of this bot's schedules by routineId instead of cancelling and recreating it. Send only what changes. Timing fields replace the current timing; startAt alone moves the next run of the current repeat. active false pauses it. To run a completed one-shot again, provide a new future time and active true together.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1269,6 +1274,7 @@ export const builtinAgentTools: ConnectorTool[] = [
         runAt: scheduleTimingSpecs.runAt,
         delayMinutes: scheduleTimingSpecs.delayMinutes,
         delaySeconds: scheduleTimingSpecs.delaySeconds,
+        watch: scheduleTimingSpecs.watch,
       },
       required: ["routineId"],
     },

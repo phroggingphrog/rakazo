@@ -1,6 +1,21 @@
 import type { Prisma } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
-import { findPendingRoutineTick, routineTimerNonce } from "./routine-coalescing.js";
+import {
+  findPendingRoutineTick,
+  routineTimerNonce,
+  routineTimerScheduledFor,
+} from "./routine-coalescing.js";
+
+it("distinguishes same-time versioned ticks while retaining their scheduled time", () => {
+  const time = "2030-01-01T00:00:00.000Z";
+  const first = routineTimerNonce("routine-1", time, "1");
+  const second = routineTimerNonce("routine-1", time, "2");
+  expect(first).not.toBe(second);
+  expect(routineTimerScheduledFor("routine-1", first)?.toISOString()).toBe(time);
+  expect(
+    routineTimerScheduledFor("routine-1", routineTimerNonce("routine-1", time))?.toISOString(),
+  ).toBe(time);
+});
 
 const config = {
   routineId: "routine-1",

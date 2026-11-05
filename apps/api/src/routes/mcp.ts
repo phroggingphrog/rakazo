@@ -40,6 +40,7 @@ import {
   revertConnectedMcpApprovals,
 } from "../mcp-approval.js";
 import { buildMcpUpdateMaterial, legacyMcpArgs } from "../mcp-material.js";
+import { discoverMonitorTools } from "../monitor-tool-discovery.js";
 import {
   assertMcpOAuthTemplates,
   assertMcpRemoteEndpoint,
@@ -640,6 +641,11 @@ export function mcpRoutes(ctx: RouterContext) {
           if (!fresh) throw new IsolationError();
           return mcpServerDto(fresh, oauth);
         }),
+        monitorTools: authed.mcp.servers.monitorTools.handler(async ({ context, input }) =>
+          discoverMonitorTools(deps, context.actor, {
+            serverId: input.id, botId: input.botId, signal: context.signal,
+          }),
+        ),
         agents: authed.mcp.servers.agents.handler(async ({ context, input }) => {
           const owner = { spaceId: context.actor.spaceId, userId: context.actor.userId };
           const { server, assignments, seqs } = await deps.prisma.$transaction(async (tx) => {

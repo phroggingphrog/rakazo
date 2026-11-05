@@ -95,7 +95,7 @@ export const memoryTools: ToolHandlers = {
     const { deps, runId, thread, context } = ctx;
     const { args } = call;
     const invalid = sharedMemorySaveError(args);
-    if (invalid) return call.finish({ error: invalid });
+    if (invalid) return call.finishInvalidSharedMemory({ error: invalid });
     const path = String(args.path ?? "").trim();
     // The save replaces the whole document. Pass the revision just read so a
     // concurrent edit is rejected instead of overwritten.

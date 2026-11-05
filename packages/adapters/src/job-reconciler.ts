@@ -10,6 +10,7 @@ import type { PoolClient } from "pg";
 import { returnBotMessageOutcome } from "./bot-messages.js";
 import { reconcileCallRequests } from "./call-request.js";
 import { scheduleComputerControlExpiry } from "./computer-control.js";
+import { routineSchedulerMode } from "./routine-scheduler-mode.js";
 import { findRunRecoveryBlockers } from "./run-recovery.js";
 import { reconcileStuckWork } from "./stuck-work.js";
 import { isLoopGuardStopText } from "./tool-loop.js";
@@ -118,6 +119,9 @@ export function createJobReconciler(
     reconcilePurchases?: () => Promise<void>;
     reconcileModelCredits?: () => Promise<void>;
     reconcileRoutineRetryNotices?: () => Promise<void>;
+    reconcileRoutineNotifications?: () => Promise<void>;
+    reconcileRoutineSchedules?: () => Promise<void>;
+    reconcileTerminalEffects?: () => Promise<void>;
     reconcileSecurityEventRetention?: () => Promise<void>;
     reconcileAuditLog?: () => Promise<void>;
     reconcileHomeStorage?: () => Promise<void>;
@@ -159,6 +163,9 @@ export function createJobReconciler(
           deps.reconcileModelCredits,
           deps.reconcileComputerUpdates,
           deps.reconcileRoutineRetryNotices,
+          deps.reconcileRoutineNotifications,
+          deps.reconcileRoutineSchedules,
+          deps.reconcileTerminalEffects,
           deps.reconcileSecurityEventRetention,
           deps.reconcileAuditLog,
           deps.reconcileHomeStorage,
@@ -336,7 +343,13 @@ export function createJobReconciler(
           : undefined;
 
       // Scheduled work drains several pages per tick, yielding between pages.
-      let routinesDone = false;
+      let routinesDone = true;
+      try {
+        routinesDone = await deps.prisma.$transaction((tx) => routineSchedulerMode(tx));
+      } catch (error) {
+        getLogger().error("routine scheduler mode reconciliation", error);
+      }
+      if (routinesDone) routineCursor = undefined;
       let controlsDone = false;
       for (let page = 0; page < maxPagesPerPass; page += 1) {
         if (page > 0) await setImmediate();

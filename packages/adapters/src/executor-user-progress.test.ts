@@ -249,6 +249,7 @@ async function runTurn(
     agentSkill: { findMany: vi.fn(async () => []) },
     scratchpadItem: { findMany: vi.fn(async () => []) },
     externalEffect: {
+      count: vi.fn(async () => 0),
       findMany: vi.fn(async () => []),
       findFirst: vi.fn(async () => null),
       findUnique: vi.fn(async () => null),

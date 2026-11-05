@@ -401,7 +401,7 @@ export class McpSession {
         try {
           await connect("sse");
         } catch (fallbackError) {
-          await this.close();
+          await this.close().catch(() => undefined);
           throw fallbackError;
         }
       } finally {
@@ -461,10 +461,24 @@ export class McpSession {
   async close(): Promise<void> {
     this.connecting = undefined;
     this.connected = false;
-    await this.client.close().catch(() => undefined);
-    await this.remoteFetch?.close().catch(() => undefined);
+    let failed = false;
+    try {
+      await this.client.close();
+    } catch {
+      failed = true;
+    }
+    try {
+      await this.remoteFetch?.close();
+    } catch {
+      failed = true;
+    }
     this.remoteFetch = undefined;
     this.transport = undefined;
+    if (failed) {
+      const error = new Error("MCP transport cleanup failed");
+      error.stack = undefined;
+      throw error;
+    }
   }
 
   private assertConnected(): void {

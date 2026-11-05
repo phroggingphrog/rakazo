@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   InvalidClientMetadataError,
@@ -10,20 +11,79 @@ import {
 import { createLogger, createTestSink, getLogger, installLogger } from "@rakazo/logging";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectorRegistry } from "./composio-connector.js";
+import { DependencyRetry } from "./dependency-retry.js";
 import { InfisicalSecretStore } from "./infisical-secret-store.js";
 import { InstalledConnectorProvider } from "./installed-connectors.js";
 import { IntegrationProviderSettings } from "./integration-provider-settings.js";
 import { DIRECT_TOOL_LIMIT } from "./lazy-tool-catalog.js";
-import { allowlistDrift, McpConnector } from "./mcp-connector.js";
+import { allowlistDrift, McpConnector as RealMcpConnector } from "./mcp-connector.js";
 import type { McpOAuthBroker, OAuthMaterial } from "./mcp-oauth.js";
 import { StoredMcpOAuthProvider } from "./mcp-oauth.js";
 import { McpSession } from "./mcp-transport.js";
 import { InMemoryRealtimeFanout } from "./realtime.js";
 import { checkRoutineWatch, validateRoutineWatch } from "./routine-watch.js";
+import { assertNoUnresolvedEffects } from "./run-completion-evidence.js";
+import { persistMonitorReadEvidence } from "./run-monitor-evidence.js";
 import { migrateSecrets } from "./secret-migration.js";
 import { ComposedSecretStore } from "./secret-store-factory.js";
 import { infisicalFake } from "./secret-store-fake.js";
 import { EncryptedSecretStore } from "./secrets.js";
+
+// Offline SQL double; real PostgreSQL contention remains a separate integration gate.
+function circuitDatabase(db: object) {
+  const rows = new Map<
+    string,
+    { failures: number; until: number; token: string | null; expires: number }
+  >();
+  return Object.assign(db, {
+    $queryRaw: vi.fn(async (_sql: TemplateStringsArray, ...v: unknown[]) => {
+      const key = JSON.stringify(v.slice(0, 4));
+      const row = rows.get(key);
+      const now = (v[6] as Date).getTime();
+      if (row && (row.failures >= 5 || row.until > now || row.expires > now)) return [];
+      rows.set(key, {
+        failures: row?.failures ?? 0,
+        until: row?.until ?? 0,
+        token: v[4] as string,
+        expires: (v[5] as Date).getTime(),
+      });
+      return [{ claimToken: v[4] }];
+    }),
+    $executeRaw: vi.fn(async (sql: TemplateStringsArray, ...v: unknown[]) => {
+      const text = sql.join("?");
+      const transient = text.includes('"failureCount" + 1');
+      const recovery = !text.includes('"claimToken" = ?');
+      const idOffset = recovery ? 1 : transient ? 4 : 6;
+      const key = JSON.stringify(v.slice(idOffset, idOffset + 4));
+      const row = rows.get(key);
+      if (!row) return 0;
+      if (
+        !recovery &&
+        (row.token !== v[idOffset + 4] || row.expires <= (v[v.length - 1] as Date).getTime())
+      )
+        return 0;
+      if (transient) {
+        row.failures++;
+        row.until =
+          (v[0] as Date).getTime() +
+          Math.min(300000, 30000 * 2 ** (row.failures - 1)) * (v[1] as number);
+      } else if (recovery || v[0] === true) {
+        row.failures = 0;
+        row.until = 0;
+      } else if (v[3] === true) row.failures = 5;
+      row.token = null;
+      row.expires = 0;
+      return 1;
+    }),
+  });
+}
+class McpConnector extends RealMcpConnector {
+  constructor(...args: ConstructorParameters<typeof RealMcpConnector>) {
+    // Preserve the same fake database across recreated connector instances.
+    if (!("$queryRaw" in args[0])) circuitDatabase(args[0]);
+    super(...args);
+  }
+}
 
 // No server is shared with every agent, so only assignments reach a bot.
 const NO_SHARED_SERVERS = { findMany: async () => [], findFirst: async () => null };
@@ -37,6 +97,84 @@ const unavailableOnly = (slug = "demo") => [
     route: expect.objectContaining({ toolName: "__rakazo_unavailable" }),
   }),
 ];
+
+describe("durable typed MCP auth intervention", () => {
+  it.each([true, false])(
+    "persists only terminal typed auth (typed=%s) across instances and revision changes",
+    async (typed) => {
+      const row = { ...SERVER, authFailureRevision: null as number | null };
+      const assignment = { ...ASSIGNMENT, server: row };
+      const updateMany = vi.fn(async ({ where, data }) => {
+        if (where.revision === row.revision && data.authFailureRevision !== undefined)
+          row.authFailureRevision = data.authFailureRevision;
+        return { count: where.revision === row.revision ? 1 : 0 };
+      });
+      const prisma = {
+        mcpServer: { findMany: async () => [], findFirst: async () => row, updateMany },
+        botMcpServer: { findMany: async () => [assignment], findFirst: async () => assignment },
+      };
+      const connect = vi.spyOn(McpSession.prototype, "connectRemote").mockResolvedValue({
+        transport: "streamable-http",
+        usedFallback: false,
+      });
+      const list = vi
+        .spyOn(McpSession.prototype, "listTools")
+        .mockRejectedValueOnce(
+          typed ? new UnauthorizedError("private token") : new Error("Workspace auth failed"),
+        )
+        .mockResolvedValue({ tools: [{ name: "echo", inputSchema: { type: "object" } }] });
+      vi.spyOn(McpSession.prototype, "close").mockResolvedValue(undefined);
+      const context = {
+        operationId: "test",
+        traceId: "test",
+        spaceId: "w1",
+        userId: "u1",
+        botId: "bot-1",
+        signal: new AbortController().signal,
+      };
+      const make = () =>
+        new McpConnector(prisma as never, new EncryptedSecretStore("fake-key"), {
+          network: TEST_NETWORK,
+        });
+      const first = make();
+      const second = make();
+      try {
+        await first.discoverTools(context);
+        expect(row.authFailureRevision).toBe(typed ? 1 : null);
+        const tools = await second.discoverTools(context);
+        expect(list).toHaveBeenCalledTimes(1); // Recreated instances share durable cooldown.
+        if (typed) {
+          expect(tools).toEqual(unavailableOnly());
+          const events = [];
+          for await (const event of second.execute(
+            {
+              tool: "echo",
+              executionId: "test-execution",
+              args: {},
+              route: { connectorId: "mcp", resourceId: row.id, toolName: "echo" },
+            },
+            context,
+          ))
+            events.push(event);
+          expect(events).toEqual([
+            expect.objectContaining({
+              type: "error",
+              message: "Sign in again to reconnect this MCP server.",
+            }),
+          ]);
+          row.revision += 1;
+          await second.discoverTools(context);
+          expect(list).toHaveBeenCalledTimes(2);
+        }
+        expect(connect).toHaveBeenCalledTimes(typed ? 2 : 1);
+      } finally {
+        await first.close();
+        await second.close();
+        vi.restoreAllMocks();
+      }
+    },
+  );
+});
 
 const SERVER = {
   id: "server-1",
@@ -57,6 +195,235 @@ const ASSIGNMENT = {
   allowedTools: [],
   server: SERVER,
 };
+
+describe("durable discovery circuit integration", () => {
+  it("discovers only the requested assigned server and returns explicitly read-only non-batch tools", async () => {
+    const second = { ...SERVER, id: "server-2", slug: "other" };
+    const db = {
+      mcpServer: NO_SHARED_SERVERS,
+      botMcpServer: {
+        findMany: async () => [ASSIGNMENT, { ...ASSIGNMENT, server: second, serverId: second.id }],
+      },
+    };
+    vi.spyOn(McpSession.prototype, "connectRemote").mockResolvedValue({
+      transport: "streamable-http",
+      usedFallback: false,
+    });
+    const list = vi.spyOn(McpSession.prototype, "listTools").mockResolvedValue({
+      tools: [
+        { name: "read_mail", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+        {
+          name: "write_mail",
+          inputSchema: { type: "object" },
+          annotations: { readOnlyHint: false },
+        },
+        { name: "unknown", inputSchema: { type: "object" } },
+      ],
+    });
+    vi.spyOn(McpSession.prototype, "close").mockResolvedValue(undefined);
+    const connector = new McpConnector(db as never, {} as never);
+    const context = {
+      operationId: "test",
+      traceId: "test",
+      spaceId: "w1",
+      userId: "u1",
+      botId: "bot-1",
+      signal: AbortSignal.timeout(5000),
+    };
+    try {
+      const result = await connector.discoverMonitorTools(context, SERVER.id);
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe("ok");
+      expect(result.tools.map((tool) => tool.route?.toolName)).toEqual(["read_mail"]);
+      expect(result.tools[0]?.route?.resourceId).toBe(SERVER.id);
+      expect(result.tools[0]?.route?.resourceRevision).toBe(SERVER.revision);
+    } finally {
+      await connector.close();
+      vi.restoreAllMocks();
+    }
+  });
+  it("discovers an assigned local integration using its normal connector", async () => {
+    const local = { ...SERVER, transport: "stdio", command: "mail-mcp" };
+    const db = {
+      mcpServer: NO_SHARED_SERVERS,
+      botMcpServer: { findMany: async () => [{ ...ASSIGNMENT, server: local }] },
+    };
+    const connect = vi.spyOn(McpSession.prototype, "connectStdio").mockResolvedValue(undefined);
+    const list = vi.spyOn(McpSession.prototype, "listTools").mockResolvedValue({
+      tools: [
+        { name: "read_mail", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+      ],
+    });
+    vi.spyOn(McpSession.prototype, "close").mockResolvedValue(undefined);
+    const connector = new McpConnector(db as never, {} as never, {
+      stdioEnabled: true,
+      allowedCommands: ["mail-mcp"],
+    });
+    try {
+      const result = await connector.discoverMonitorTools(
+        {
+          operationId: "test",
+          traceId: "test",
+          spaceId: "w1",
+          userId: "u1",
+          botId: "bot-1",
+          signal: AbortSignal.timeout(5000),
+        },
+        local.id,
+      );
+      expect(result.status).toBe("ok");
+      expect(result.tools.map((tool) => tool.route?.toolName)).toEqual(["read_mail"]);
+      expect(connect).toHaveBeenCalledOnce();
+      expect(list).toHaveBeenCalledOnce();
+    } finally {
+      await connector.close();
+      vi.restoreAllMocks();
+    }
+  });
+  it("reports this discovery result even when its advisory health write is delayed", async () => {
+    let release!: () => void;
+    const write = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const db = {
+      mcpServer: {
+        ...NO_SHARED_SERVERS,
+        updateMany: vi.fn(async () => {
+          await write;
+          return { count: 1 };
+        }),
+      },
+      botMcpServer: { findMany: async () => [ASSIGNMENT] },
+    };
+    vi.spyOn(McpSession.prototype, "connectRemote").mockResolvedValue({
+      transport: "streamable-http",
+      usedFallback: false,
+    });
+    vi.spyOn(McpSession.prototype, "listTools").mockResolvedValue({ tools: [] });
+    vi.spyOn(McpSession.prototype, "close").mockResolvedValue(undefined);
+    const connector = new McpConnector(db as never, {} as never);
+    const context = {
+      operationId: "test",
+      traceId: "test",
+      spaceId: "w1",
+      userId: "u1",
+      botId: "bot-1",
+      signal: AbortSignal.timeout(5000),
+    };
+    try {
+      expect(await connector.discoverServerStatus(context, SERVER.id)).toBe("ok");
+      expect(db.mcpServer.updateMany).toHaveBeenCalled();
+    } finally {
+      release();
+      await connector.close();
+      vi.restoreAllMocks();
+    }
+  });
+  it("distinguishes failed discovery and a server outside the bot's assignments", async () => {
+    const db = {
+      mcpServer: NO_SHARED_SERVERS,
+      botMcpServer: { findMany: async () => [ASSIGNMENT] },
+    };
+    vi.spyOn(McpSession.prototype, "connectRemote").mockResolvedValue({
+      transport: "streamable-http",
+      usedFallback: false,
+    });
+    vi.spyOn(McpSession.prototype, "listTools").mockRejectedValue(new Error("offline"));
+    vi.spyOn(McpSession.prototype, "close").mockResolvedValue(undefined);
+    const connector = new McpConnector(db as never, {} as never);
+    const context = {
+      operationId: "test",
+      traceId: "test",
+      spaceId: "w1",
+      userId: "u1",
+      botId: "bot-1",
+      signal: AbortSignal.timeout(5000),
+    };
+    try {
+      expect(await connector.discoverServerStatus(context, SERVER.id)).toBe("unavailable");
+      expect(await connector.discoverServerStatus(context, "other-server")).toBe("not_assigned");
+    } finally {
+      await connector.close();
+      vi.restoreAllMocks();
+    }
+  });
+  it("persists cooldown across instances, isolates launch identities and manually recovers only the matching scope", async () => {
+    const db = {
+      mcpServer: NO_SHARED_SERVERS,
+      botMcpServer: { findMany: async () => [ASSIGNMENT] },
+    };
+    const list = vi
+      .spyOn(McpSession.prototype, "listTools")
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue({ tools: [{ name: "echo", inputSchema: { type: "object" } }] });
+    vi.spyOn(McpSession.prototype, "connectRemote").mockResolvedValue({
+      transport: "streamable-http",
+      usedFallback: false,
+    });
+    vi.spyOn(McpSession.prototype, "close").mockResolvedValue(undefined);
+    const first = new McpConnector(db as never, {} as never);
+    const second = new McpConnector(db as never, {} as never);
+    const context = {
+      operationId: "test",
+      traceId: "test",
+      spaceId: "w1",
+      userId: "u1",
+      botId: "bot-1",
+      signal: new AbortController().signal,
+    };
+    try {
+      expect(await first.discoverTools(context)).toEqual(unavailableOnly());
+      expect(await second.discoverTools(context)).toEqual(unavailableOnly());
+      expect(list).toHaveBeenCalledTimes(1);
+      await second.probe(SERVER as never, { ...context, userId: "other" });
+      expect(await first.discoverTools(context)).toEqual(unavailableOnly());
+      expect(list).toHaveBeenCalledTimes(2);
+      await second.probe(SERVER as never, context);
+      expect((await first.discoverTools(context))[0]?.name).toBe("mcp__demo__echo");
+      expect(list).toHaveBeenCalledTimes(4);
+    } finally {
+      await first.close();
+      await second.close();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("has one half-open winner, recovers expired claims, rejects stale completion and exhausts finitely", async () => {
+    let now = 1000;
+    const db = circuitDatabase({});
+    const a = new DependencyRetry(
+      db as never,
+      () => new Date(now),
+      () => 1,
+    );
+    const b = new DependencyRetry(
+      db as never,
+      () => new Date(now),
+      () => 1,
+    );
+    const id = { serverId: "s", spaceId: "w", userId: "u", revision: 1 };
+    const claimed = await a.claim(id);
+    expect(claimed).toHaveProperty("claim");
+    expect(await b.claim(id)).toHaveProperty("reason");
+    now += 61000;
+    const replacement = await b.claim(id);
+    if (!("claim" in claimed) || !("claim" in replacement)) throw new Error("missing claim");
+    expect(await a.complete(claimed.claim, "success")).toBe(false);
+    expect(await b.complete(replacement.claim, "excluded")).toBe(true);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const result = await a.claim(id);
+      if (!("claim" in result)) throw new Error("unexpected denial");
+      expect(await a.complete(result.claim, "transient")).toBe(true);
+      now += 300001;
+    }
+    expect(await b.claim(id)).toHaveProperty("reason");
+    expect(await b.claim({ ...id, revision: 2 })).toHaveProperty("claim");
+    expect(await b.claim({ ...id, spaceId: "other" })).toHaveProperty("claim");
+    expect(await b.claim({ ...id, userId: "other" })).toHaveProperty("claim");
+    await a.recover(id, new Date(now + 1));
+    expect(await b.claim(id)).toHaveProperty("claim");
+  });
+});
 
 const TEST_NETWORK = {
   // Read the global per call so a fetch stubbed after construction still wins.
@@ -760,7 +1127,7 @@ describe("MCP connector session cache", () => {
     // The reason the model reads is redacted the same way.
     expect(JSON.stringify([first, second])).not.toContain("local-key");
     expect(first[0]?.description).toContain("[redacted]");
-    expect(append).toHaveBeenCalledTimes(2);
+    expect(append).toHaveBeenCalledTimes(1); // Conditional claim admits one discovery.
     for (const call of append.mock.calls) {
       const message = String(call[0].payload.error);
       expect(message).not.toContain("local-key");
@@ -851,10 +1218,10 @@ describe("MCP connector session cache", () => {
         const retried = requests.mock.calls.length;
         expect(retried).toBeGreaterThan(tried);
 
-        // A refresh that failed only briefly still gets another try after an hour.
+        // Configuration intervention does not poll forever without an edit or explicit probe.
         clock.mockReturnValue(now + 2 * 60 * 60_000);
         await connector.discoverTools(context);
-        expect(requests.mock.calls.length).toBeGreaterThan(retried);
+        expect(requests.mock.calls.length).toBe(retried);
       } finally {
         vi.restoreAllMocks();
         await connector.close();
@@ -1764,7 +2131,52 @@ describe("MCP connector session cache", () => {
     await connector.close();
   });
 
-  it("retries a call once on a fresh session when the server expired the cached one", async () => {
+  it("reports an unknown outcome without repeating a call that may have applied", async () => {
+    const effects: string[] = [];
+    const callTool = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        effects.push("first");
+        throw new StreamableHTTPError(404, "Session not found");
+      })
+      .mockImplementationOnce(async () => {
+        effects.push("second");
+        return { content: [{ type: "text", text: "ok" }], isError: false };
+      });
+    const connector = new McpConnector(
+      {
+        mcpServer: NO_SHARED_SERVERS,
+        botMcpServer: { findFirst: vi.fn().mockResolvedValue(ASSIGNMENT) },
+      } as never,
+      {} as never,
+    );
+    const session = { callTool, close: vi.fn() } as unknown as McpSession;
+    const sessionFor = vi
+      .spyOn(connector as unknown as { sessionFor: () => Promise<McpSession> }, "sessionFor")
+      .mockResolvedValue(session);
+    const events: unknown[] = [];
+    for await (const event of connector.execute(
+      {
+        tool: "mcp__demo__echo",
+        args: {},
+        executionId: "synthetic-call",
+        route: { connectorId: "mcp", resourceId: "server-1", toolName: "echo" },
+      },
+      {
+        spaceId: "w1",
+        userId: "u1",
+        botId: "bot-1",
+        signal: new AbortController().signal,
+      } as never,
+    ))
+      events.push(event);
+    expect(events).toMatchObject([{ type: "error", outcome: "unknown" }]);
+    expect(sessionFor).toHaveBeenCalledOnce();
+    expect(callTool).toHaveBeenCalledOnce();
+    expect(effects).toEqual(["first"]);
+  });
+
+  it("does not retry a dispatched call when the server expired the cached session", async () => {
     const state = {
       failNext: false,
       initializations: 0,
@@ -1799,20 +2211,27 @@ describe("MCP connector session cache", () => {
     state.sessionNotFound = 1;
     const events: unknown[] = [];
     for await (const event of connector.execute(call, context)) events.push(event);
-    expect(events).toMatchObject([{ type: "result" }]);
-    expect(state.initializations).toBe(2);
-    expect(state.calls).toEqual(["echo"]);
-
+    expect(events).toMatchObject([{ type: "error", outcome: "unknown" }]);
+    expect(state.initializations).toBe(1);
+    expect(state.calls).toEqual([]);
     expect(state.rejectedRequests).toEqual(["tools/call"]);
 
-    // A server that keeps forgetting the session gets one retry, not a loop.
+    // A separate later call can reconnect, but the interrupted call is not replayed.
+    const later: unknown[] = [];
+    for await (const event of connector.execute(call, context)) later.push(event);
+    expect(later).toMatchObject([{ type: "result" }]);
+    expect(state.initializations).toBe(2);
+    expect(state.calls).toEqual(["echo"]);
+    expect(state.rejectedRequests).toEqual(["tools/call"]);
+
+    // A server that keeps forgetting the session still gets only one call per request.
     state.sessionNotFound = 2;
     const failed: unknown[] = [];
     for await (const event of connector.execute(call, context)) failed.push(event);
-    expect(failed).toMatchObject([{ type: "error" }]);
-    expect(state.initializations).toBe(3);
-    expect(state.rejectedRequests).toEqual(["tools/call", "tools/call", "tools/call"]);
-    expect(state.sessionNotFound).toBe(0);
+    expect(failed).toMatchObject([{ type: "error", outcome: "unknown" }]);
+    expect(state.initializations).toBe(2);
+    expect(state.rejectedRequests).toEqual(["tools/call", "tools/call"]);
+    expect(state.sessionNotFound).toBe(1);
     expect(state.calls).toEqual(["echo"]);
 
     await connector.close();
@@ -1881,7 +2300,11 @@ describe("MCP connector session cache", () => {
       state.sessionNotFound = 1;
       const events: unknown[] = [];
       for await (const event of connector.execute(call, context)) events.push(event);
-      expect(events).toMatchObject([{ type: "result" }]);
+      expect(events).toMatchObject([{ type: "error", outcome: "unknown" }]);
+      expect(state.initializations).toBe(1);
+      const later: unknown[] = [];
+      for await (const event of connector.execute(call, context)) later.push(event);
+      expect(later).toMatchObject([{ type: "result" }]);
       expect(state.initializations).toBe(2);
       expect(state.headers.at(-1)?.authorization).toBe("Bearer new-token");
     } finally {
@@ -1935,30 +2358,22 @@ describe("MCP connector session cache", () => {
     },
   );
 
-  it("retries concurrent calls on an expired session without closing in-flight requests", async () => {
+  it("does not replay concurrent calls on an expired session", async () => {
     const state = { failNext: false, initializations: 0, calls: [] as string[] };
     const fetch = mcpFetch(state);
     let startBoth!: () => void;
     const bothStarted = new Promise<void>((resolve) => {
       startBoth = resolve;
     });
-    let reconnect!: () => void;
-    const reconnected = new Promise<void>((resolve) => {
-      reconnect = resolve;
-    });
     let expiredCalls = 0;
     vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
       const request = new Request(input, init);
       if (request.method === "POST") {
         const message = JSON.parse(await request.clone().text());
-        if (message.method === "initialize" && state.initializations === 1) reconnect();
         if (message.method === "tools/call" && expiredCalls < 2) {
           expiredCalls += 1;
           if (expiredCalls === 1) await bothStarted;
-          else {
-            startBoth();
-            await reconnected;
-          }
+          else startBoth();
           return new Response("Session not found", { status: 404 });
         }
       }
@@ -1998,10 +2413,16 @@ describe("MCP connector session cache", () => {
         return events;
       };
       const results = await Promise.all([execute("first"), execute("second")]);
-      expect(results).toMatchObject([[{ type: "result" }], [{ type: "result" }]]);
+      expect(results).toMatchObject([
+        [{ type: "error", outcome: "unknown" }],
+        [{ type: "error", outcome: "unknown" }],
+      ]);
       expect(expiredCalls).toBe(2);
+      expect(state.initializations).toBe(1);
+      expect(state.calls).toEqual([]);
+      expect(await execute("third")).toMatchObject([{ type: "result" }]);
       expect(state.initializations).toBe(2);
-      expect(state.calls.sort()).toEqual(["first", "second"]);
+      expect(state.calls).toEqual(["third"]);
     } finally {
       await connector.close();
     }
@@ -3170,6 +3591,76 @@ it("marks a Composio MCP server's multi-execute tool as a batch under its prefix
 });
 
 describe("retained MCP output authorization", () => {
+  it("preserves protocol failure on oversized retained output", async () => {
+    const connector = new McpConnector(
+      {
+        botMcpServer: { findFirst: vi.fn(async () => ASSIGNMENT) },
+        mcpServer: NO_SHARED_SERVERS,
+      } as never,
+      new EncryptedSecretStore("test"),
+      {
+        outputStore: {
+          store: vi.fn(async () => ({ receipt: "opaque", preview: "preview" })),
+        } as never,
+      },
+    );
+    vi.spyOn(
+      connector as unknown as { withSession: (...args: unknown[]) => Promise<unknown> },
+      "withSession",
+    ).mockResolvedValue({
+      isError: true,
+      content: [{ type: "text", text: "x".repeat(5000) }],
+    });
+    const events = [];
+    for await (const event of connector.execute(
+      {
+        tool: "echo",
+        executionId: "test-execution",
+        args: {},
+        route: { connectorId: "mcp", resourceId: "server-1", toolName: "echo" },
+      },
+      context,
+    ))
+      events.push(event);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "result",
+        data: expect.objectContaining({ isError: true, truncated: true }),
+      }),
+    );
+    const record = vi.fn();
+    const result = events.find((event) => event.type === "result");
+    await persistMonitorReadEvidence(
+      result && "data" in result ? result.data : undefined,
+      async () => true,
+      record,
+    );
+    expect(record).not.toHaveBeenCalled();
+    await expect(
+      assertNoUnresolvedEffects(
+        {
+          externalEffect: { count: vi.fn().mockResolvedValue(0) },
+          routine: {
+            findUnique: vi.fn().mockResolvedValue({
+              monitor: {
+                kind: "email",
+                source: {
+                  connectorId: "mcp",
+                  resourceId: "server-1",
+                  resourceRevision: 1,
+                  toolName: "echo",
+                },
+              },
+            }),
+          },
+          event: { count: vi.fn(async () => record.mock.calls.length) },
+        },
+        "run-1",
+        "routine-1",
+      ),
+    ).rejects.toThrow("successful declared external read");
+    await connector.close();
+  });
   const context = {
     operationId: "test",
     traceId: "test",

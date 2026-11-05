@@ -4,7 +4,7 @@ import {
   cancelScheduleFromTool,
   commandWatchFromTool,
   compactScheduleInput,
-  createScheduleFromTool,
+  createScheduleFromTool as createScheduleFromToolImpl,
   filterBuiltinToolsForRun,
   filterBuiltinToolsForThread,
   isOneShotRoutineCron,
@@ -14,6 +14,28 @@ import {
   SCHEDULE_TOOL_NAMES,
   updateScheduleFromTool,
 } from "./schedule-tools.js";
+
+function gateQuery(enabled: boolean) {
+  return vi.fn(async (parts: TemplateStringsArray) => {
+    const query = parts.join(" ");
+    if (query.includes("current_setting")) return [{ bypass: "off" }];
+    if (query.includes("FROM routine_schedule_gate")) return [{ enabled }];
+    return [];
+  });
+}
+
+function createScheduleFromTool(
+  deps: Parameters<typeof createScheduleFromToolImpl>[0],
+  input: Parameters<typeof createScheduleFromToolImpl>[1],
+) {
+  if (!deps.prisma.$transaction) {
+    Object.assign(deps.prisma, {
+      $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({ $queryRaw: gateQuery(false), routine: deps.prisma.routine }),
+    });
+  }
+  return createScheduleFromToolImpl(deps, input);
+}
 
 const noRoutines = async () => [];
 const impossibleOffsetDates = ["2030-02-30T10:00Z", "2030-04-31T10:00+05:30"];
@@ -63,6 +85,16 @@ describe("resolveScheduleTiming", () => {
     expect(result.nextRunAt.getTime()).toBeGreaterThan(Date.now());
     expect(result.nextRunAt.getTime()).toBeLessThanOrEqual(Date.now() + 31_000);
   });
+
+  it.each([{ delaySeconds: 1e308 }, { delayMinutes: 1e308 }])(
+    "rejects a one-shot delay outside the supported date range: %j",
+    (input) => {
+      expect(resolveScheduleTiming(input)).toEqual({
+        ok: false,
+        error: "One-shot delay is outside the supported date range.",
+      });
+    },
+  );
 
   it("rejects one-shot schedules in the past", () => {
     expect(resolveScheduleTiming({ runAt: new Date(Date.now() - 60_000).toISOString() })).toEqual({
@@ -295,6 +327,37 @@ describe("isOneShotRoutineCron", () => {
 
 describe("schedule tool persistence", () => {
   const noTimezone = { findUnique: vi.fn(async () => null) };
+  it("uses the outbox without publishing a legacy wake when versioned", async () => {
+    const create = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+      id: "routine-v2",
+      ...data,
+    }));
+    const enqueue = vi.fn(async () => undefined);
+    const query = gateQuery(true);
+    const deps = {
+      prisma: {
+        routine: { findMany: noRoutines, create },
+        $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+          fn({ $queryRaw: query, routine: { create } }),
+      },
+      jobs: { enqueue },
+      events: { append: vi.fn(async () => undefined) },
+    } as unknown as Parameters<typeof createScheduleFromTool>[0];
+    const result = await createScheduleFromTool(deps, {
+      spaceId: "ws-1",
+      userId: "user-1",
+      botId: "bot-1",
+      threadId: "thread-1",
+      name: "Reminder",
+      prompt: "Remind me",
+      timezone: "UTC",
+      schedule: { delayMinutes: 5 },
+    });
+    expect(result).toMatchObject({ ok: true, routineId: "routine-v2" });
+    expect(create).toHaveBeenCalledOnce();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([parts]) => String(parts).includes("FOR SHARE"))).toBe(true);
+  });
   it.each(impossibleOffsetDates)("does not persist an impossible offset date: %s", async (date) => {
     const create = vi.fn(async (args: { data: Record<string, unknown> }) => ({
       id: "routine-1",
@@ -846,6 +909,23 @@ describe("schedule_create with a watch", () => {
     prompt: "Summarize what changed",
   };
 
+  it("rejects a versioned watch before it can be created or enqueued", async () => {
+    const { deps: d, create, enqueue } = deps();
+    Object.assign(d.prisma, {
+      $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({ $queryRaw: gateQuery(true), routine: { create } }),
+    });
+    await expect(
+      createScheduleFromTool(d, {
+        ...base,
+        timezone: "UTC",
+        schedule: { watch: { kind: "files", paths: ["inbox"] } },
+      }),
+    ).resolves.toEqual({ error: "Versioned routine watch execution is unavailable." });
+    expect(create).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it("creates an active routine with no schedule that checks right away", async () => {
     const { deps: d, create, enqueue } = deps();
     const result = await createScheduleFromTool(d, {
@@ -935,8 +1015,13 @@ describe("cancelScheduleFromTool", () => {
     const findFirst = vi.fn(async () => ({ id: "routine-1", name: "Daily" }));
     const deleteMany = vi.fn(async () => ({ count: 1 }));
     const cancel = vi.fn(async () => undefined);
+    const protocol = gateQuery(false);
     const deps = {
-      prisma: { routine: { findFirst, deleteMany } },
+      prisma: {
+        routine: { findFirst, deleteMany },
+        $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+          fn({ $queryRaw: protocol, routine: { deleteMany } }),
+      },
       events: { append: vi.fn(async () => undefined) },
       jobs: { enqueue: vi.fn(async () => undefined), cancel },
     } as unknown as Parameters<typeof cancelScheduleFromTool>[0];
@@ -963,11 +1048,22 @@ describe("cancelScheduleFromTool", () => {
       },
     });
     expect(cancel).toHaveBeenCalledOnce();
+    expect(protocol).toHaveBeenCalledOnce();
 
     deleteMany.mockResolvedValueOnce({ count: 0 });
     cancel.mockClear();
     await expect(cancelScheduleFromTool(deps, input)).resolves.toEqual({
       error: "Schedule not found.",
+    });
+    expect(cancel).not.toHaveBeenCalled();
+
+    deleteMany.mockRejectedValueOnce({
+      code: "P2039",
+      meta: { driverAdapterError: { cause: { originalCode: "P4770" } } },
+    });
+    await expect(cancelScheduleFromTool(deps, input)).resolves.toEqual({
+      error:
+        "A change check may still be running or its outcome is unknown. The routine was not changed.",
     });
     expect(cancel).not.toHaveBeenCalled();
   });
@@ -1002,14 +1098,19 @@ describe("updateScheduleFromTool", () => {
     nextRunAt: new Date("2026-10-26T09:00:00.000Z"),
   };
 
-  function setup(row: Record<string, unknown> | null = weekly) {
+  function setup(row: Record<string, unknown> | null = weekly, enabled = false) {
     const findFirst = vi.fn(async () => row);
     const updateMany = vi.fn(async () => ({ count: row ? 1 : 0 }));
     const enqueue = vi.fn(async () => undefined);
     const cancel = vi.fn(async () => undefined);
     const append = vi.fn(async () => undefined);
+    const protocol = gateQuery(enabled);
     const deps = {
-      prisma: { routine: { findFirst, updateMany } },
+      prisma: {
+        routine: { findFirst, updateMany },
+        $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+          fn({ $queryRaw: protocol, routine: { updateMany } }),
+      },
       events: { append },
       jobs: { enqueue, cancel },
     } as unknown as Parameters<typeof updateScheduleFromTool>[0];
@@ -1023,8 +1124,42 @@ describe("updateScheduleFromTool", () => {
         schedule: {},
         ...patch,
       });
-    return { findFirst, updateMany, enqueue, cancel, append, update };
+    return { findFirst, updateMany, enqueue, cancel, append, update, protocol };
   }
+
+  it("does not publish a legacy wake for a versioned schedule update", async () => {
+    const { update, enqueue, updateMany } = setup(weekly, true);
+    await expect(update({ schedule: { delayMinutes: 5 } })).resolves.toMatchObject({ ok: true });
+    expect(updateMany).toHaveBeenCalledOnce();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does not resume a watch while versioned watch execution is unavailable", async () => {
+    const { update, updateMany, enqueue } = setup(
+      { ...weekly, active: false, watch: { kind: "files" } },
+      true,
+    );
+    await expect(update({ active: true })).resolves.toEqual({
+      error: "Versioned routine watch execution is unavailable.",
+    });
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("reports an uncertain in-flight watch without cancelling or rescheduling", async () => {
+    const { updateMany, enqueue, cancel, append, update } = setup();
+    updateMany.mockRejectedValueOnce({
+      code: "P2039",
+      meta: { driverAdapterError: { cause: { originalCode: "P4770" } } },
+    });
+    expect(await update({ active: false })).toEqual({
+      error:
+        "A change check may still be running or its outcome is unknown. The routine was not changed.",
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+  });
 
   it.each(impossibleOffsetDates)(
     "does not update to an impossible offset date: %s",
@@ -1074,6 +1209,43 @@ describe("updateScheduleFromTool", () => {
     expect(append).toHaveBeenCalledWith(
       expect.objectContaining({ type: "routine.updated", threadId: "thread-1" }),
     );
+  });
+
+  it("marks the bot schedule update within the same transaction as the write", async () => {
+    const { protocol, updateMany, update } = setup();
+    await update({ prompt: "Use the current instructions" });
+    const markerIndex = protocol.mock.calls.findIndex(([query]) =>
+      String(query).includes("app.scheduler_protocol"),
+    );
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    expect(protocol.mock.invocationCallOrder[markerIndex]).toBeLessThan(
+      updateMany.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("rearms a completed one-shot for a new time only when explicitly enabled", async () => {
+    const completed = {
+      ...weekly,
+      crons: [ONCE_ROUTINE_CRON],
+      active: false,
+      lastRunAt: new Date("2026-10-19T09:00:00.000Z"),
+      nextRunAt: null,
+    };
+    const { update, updateMany, enqueue } = setup(completed);
+    const runAt = "2026-10-21T10:00:00.000Z";
+    await expect(update({ active: true, schedule: { runAt } })).resolves.toMatchObject({
+      ok: true,
+      active: true,
+      nextRunAt: runAt,
+      oneShot: true,
+    });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ active: false, nextRunAt: null }),
+        data: expect.objectContaining({ active: true, nextRunAt: new Date(runAt) }),
+      }),
+    );
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ availableAt: new Date(runAt) }));
   });
 
   it("moves the first run of the current repeat with startAt alone", async () => {

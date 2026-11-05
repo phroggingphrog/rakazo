@@ -63,8 +63,45 @@ export function providerQuotaResetAt(text: string, now = Date.now()): number | u
   return resetAt !== undefined && resetAt - now > PROVIDER_QUOTA_MIN_RESET_MS ? resetAt : undefined;
 }
 
+export const ROUTINE_NOTIFICATION_PRE_SUBMIT_MAX_FAILURES = 5;
+
 export const RoutineRunSchema = z.object({
   id: Id,
+  taskId: Id.optional(),
+  trigger: z.string().optional(),
+  nextAttemptAt: IsoDate.nullable().optional(),
+  lifecycle: z
+    .enum([
+      "created",
+      "queued",
+      "running",
+      "waiting_for_approval",
+      "waiting_for_external_dependency",
+      "retrying",
+      "completed",
+      "failed",
+      "cancelled",
+    ])
+    .optional(),
+  notificationRetryExhausted: z.boolean().optional(),
+  attemptCount: z.number().int().nonnegative().optional(),
+  unresolvedEffectCount: z.number().int().nonnegative().optional(),
+  /** Notification evidence; missing historical evidence and device display remain unknown. */
+  notification: z
+    .enum([
+      "unknown",
+      "pending",
+      "submitting",
+      "uncertain",
+      "undeliverable",
+      "cancelled",
+      "blocked",
+      "expo_accepted",
+      "expo_receipt_ok",
+      "expo_receipt_error",
+      "expo_receipt_unavailable",
+    ])
+    .optional(),
   botId: Id,
   groupId: Id.nullable(),
   status: RunStatus,

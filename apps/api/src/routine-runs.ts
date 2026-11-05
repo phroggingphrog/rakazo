@@ -1,9 +1,37 @@
 import { ORPCError } from "@orpc/server";
+import { taskLifecycle } from "@rakazo/adapters";
 import type { Actor, RoutineHistory, RoutineRun, RoutineRunCursor } from "@rakazo/contracts";
-import { ROUTINE_HISTORY_PAGE_SIZE } from "@rakazo/contracts";
+import {
+  ROUTINE_HISTORY_PAGE_SIZE,
+  ROUTINE_NOTIFICATION_PRE_SUBMIT_MAX_FAILURES,
+} from "@rakazo/contracts";
 import { runFailureError } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import { Prisma } from "@rakazo/db";
+
+function notificationStatus(
+  intent: { status: string; receiptStatus: string | null } | null | undefined,
+): NonNullable<RoutineRun["notification"]> {
+  switch (intent?.status) {
+    case "preparing":
+      return "pending";
+    case "pending":
+    case "submitting":
+    case "uncertain":
+    case "undeliverable":
+    case "cancelled":
+    case "blocked":
+      return intent.status;
+    case "accepted":
+      if (intent.receiptStatus === "ok") return "expo_receipt_ok";
+      if (intent.receiptStatus === "error" || intent.receiptStatus === "device_not_registered")
+        return "expo_receipt_error";
+      if (intent.receiptStatus === "unavailable") return "expo_receipt_unavailable";
+      return "expo_accepted";
+    default:
+      return "unknown";
+  }
+}
 
 export async function listRoutineRuns(
   prisma: PrismaClient,
@@ -41,6 +69,15 @@ export async function listRoutineRuns(
     select: {
       id: true,
       botId: true,
+      taskId: true,
+      trigger: true,
+      wakeAt: true,
+      _count: {
+        select: {
+          attempts: true,
+          effects: { where: { status: { in: ["failed", "uncertain", "executing"] } } },
+        },
+      },
       threadId: true,
       thread: { select: { groupId: true } },
       status: true,
@@ -48,6 +85,9 @@ export async function listRoutineRuns(
       createdAt: true,
       startedAt: true,
       completedAt: true,
+      routineNotification: {
+        select: { status: true, receiptStatus: true, preSubmitFailures: true },
+      },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
@@ -75,6 +115,20 @@ export async function listRoutineRuns(
     nextCursor,
     runs: runs.map((run) => ({
       id: run.id,
+      taskId: run.taskId,
+      trigger: run.trigger,
+      nextAttemptAt: run.wakeAt?.toISOString() ?? null,
+      lifecycle: taskLifecycle({
+        status: run.status,
+        wakeAt: run.wakeAt,
+        attemptCount: run._count?.attempts,
+      }),
+      attemptCount: run._count?.attempts,
+      unresolvedEffectCount: run._count?.effects,
+      notification: notificationStatus(run.routineNotification),
+      notificationRetryExhausted:
+        run.routineNotification?.status === "blocked" &&
+        run.routineNotification.preSubmitFailures >= ROUTINE_NOTIFICATION_PRE_SUBMIT_MAX_FAILURES,
       botId: run.botId,
       groupId: run.thread.groupId,
       status: run.status as RoutineRun["status"],

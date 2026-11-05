@@ -469,7 +469,25 @@ export function routineModelIssues(
 
 export const ROUTINE_MENTION_BATCH_MAX = 100;
 
+export const WorkspaceMonitorSchema = z
+  .object({
+    kind: z.enum(["email", "calendar", "subscriptions"]),
+    mode: z.enum(["report_only", "approval_required"]).default("report_only"),
+    source: z
+      .object({
+        connectorId: z.literal("mcp"),
+        resourceId: Id,
+        resourceRevision: z.number().int().positive(),
+        toolName: z.string().min(1).max(200),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type WorkspaceMonitor = z.infer<typeof WorkspaceMonitorSchema>;
+
 export const RoutineSchema = z.object({
+  monitor: WorkspaceMonitorSchema.nullable().optional(),
   id: Id,
   botId: Id,
   name: z.string(),
@@ -523,6 +541,7 @@ export const CreateRoutineInput = z
     modelId: z.string().trim().min(1).max(200).nullable().default(null),
     thinkingLevel: ThinkingLevelSchema.nullable().default(null),
     watch: RoutineWatchSchema.nullable().default(null),
+    monitor: WorkspaceMonitorSchema.nullable().optional(),
   })
   .superRefine((value, ctx) => {
     routineModelIssues(value, ctx);

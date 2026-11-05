@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { callRemoteMcpTool, RemoteMcpSessionCache } from "./remote-mcp.js";
+import { callRemoteMcpTool, listRemoteMcpTools, RemoteMcpSessionCache } from "./remote-mcp.js";
 
 const publicResolver = async () => [{ address: "203.0.113.10", family: 4 as const }];
 const ENDPOINT = "https://mcp.example.test/mcp";
@@ -19,6 +19,7 @@ function mcpServer(
   }) => Response | undefined,
 ) {
   const toolCalls: Array<{ session: string | null; tool: string }> = [];
+  const toolLists: Array<string | null> = [];
   const deletes: Array<string | null> = [];
   let initializations = 0;
   const sessions = new Set<string>();
@@ -55,6 +56,7 @@ function mcpServer(
     }
     if (message.method === "tools/call")
       toolCalls.push({ session, tool: message.params?.name ?? "" });
+    if (message.method === "tools/list") toolLists.push(session);
     // Like a stateful server: a session it no longer knows is a 404.
     if (!session || !sessions.has(session)) return new Response(null, { status: 404 });
     return handler({ message, session, respond }) ?? new Response(null, { status: 202 });
@@ -63,6 +65,7 @@ function mcpServer(
     fetch,
     sessions,
     toolCalls,
+    toolLists,
     deletes,
     initializations: () => initializations,
   };
@@ -196,18 +199,21 @@ describe("run-scoped remote MCP sessions", () => {
     await pool.close();
   });
 
-  it("replays a call exactly once after the server forgot the session", async () => {
+  it("does not replay a call after the server forgot the session", async () => {
     const server = statefulServer();
     const pool = new RemoteMcpSessionCache();
     await scopedCall(pool, "run-1 srv", server);
 
     // The server expired the session between two calls of the run.
     server.sessions.clear();
+    await expect(scopedCall(pool, "run-1 srv", server)).rejects.toThrow(/404|Error POSTing/);
+    expect(server.toolCalls.map((call) => call.session)).toEqual(["session-1", "session-1"]);
+    expect(server.initializations()).toBe(1);
+
+    // A later explicit call opens a new session.
     await expect(scopedCall(pool, "run-1 srv", server)).resolves.toMatchObject({
       content: [{ text: "ok:session-2" }],
     });
-    // One POST for the first call, then the expired attempt and its single replay.
-    expect(server.toolCalls).toHaveLength(3);
     expect(server.toolCalls.map((call) => call.session)).toEqual([
       "session-1",
       "session-1",
@@ -217,10 +223,30 @@ describe("run-scoped remote MCP sessions", () => {
     await pool.close();
   });
 
-  it("stops after one replay when the fresh session is unknown too", async () => {
+  it("reconnects and retries discovery after the server forgot the session", async () => {
     const server = mcpServer(({ message, respond }) => {
-      if (message.method === "tools/call") {
-        // The server answers 404: it never knew this session.
+      if (message.method === "tools/list") return respond({ result: { tools: [] } });
+      return undefined;
+    });
+    const pool = new RemoteMcpSessionCache();
+    const options = {
+      endpoint: ENDPOINT,
+      fetch: server.fetch as unknown as typeof globalThis.fetch,
+      resolveHostname: publicResolver,
+      sessionScope: "run-1 srv",
+      sessionPool: pool,
+    };
+    await listRemoteMcpTools(options);
+    server.sessions.clear();
+    await expect(listRemoteMcpTools(options)).resolves.toEqual([]);
+    expect(server.toolLists).toEqual(["session-1", "session-1", "session-2"]);
+    expect(server.initializations()).toBe(2);
+    await pool.close();
+  });
+
+  it("stops discovery after one replay when the fresh session is unknown too", async () => {
+    const server = mcpServer(({ message, respond }) => {
+      if (message.method === "tools/list") {
         return new Response(null, { status: 404 });
       }
       if (message.id === undefined) return new Response(null, { status: 202 });
@@ -228,9 +254,16 @@ describe("run-scoped remote MCP sessions", () => {
     });
     const pool = new RemoteMcpSessionCache();
 
-    await expect(scopedCall(pool, "run-1 srv", server)).rejects.toThrow(/404|Error POSTing/);
-
-    expect(server.toolCalls).toHaveLength(2);
+    await expect(
+      listRemoteMcpTools({
+        endpoint: ENDPOINT,
+        fetch: server.fetch as unknown as typeof globalThis.fetch,
+        resolveHostname: publicResolver,
+        sessionScope: "run-1 srv",
+        sessionPool: pool,
+      }),
+    ).rejects.toThrow(/404|Error POSTing/);
+    expect(server.toolLists).toHaveLength(2);
     expect(server.initializations()).toBe(2);
     await pool.close();
   });

@@ -1,6 +1,7 @@
 import type { ConnectorCall, ConnectorTool } from "@rakazo/adapter-kit";
 import { BOT_INSTRUCTIONS_MAX_LENGTH } from "@rakazo/contracts";
 import { redactSecrets } from "@rakazo/core";
+import { availableInSpace } from "@rakazo/db";
 import { prepareAgentConnectionResponse } from "./agent-connections.js";
 import type { FleetCardSummary } from "./approval-ask.js";
 import {
@@ -15,12 +16,15 @@ import {
   catalogApprovalInnerArgs,
   catalogApprovalMatchesLiveRoute,
   catalogApprovalRequest,
+  pipedreamAccountBinding,
 } from "./approval-effect.js";
 import { validCloudAgentArgs } from "./cloud-agent-tools.js";
 import { sanitizeConnectorError } from "./connector-safety.js";
 import { isFleetApprovalTool, prepareFleetRequest } from "./fleet-tools.js";
+import { installedMcpBinding } from "./installed-mcp-binding.js";
 import { assertConnectorToolArgs, CATALOG_EXECUTE } from "./lazy-tool-catalog.js";
 import { paidRequestEffect, restorePaidRequest } from "./paid-request.js";
+import { preparePipedreamBinding, retireUnavailablePipedreamApproval, type PreparedPipedreamBinding } from "./pipedream-binding.js";
 import type { RunContext } from "./run-context.js";
 import { isRunTainted, neverAsks } from "./run-context.js";
 import {
@@ -47,10 +51,12 @@ export interface ToolRequest {
   /** The approved effect this attempt must replay next, if any. */
   nextApprovedTool: string | undefined;
   approvedEffectKey: string | undefined;
+  installedApprovedRequest?: unknown;
   replayEffectToolName: string;
   fleetSummary: FleetCardSummary | undefined;
   /** Gated like a consequential action, even when the tool alone is not. */
   heldForApproval: boolean;
+  pipedream?: PreparedPipedreamBinding;
 }
 
 type ToolError = { error: string };
@@ -118,6 +124,10 @@ export async function resolveToolRequest(
                 connectorId: resolved.tool.route.connectorId,
                 resourceId: resolved.tool.route.resourceId,
                 resourceRevision: resolved.tool.route.resourceRevision,
+                pipedreamAccountEnvelope: resolved.tool.route.pipedreamAccountEnvelope,
+                pipedreamAccountSelector: resolved.tool.route.pipedreamAccountSelector,
+                pipedreamSingletonConnectionId: resolved.tool.route.pipedreamSingletonConnectionId,
+                installedMcpBinding: resolved.tool.route.installedMcpBinding,
                 toolName: resolved.tool.route.toolName,
               }
             : undefined,
@@ -135,6 +145,27 @@ export async function resolveToolRequest(
     };
   }
   if (
+    connectorCall.route?.connectorId === "installed" && connectorCall.route.resourceId &&
+    connectorCall.route.installedMcp === undefined
+  ) {
+    const install = await deps.prisma.capabilityInstall.findFirst({
+      where: { id: connectorCall.route.resourceId, ...availableInSpace(context) },
+      select: { kind: true },
+    });
+    connectorCall = {
+      ...connectorCall,
+      route: { ...connectorCall.route, installedMcp: install?.kind === "mcp" },
+    };
+  }
+  if (connectorCall.route?.connectorId === "installed" && connectorCall.route.installedMcp && connectorCall.route.resourceId) {
+    const supplied = connectorCall.route.installedMcpBinding;
+    const binding = installedMcpBinding(supplied) ??
+      (supplied === undefined ? await deps.connector?.prepareInstalledMcpBinding?.(connectorCall.route.resourceId, context) : undefined);
+    if (!binding || binding.installId !== connectorCall.route.resourceId)
+      return { error: "The installed connection could not be verified. Refresh the tool and try again." };
+    connectorCall = { ...connectorCall, route: { ...connectorCall.route, installedMcpBinding: binding } };
+  }
+  if (
     !catalogRemapped &&
     connectorCall.route?.resourceId &&
     connectorCall.route.connectorId &&
@@ -145,6 +176,10 @@ export async function resolveToolRequest(
         connectorId: connectorCall.route.connectorId,
         resourceId: connectorCall.route.resourceId,
         resourceRevision: connectorCall.route.resourceRevision,
+        pipedreamAccountEnvelope: connectorCall.route.pipedreamAccountEnvelope,
+        pipedreamAccountSelector: connectorCall.route.pipedreamAccountSelector,
+        pipedreamSingletonConnectionId: connectorCall.route.pipedreamSingletonConnectionId,
+        installedMcpBinding: connectorCall.route.installedMcpBinding,
         toolName: connectorCall.route.toolName,
       },
       args,
@@ -157,6 +192,7 @@ export async function resolveToolRequest(
   const nextApprovedTool = approvedReplays.nextToolName();
   let approvedEffectKey: string | undefined;
   const nextApprovedRequest = approvedReplays.nextRequest();
+  const isPipedream = connectorCall.route?.connectorId === "pipedream" && Boolean(connectorCall.route.resourceId);
   const liveRoute =
     connectorCall.route?.resourceId &&
     connectorCall.route.connectorId &&
@@ -165,11 +201,25 @@ export async function resolveToolRequest(
           connectorId: connectorCall.route.connectorId,
           resourceId: connectorCall.route.resourceId,
           resourceRevision: connectorCall.route.resourceRevision,
+          pipedreamAccountEnvelope: connectorCall.route.pipedreamAccountEnvelope,
+          pipedreamAccountSelector: connectorCall.route.pipedreamAccountSelector,
+          pipedreamSingletonConnectionId: connectorCall.route.pipedreamSingletonConnectionId,
+          installedMcpBinding: connectorCall.route.installedMcpBinding,
           toolName: connectorCall.route.toolName,
         }
       : undefined;
   const nextBound = boundDirectApprovalDetails(nextApprovedRequest, CATALOG_APPROVAL_TOOL);
   const nextCatalog = catalogApprovalDetails(nextApprovedRequest, CATALOG_APPROVAL_TOOL);
+  const savedRoute = nextBound?.route ?? nextCatalog?.route;
+  if (connectorCall.route?.installedMcp && liveRoute && savedRoute?.connectorId === "installed" &&
+    savedRoute.resourceId === liveRoute.resourceId && savedRoute.toolName === liveRoute.toolName &&
+    !approvalRoutesMatch(savedRoute, liveRoute)) approvedReplays.markAccountUnavailable();
+  if (
+    isPipedream && liveRoute && savedRoute?.connectorId === "pipedream" &&
+    savedRoute.resourceId === liveRoute.resourceId && savedRoute.toolName === liveRoute.toolName &&
+    savedRoute.resourceRevision === liveRoute.resourceRevision &&
+    !approvalRoutesMatch(savedRoute, liveRoute)
+  ) approvedReplays.markAccountUnavailable();
   // After collision uniquify, the live tool name may differ from the stored effect
   // kind while still targeting the same bound connector resource.
   const sameBoundResource = Boolean(
@@ -208,7 +258,7 @@ export async function resolveToolRequest(
     );
     if (resourceError) return { error: resourceError };
     approvedEffectKey = approvedReplays.nextIdempotencyKey();
-    const approvedRequest = approvedReplays.take(nextApprovedTool)!;
+    const approvedRequest = isPipedream ? nextApprovedRequest : approvedReplays.take(nextApprovedTool)!;
     const approvedCatalog = catalogApprovalDetails(approvedRequest, CATALOG_APPROVAL_TOOL);
     if (approvedCatalog && !catalogRemapped) {
       // Shrink-to-direct: restore approved inner arguments, not the wrapper envelope.
@@ -247,6 +297,43 @@ export async function resolveToolRequest(
       }
     }
   }
+  let pipedream: PreparedPipedreamBinding | undefined;
+  if (isPipedream) {
+    const approvedRoute =
+      boundDirectApprovalDetails(nextApprovedRequest, CATALOG_APPROVAL_TOOL)?.route ??
+      catalogApprovalDetails(nextApprovedRequest, CATALOG_APPROVAL_TOOL)?.route;
+    const previous = nextApprovedTool ? pipedreamAccountBinding(approvedRoute?.pipedreamAccountBinding) : undefined;
+    if (nextApprovedTool && !previous) {
+      approvedReplays.markAccountUnavailable();
+      return { error: "This approval needs a fresh review of its connected account." };
+    }
+    try {
+      pipedream = await preparePipedreamBinding(ctx, connectorCall, args, previous);
+    } catch (error) {
+      if (!nextApprovedTool) throw error;
+      approvedReplays.markAccountUnavailable();
+      return { error: "The connected account could not be confirmed. Check the connection and try again." };
+    }
+    if (!pipedream) {
+      const retired = previous && approvedEffectKey && connectorCall.route?.resourceId
+        ? await retireUnavailablePipedreamApproval(ctx, connectorCall.route.resourceId, approvedEffectKey, previous, nextApprovedRequest)
+        : false;
+      if (nextApprovedTool && retired) approvedReplays.take(nextApprovedTool);
+      else if (nextApprovedTool) approvedReplays.markAccountUnavailable();
+      return { error: "The connected account changed or is unavailable. Refresh the tool and review the request again." };
+    }
+    const direct = boundDirectApprovalDetails(effectRequest, CATALOG_APPROVAL_TOOL);
+    const catalog = catalogApprovalDetails(effectRequest, CATALOG_APPROVAL_TOOL);
+    if (direct) effectRequest = boundDirectApprovalRequest(
+      { ...direct.route, pipedreamAccountBinding: pipedream.binding }, direct.args, CATALOG_APPROVAL_TOOL,
+    );
+    else if (catalog?.route) effectRequest = catalogApprovalRequest(
+      catalog.toolName, catalog.args, CATALOG_APPROVAL_TOOL,
+      { ...catalog.route, pipedreamAccountBinding: pipedream.binding },
+    );
+    else return { error: "The connected account request could not be bound." };
+    if (nextApprovedTool) approvedReplays.take(nextApprovedTool);
+  }
   return {
     name,
     args,
@@ -257,9 +344,11 @@ export async function resolveToolRequest(
     catalogRemapped,
     nextApprovedTool,
     approvedEffectKey,
+    ...(nextApprovedTool && connectorCall.route?.installedMcp ? { installedApprovedRequest: nextApprovedRequest } : {}),
     replayEffectToolName,
     fleetSummary: undefined,
     heldForApproval: false,
+    ...(pipedream ? { pipedream } : {}),
   };
 }
 

@@ -2,14 +2,14 @@ import { ORPCError } from "@orpc/server";
 import { routineWakeupJob } from "@rakazo/adapter-kit";
 import { parseRoutineWatch, parseRoutineWatchState, routineRunModelPin } from "@rakazo/adapters";
 import type { Actor, CreateRoutineInput, Routine } from "@rakazo/contracts";
-import { canonicalPiProviderId } from "@rakazo/contracts";
+import { canonicalPiProviderId, WorkspaceMonitorSchema } from "@rakazo/contracts";
 import {
   hasMixedOneShotSchedule,
   isOneShotRoutineCrons,
   nextCronDateAcrossStrict,
 } from "@rakazo/core";
 import type { Prisma, PrismaClient } from "@rakazo/db";
-import { IsolationError } from "@rakazo/db";
+import { IsolationError, runAsSystemInTransaction } from "@rakazo/db";
 import type { RouterDeps } from "./router.js";
 import type { RouterContext } from "./routes/context.js";
 
@@ -56,8 +56,45 @@ export function routineRowData(actor: Actor, input: CreateRoutineInput, nextRunA
     modelId: input.modelId,
     thinkingLevel: input.thinkingLevel,
     ...(input.watch ? { watch: input.watch as Prisma.InputJsonValue } : {}),
+    ...(input.monitor ? { monitor: input.monitor as Prisma.InputJsonValue } : {}),
     nextRunAt,
   };
+}
+
+export async function routineSchedulerMode(tx: Prisma.TransactionClient): Promise<boolean> {
+  const gate = await runAsSystemInTransaction(
+    tx,
+    "check routine scheduler mode",
+    () =>
+      tx.$queryRaw<Array<{ enabled: boolean }>>`
+      SELECT enabled FROM routine_schedule_gate WHERE id FOR SHARE`,
+  );
+  if (gate.length !== 1) throw new Error("Routine scheduling gate is unavailable");
+  await tx.$queryRaw`SELECT set_config('app.scheduler_protocol', '2', true)`;
+  return gate[0]!.enabled;
+}
+
+/** Record a routine and its scheduler generation in one transaction. */
+export async function createRoutineScheduled(
+  prisma: PrismaClient,
+  actor: Actor,
+  input: CreateRoutineInput,
+  recheck?: (tx: Prisma.TransactionClient) => Promise<boolean>,
+) {
+  const nextRunAt = routineNextRunAt(input);
+  return prisma.$transaction(async (tx) => {
+    const versioned = await routineSchedulerMode(tx);
+    if (recheck && !(await recheck(tx)))
+      throw new ORPCError("CONFLICT", {
+        message: "The selected account changed. Choose it again.",
+      });
+    if (versioned && input.watch && input.active)
+      throw new ORPCError("CONFLICT", {
+        message: "Versioned routine watch execution is unavailable.",
+      });
+    const row = await tx.routine.create({ data: routineRowData(actor, input, nextRunAt) });
+    return { row, versioned };
+  });
 }
 
 export function nextRoutineDate(crons: string[], timezone: string): Date {
@@ -91,6 +128,7 @@ export function mapRoutine(row: {
   modelProvider: string | null;
   modelId: string | null;
   thinkingLevel: string | null;
+  monitor?: unknown;
   watch: unknown;
   watchState: unknown;
   lastRunAt: Date | null;
@@ -112,6 +150,7 @@ export function mapRoutine(row: {
     modelProvider: row.modelProvider ? canonicalPiProviderId(row.modelProvider) : null,
     modelId: row.modelId ?? null,
     thinkingLevel: (row.thinkingLevel as Routine["thinkingLevel"]) ?? null,
+    monitor: row.monitor == null ? null : WorkspaceMonitorSchema.parse(row.monitor),
     watch: parseRoutineWatch(row.watch),
     watchState: parseRoutineWatchState(row.watchState),
     lastRunAt: row.lastRunAt?.toISOString() ?? null,
@@ -139,6 +178,7 @@ export function createRoutineAnnouncer(deps: RouterDeps) {
     actor: Actor,
     bot: { id: string; thread: { id: string } | null },
     row: Awaited<ReturnType<typeof deps.prisma.routine.create>>,
+    options?: { versioned?: boolean },
   ) => {
     if (bot.thread) {
       await deps.events.append({
@@ -149,7 +189,7 @@ export function createRoutineAnnouncer(deps: RouterDeps) {
         payload: { name: row.name },
       });
     }
-    if (row.active && row.nextRunAt) {
+    if (!options?.versioned && row.active && row.nextRunAt) {
       await deps.jobs.enqueue(routineWakeupJob(row.id, row.nextRunAt));
     }
   };
@@ -167,6 +207,8 @@ export async function routineTestTarget(
     where: { id: routineId, spaceId: actor.spaceId, userId: actor.userId },
   });
   if (!routine) throw new IsolationError();
+  if (routine.protected)
+    throw new ORPCError("CONFLICT", { message: "Protected setup execution is not available yet." });
   const bot = await repos.getBot(actor, routine.botId);
   if (!bot.thread) throw new IsolationError();
   return { routine, botId: bot.id, threadId: bot.thread.id };

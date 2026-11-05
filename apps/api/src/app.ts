@@ -48,6 +48,7 @@ import {
   createConnectorStack,
   createIdleComputerSweeper,
   createJobReconciler,
+  createMemoryRoutineScheduleReconciler,
   createMessagingContextLoader,
   createMessagingTeamChatHistory,
   createMessagingTeamChatSender,
@@ -74,6 +75,7 @@ import {
   isMessagingSurfaceEnabled,
   isPipedreamEnabled,
   McpConnector,
+  McpSessionCleanupError,
   McpOAuthBroker,
   McpOutputStore,
   messagingPlatformsFromEnv,
@@ -187,6 +189,7 @@ import { mountApiRequestBodyLimits } from "./request-body-limit.js";
 import { createRouter } from "./router.js";
 import { mountScreenTarget } from "./screen-proxy.js";
 import { createAuthResponseAudit } from "./security-audit.js";
+import { stopApiResources } from "./shutdown.js";
 import { createSpeechSummarizer } from "./speech-summary.js";
 import { isDeferredReservationLost, TeamChatBridge } from "./team-chat-bridge.js";
 import { ModelTeamChatEngagementJudge } from "./team-chat-judge.js";
@@ -496,6 +499,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     secrets,
     remoteConnectors,
     env.mcpAllowPrivateEndpoint,
+    env.encryptionKey,
   );
   const integrationSettings = new IntegrationProviderSettings(prisma, secrets, env.encryptionKey, {
     composio:
@@ -674,6 +678,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     deploymentModelConfigured: env.deploymentModelConfigured,
     dataDir: env.dataDir,
     notifications,
+    routineNotificationOutbox: !inMemoryJobs,
     jobs,
     events,
     onTicketChange: ticketChanges,
@@ -727,6 +732,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
         }),
         reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
         reconcilePurchases: () => reconcilePurchases({ prisma, jobs, paymentWallet }),
+        reconcileRoutineSchedules: createMemoryRoutineScheduleReconciler(prisma, inMemoryJobs),
         reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
         reconcileSecurityEventRetention: createSecurityEventPruner(
           prisma,
@@ -1441,41 +1447,46 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
       shutdown.abort();
       // Aborted runs hand themselves back while realtime is still open to announce them.
       const runsStopped = runs?.stop();
-      await userDeviceHub?.close();
-      oauthLogins.abortAll();
-      messagingStopped = true;
-      clearMessagingRetryDelay?.();
-      clearTeamChatRetryDelay?.();
-      receipts?.stop();
-      pendingTeamChatInbound.reject(new Error("Team chat bridge stopped before startup"));
-      // Cancel in-flight start() before awaiting the retry task so stop() cannot
-      // sit on DB/reconcile work that bridge.start() is still running.
-      await settleWithTimeout(
-        teamChatBridgeInstance ? teamChatBridgeInstance.stop().catch(() => undefined) : undefined,
-        TEAM_CHAT_STARTUP_SHUTDOWN_MS,
-      );
-      await messagingInitTask?.catch(() => undefined);
-      await settleWithTimeout(teamChatInitTask, TEAM_CHAT_STARTUP_SHUTDOWN_MS);
-      await messaging?.shutdown?.();
-      await teamChatBridge?.stop();
-      await stopInstalledBridges?.();
-      await stopReferralEmails?.();
-      await email?.drain?.();
-      stopMcpReprobe();
-      await reconciler?.stop();
-      await oauthTokenUpgrade;
-      await mcpArgsMove;
-      await runsStopped;
-      await jobs.close();
-      await secrets.close();
-      await realtime.close();
-      await mcp.close();
-      await installed.close();
-      await prisma.$disconnect().catch(() => undefined);
-      await created.pool?.end().catch(() => undefined);
-      await ownedJobPool?.end().catch(() => undefined);
-      await analytics?.flush();
-      await logger.flush({ timeoutMs: 2_000 });
+      await stopApiResources({
+        drain: async () => {
+          await userDeviceHub?.close();
+          oauthLogins.abortAll();
+          messagingStopped = true;
+          clearMessagingRetryDelay?.();
+          clearTeamChatRetryDelay?.();
+          receipts?.stop();
+          pendingTeamChatInbound.reject(new Error("Team chat bridge stopped before startup"));
+          // Cancel in-flight start() before awaiting the retry task so stop() cannot
+          // sit on DB/reconcile work that bridge.start() is still running.
+          await settleWithTimeout(
+            teamChatBridgeInstance ? teamChatBridgeInstance.stop().catch(() => undefined) : undefined,
+            TEAM_CHAT_STARTUP_SHUTDOWN_MS,
+          );
+          await messagingInitTask?.catch(() => undefined);
+          await settleWithTimeout(teamChatInitTask, TEAM_CHAT_STARTUP_SHUTDOWN_MS);
+          await messaging?.shutdown?.();
+          await teamChatBridge?.stop();
+          await stopInstalledBridges?.();
+          await stopReferralEmails?.();
+          await email?.drain?.();
+          stopMcpReprobe();
+          await reconciler?.stop();
+          await oauthTokenUpgrade;
+          await mcpArgsMove;
+          await runsStopped;
+          await jobs.close();
+        },
+        mcp: () => mcp.close(),
+        mcpDrained: (error) => error instanceof McpSessionCleanupError,
+        installed: () => installed.close(),
+        secrets: () => secrets.close(),
+        realtime: () => realtime.close(),
+        database: () => prisma.$disconnect(),
+        pool: () => created.pool?.end(),
+        jobPool: () => ownedJobPool?.end(),
+        analytics: () => analytics?.flush(),
+        logger: () => logger.flush({ timeoutMs: 2_000 }),
+      });
     },
   };
 }

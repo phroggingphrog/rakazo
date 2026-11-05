@@ -539,6 +539,15 @@ describe("reconcileStuckWork", () => {
 
   it("continues the other scans when the stuck query fails", async () => {
     const prisma = {
+      $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({
+          $queryRaw: async (parts: TemplateStringsArray) => {
+            const query = parts.join(" ");
+            if (query.includes("current_setting")) return [{ bypass: "off" }];
+            if (query.includes("routine_schedule_gate")) return [{ enabled: false }];
+            return [];
+          },
+        }),
       run: {
         findMany: vi.fn(async (args: { where?: unknown }) => {
           if (JSON.stringify(args.where).includes("waiting_takeover")) {

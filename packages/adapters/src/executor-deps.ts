@@ -50,6 +50,8 @@ export interface ExecutorDeps {
   deploymentModelConfigured?: boolean;
   dataDir?: string;
   notifications?: NotificationProvider;
+  /** The shared reconciler is enabled for durable routine completion notices. */
+  routineNotificationOutbox?: boolean;
   jobs: JobPublisher;
   /** Publishes board-change signals and wakes ticket owners; absent disables both. */
   onTicketChange?: TicketChangeNotifier;

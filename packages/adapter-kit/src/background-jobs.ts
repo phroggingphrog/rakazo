@@ -12,6 +12,13 @@ const payloadSchemas = {
   "routine.wakeup": z.object({
     routineId: z.string().min(1),
     scheduledFor: z.string().datetime({ offset: true }),
+    generation: z
+      .string()
+      .regex(/^[1-9][0-9]{0,18}$/)
+      .refine(
+        (value) => /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 9_223_372_036_854_775_807n,
+      )
+      .optional(),
   }),
   "routine.retry": z.object({ runId: z.string().min(1) }),
   "computer.update": z.object({ updateId: z.string().min(1) }),
@@ -34,6 +41,7 @@ const payloadSchemas = {
     userId: z.string().min(1),
     ticketId: z.string().min(1),
     tokenDigest: z.string().min(1),
+    routine: z.object({ intentId: z.string().min(1), spaceId: z.string().min(1) }).optional(),
   }),
   "proactive.apply": z.object({ scope: z.string().min(1) }),
   "proactive.decide": z.object({ scope: z.string().min(1) }),
@@ -187,7 +195,19 @@ export function pushReceiptJob(
   payload: BackgroundJobPayloads["push.receipt"],
   availableAt: Date,
 ): BackgroundJob {
-  return { name: "push.receipt", payload, availableAt, maxAttempts: 8 };
+  return {
+    name: "push.receipt",
+    payload,
+    availableAt,
+    maxAttempts: 8,
+    ...(payload.routine
+      ? {
+          replaceKey: `routine-receipt:${payload.routine.intentId}`,
+          keepExisting: true,
+          replaceLockedBefore: new Date(Date.now() - 5 * 60_000),
+        }
+      : {}),
+  };
 }
 
 export function cloudAgentPollJobKey(agentId: string): string {

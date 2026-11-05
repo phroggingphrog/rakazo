@@ -13,6 +13,25 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
+#: src/pages/RoutineRunHistory.tsx
+msgid "Actions need review"
+msgstr "יש פעולות שדורשות בדיקה"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Remove saved connected_account selector"
+msgstr "הסרת בורר connected_account השמור"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Leave this off if connected_account is an argument the tool needs."
+msgstr "יש להשאיר אפשרות זו כבויה אם הכלי זקוק לארגומנט connected_account."
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "No Pipedream accounts are connected."
+msgstr "אין חשבונות Pipedream מחוברים."
+
 #: src/pages/shell/sidebar-roster.tsx
 msgid " (unread)"
 msgstr " (לא נקראה)"
@@ -6140,6 +6159,18 @@ msgstr "היום"
 #: src/pages/AccountSettingsOverlay.tsx
 msgid "Tokens"
 msgstr "טוקנים"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Arguments are saved with this setup."
+msgstr "הארגומנטים נשמרים עם ההגדרה הזו."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested."
+msgstr "יש לבדוק את השדות הנדרשים לפעולה שנבחרה. אין להזין סיסמאות, אסימונים או מידע סודי אחר; יש להגדיר אימות באינטגרציה. הארגומנטים עדיין לא אומתו מול הפעולה ולא נבדקו."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Enter a valid JSON object up to 8 KB."
+msgstr "יש להזין אובייקט JSON תקין בגודל של עד 8 KB."
 
 #: src/pages/RoutineEditor.tsx
 msgid "Tool arguments (JSON)"

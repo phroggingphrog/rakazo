@@ -30,12 +30,14 @@ const VISION_MODEL = "openai/gpt-4o";
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
 type Gate = { reached: Deferred<void>; release: Deferred<void> };
 type RunHooks = {
+  unresolvedEffects?: number;
   runtimeGate?: Gate;
   notificationGate?: Gate;
   computerLeaseRenewal?: () => Promise<boolean>;
   /** The model lists the computer's files before answering, which starts the computer. */
   useComputer?: boolean;
   trigger?: string;
+  routineOutbox?: boolean;
   /** A reply bound to this run as steering, claimed before any tool runs. */
   steeringBlocks?: MessageBlock[];
 };
@@ -106,6 +108,7 @@ async function runWithModel(
     userId: "user-1",
     status: "queued",
     trigger: hooks?.trigger ?? "user",
+    routineId: hooks?.routineOutbox ? "routine-1" : null,
     leaseFence: 0,
   };
   const get = vi.fn(async () => new Uint8Array([1, 2, 3, 4]));
@@ -155,6 +158,11 @@ async function runWithModel(
       }),
     },
     chatGroup: { findMany: vi.fn(async () => []) },
+    routine: {
+      findUnique: vi.fn(async () => ({ monitor: null })),
+      updateMany: vi.fn(async () => ({ count: 1 })),
+      count: vi.fn(async () => 0),
+    },
     botRuntimeProfile: { findUnique: vi.fn(async () => null) },
     bot: {
       findFirst: vi.fn(async ({ where }: { where: { id: string } }) => ({ id: where.id })),
@@ -232,7 +240,10 @@ async function runWithModel(
     vaultCredential: { findMany: vi.fn(async () => []) },
     agentSkill: { findMany: vi.fn(async () => []) },
     scratchpadItem: { findMany: vi.fn(async () => []) },
-    externalEffect: { findMany: vi.fn(async () => []) },
+    externalEffect: {
+      findMany: vi.fn(async () => []),
+      count: vi.fn(async () => hooks?.unresolvedEffects ?? 0),
+    },
     spaceSettingOverride: { findUnique: async () => null },
     userActionApprovalRule: { findMany: vi.fn(async () => []) },
     userActionAutoReviewPreference: { findUnique: vi.fn(async () => null) },
@@ -284,7 +295,9 @@ async function runWithModel(
       ),
     },
     jobs: { enqueue: vi.fn(async () => undefined) },
-    notifications: hooks?.notificationGate ? { send: notificationSend } : undefined,
+    notifications:
+      hooks?.notificationGate || hooks?.routineOutbox ? { send: notificationSend } : undefined,
+    routineNotificationOutbox: hooks?.routineOutbox,
     secrets: [],
   } as unknown as Parameters<typeof createRunExecutor>[0]);
 
@@ -293,7 +306,17 @@ async function runWithModel(
   else if (hooks?.notificationGate) await hooks.notificationGate.reached.promise;
   else await execution;
   expect(runtimeRun).toHaveBeenCalled();
-  expect(finalizeRun).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed" }));
+  if (hooks?.unresolvedEffects) {
+    expect(finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: expect.stringContaining("reconcile destination evidence"),
+      }),
+    );
+    expect(finalizeRun).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: "completed" }));
+  } else {
+    expect(finalizeRun).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed" }));
+  }
   if (!request) throw new Error("runtime was not called");
   return {
     request,
@@ -306,10 +329,29 @@ async function runWithModel(
     releaseScreen,
     execution,
     notificationSend,
+    finalizeRun,
   };
 }
 
 describe("recent turn images follow model vision", () => {
+  it("queues one durable routine notification without also sending the legacy push", async () => {
+    const result = await runWithModel(TEXT_ONLY_MODEL, undefined, false, false, true, {
+      trigger: "routine",
+      routineOutbox: true,
+    });
+    expect(result.finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "completed", routineCompletionNotification: true }),
+    );
+    expect(result.notificationSend).not.toHaveBeenCalled();
+  });
+  it("cannot finalize a successful model response over unresolved external effects", async () => {
+    const { finalizeRun } = await runWithModel(TEXT_ONLY_MODEL, undefined, false, false, true, {
+      unresolvedEffects: 1,
+    });
+    expect(finalizeRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "failed", partialReply: expect.anything() }),
+    );
+  });
   it("does not send history images to a text-only model", async () => {
     const { request } = await runWithModel(TEXT_ONLY_MODEL);
 

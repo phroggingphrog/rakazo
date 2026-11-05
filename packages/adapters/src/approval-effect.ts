@@ -1,8 +1,9 @@
-import type { AgentToolExecutionResult } from "@rakazo/adapter-kit";
+import type { AgentToolExecutionResult, InstalledMcpBinding, PipedreamAccountBinding } from "@rakazo/adapter-kit";
 import { ModelOutputError } from "@rakazo/adapter-kit";
 import { FLEET_WRITE_TOOL_NAMES } from "@rakazo/contracts";
-import { APPROVED_ACTION_NOT_RUN_ERROR } from "@rakazo/core";
+import { APPROVED_ACCOUNT_UNAVAILABLE_ERROR, APPROVED_ACTION_NOT_RUN_ERROR } from "@rakazo/core";
 import { argumentGiven } from "./update-bot-patch.js";
+import { sameInstalledMcpBinding } from "./installed-mcp-binding.js";
 
 export type ApprovalPausedToolResult = AgentToolExecutionResult & { terminate: true };
 
@@ -18,6 +19,7 @@ export interface ApprovedEffectReplayQueue {
   nextRequest(): unknown;
   nextIdempotencyKey(): string | undefined;
   take(toolName: string): unknown;
+  markAccountUnavailable(): void;
   assertDrained(): void;
 }
 
@@ -25,6 +27,7 @@ export function createApprovedEffectReplayQueue(
   effects: readonly ApprovedEffectReplay[],
 ): ApprovedEffectReplayQueue {
   const pending = [...effects];
+  let accountUnavailable = false;
 
   return {
     nextToolName() {
@@ -40,12 +43,17 @@ export function createApprovedEffectReplayQueue(
       const next = pending[0];
       if (!next || next.kind !== toolName) return undefined;
       pending.shift();
+      accountUnavailable = false;
       return next.request;
+    },
+    markAccountUnavailable() {
+      if (pending.length > 0) accountUnavailable = true;
     },
     assertDrained() {
       // Only reachable when no saved turn could be restored and the model, asked in text,
       // did not call the approved request again.
-      if (pending.length > 0) throw new ModelOutputError(APPROVED_ACTION_NOT_RUN_ERROR);
+      if (pending.length > 0)
+        throw new ModelOutputError(accountUnavailable ? APPROVED_ACCOUNT_UNAVAILABLE_ERROR : APPROVED_ACTION_NOT_RUN_ERROR);
     },
   };
 }
@@ -105,7 +113,26 @@ export type BoundApprovalRoute = {
   resourceId: string;
   toolName: string;
   resourceRevision?: string | number;
+  pipedreamAccountEnvelope?: boolean;
+  pipedreamAccountSelector?: string | null;
+  pipedreamSingletonConnectionId?: string;
+  pipedreamAccountBinding?: PipedreamAccountBinding;
+  installedMcpBinding?: InstalledMcpBinding;
 };
+
+export function pipedreamAccountBinding(value: unknown): PipedreamAccountBinding | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const binding = value as Record<string, unknown>;
+  if (
+    Object.keys(binding).some((key) => !["version", "connectionId", "generation", "namespace", "providerEpoch"].includes(key)) ||
+    binding.version !== 1 ||
+    typeof binding.connectionId !== "string" || !binding.connectionId ||
+    typeof binding.generation !== "string" || !/^[1-9][0-9]*$/.test(binding.generation) ||
+    typeof binding.providerEpoch !== "string" || !/^[1-9][0-9]*$/.test(binding.providerEpoch) ||
+    typeof binding.namespace !== "string" || !/^[a-f0-9]{64}$/.test(binding.namespace)
+  ) return undefined;
+  return binding as unknown as PipedreamAccountBinding;
+}
 
 export function catalogApprovalRequest(
   toolName: string,
@@ -143,6 +170,13 @@ export function catalogApprovalDetails(
     typeof (route as BoundApprovalRoute).connectorId !== "string" ||
     typeof (route as BoundApprovalRoute).resourceId !== "string" ||
     typeof (route as BoundApprovalRoute).toolName !== "string" ||
+    ((route as BoundApprovalRoute).pipedreamAccountEnvelope !== undefined &&
+      typeof (route as BoundApprovalRoute).pipedreamAccountEnvelope !== "boolean") ||
+    ((route as BoundApprovalRoute).pipedreamAccountSelector !== undefined &&
+      (route as BoundApprovalRoute).pipedreamAccountSelector !== null &&
+      typeof (route as BoundApprovalRoute).pipedreamAccountSelector !== "string") ||
+    ((route as BoundApprovalRoute).pipedreamSingletonConnectionId !== undefined &&
+      typeof (route as BoundApprovalRoute).pipedreamSingletonConnectionId !== "string") ||
     ((route as BoundApprovalRoute).resourceRevision !== undefined &&
       typeof (route as BoundApprovalRoute).resourceRevision !== "string" &&
       typeof (route as BoundApprovalRoute).resourceRevision !== "number")
@@ -188,6 +222,13 @@ export function boundDirectApprovalDetails(
     typeof (route as BoundApprovalRoute).connectorId !== "string" ||
     typeof (route as BoundApprovalRoute).resourceId !== "string" ||
     typeof (route as BoundApprovalRoute).toolName !== "string" ||
+    ((route as BoundApprovalRoute).pipedreamAccountEnvelope !== undefined &&
+      typeof (route as BoundApprovalRoute).pipedreamAccountEnvelope !== "boolean") ||
+    ((route as BoundApprovalRoute).pipedreamAccountSelector !== undefined &&
+      (route as BoundApprovalRoute).pipedreamAccountSelector !== null &&
+      typeof (route as BoundApprovalRoute).pipedreamAccountSelector !== "string") ||
+    ((route as BoundApprovalRoute).pipedreamSingletonConnectionId !== undefined &&
+      typeof (route as BoundApprovalRoute).pipedreamSingletonConnectionId !== "string") ||
     ((route as BoundApprovalRoute).resourceRevision !== undefined &&
       typeof (route as BoundApprovalRoute).resourceRevision !== "string" &&
       typeof (route as BoundApprovalRoute).resourceRevision !== "number") ||
@@ -216,7 +257,14 @@ export function approvalRoutesMatch(
       left.connectorId === right.connectorId &&
       left.resourceId === right.resourceId &&
       left.toolName === right.toolName &&
-      left.resourceRevision === right.resourceRevision,
+      left.resourceRevision === right.resourceRevision &&
+      (left.connectorId !== "installed" ||
+        (left.installedMcpBinding === undefined && right.installedMcpBinding === undefined) ||
+        sameInstalledMcpBinding(left.installedMcpBinding, right.installedMcpBinding)) &&
+      (left.connectorId !== "pipedream" ||
+        (Boolean(left.pipedreamAccountEnvelope) === Boolean(right.pipedreamAccountEnvelope) &&
+          left.pipedreamAccountSelector === right.pipedreamAccountSelector &&
+          left.pipedreamSingletonConnectionId === right.pipedreamSingletonConnectionId)),
   );
 }
 
@@ -259,6 +307,12 @@ export function approvalReplayResourceError(
   }
   const bound = boundDirectApprovalDetails(approvedRequest, marker);
   if (!bound) {
+    if (
+      liveRoute?.connectorId === "pipedream" &&
+      liveRoute.pipedreamAccountSelector !== undefined
+    ) {
+      return `Approved request ${toolName} needs review for the updated account selection.`;
+    }
     if (catalogRemapped) {
       return `Approved direct request ${toolName} must be replayed as a direct tool call.`;
     }
@@ -315,7 +369,12 @@ export function catalogApprovalMatchesLiveRoute(
   // Legacy catalog approvals without a bound route cannot prove revision identity.
   // If the live tool carries a revision (MCP), fail closed rather than replaying
   // across an OAuth reauth that the old envelope could not name.
-  if (liveRoute?.resourceRevision !== undefined) return false;
+  if (
+    liveRoute?.resourceRevision !== undefined ||
+    liveRoute?.pipedreamAccountEnvelope ||
+    (liveRoute?.connectorId === "pipedream" && liveRoute.pipedreamAccountSelector !== undefined)
+  )
+    return false;
   const target = parseCatalogApprovalTarget(catalog.args);
   return Boolean(
     liveRoute &&
@@ -369,18 +428,32 @@ export type DuplicateEffectGate =
 export type ExternalEffectStore = {
   externalEffect: {
     updateMany: (args: {
-      where: { id: string; status: string };
+      where: { id: string; status: string; dispatchClaimToken: null };
       data: { status: string };
     }) => Promise<{ count: number }>;
   };
 };
 
 export function resolveDuplicateEffectGate(
-  effect: { status: string; result?: unknown },
+  effect: {
+    status: string;
+    result?: unknown;
+    dispatchClaimToken?: string | null;
+    dispatchClaimFence?: number | null;
+  },
   toolName: string,
 ): DuplicateEffectGate {
   if (effect.status === "completed") {
     return { action: "return", result: effect.result ?? { duplicate: true } };
+  }
+  if (effect.status === "failed") {
+    // A replay must return the recorded failure, not repeat a possibly partial write.
+    return {
+      action: "return",
+      result: effect.result ?? {
+        error: "The earlier tool execution failed; reconcile its destination before retrying.",
+      },
+    };
   }
   if (effect.status === "denied") {
     return {
@@ -392,6 +465,9 @@ export function resolveDuplicateEffectGate(
     return { action: "uncertain", toolName };
   }
   if (effect.status === "uncertain") {
+    if (effect.dispatchClaimToken != null && effect.dispatchClaimFence != null) {
+      return { action: "return", result: uncertainEffectResult(toolName) };
+    }
     return { action: "return", result: effect.result ?? uncertainEffectResult(toolName) };
   }
   if (effect.status === "approved") {
@@ -433,26 +509,34 @@ export async function settleUncertainEffect(
   store: {
     externalEffect: {
       updateMany: (args: {
-        where: { id: string; status: string };
+        where: { id: string; status: string; runId?: string; dispatchClaimToken: null };
         data: { status: string; result: UncertainEffectResult };
       }) => Promise<{ count: number }>;
       findUnique: (args: {
-        where: { id: string };
+        where: { id: string; runId?: string };
       }) => Promise<{ status: string; result?: unknown } | null>;
     };
   },
   effectId: string,
   toolName: string,
   args?: Record<string, unknown>,
+  runId?: string,
 ): Promise<unknown> {
   const result = uncertainEffectResult(toolName, args);
   const settled = await store.externalEffect.updateMany({
-    where: { id: effectId, status: "executing" },
+    where: {
+      id: effectId,
+      status: "executing",
+      dispatchClaimToken: null,
+      ...(runId ? { runId } : {}),
+    },
     data: { status: "uncertain", result },
   });
   if (settled.count === 1) return result;
 
-  const current = await store.externalEffect.findUnique({ where: { id: effectId } });
+  const current = await store.externalEffect.findUnique({
+    where: { id: effectId, ...(runId ? { runId } : {}) },
+  });
   if (!current) return result;
   const gate = resolveDuplicateEffectGate(current, toolName);
   return gate.action === "return" ? gate.result : result;
@@ -463,7 +547,7 @@ export async function claimApprovedEffect(
   effectId: string,
 ): Promise<boolean> {
   const claimed = await store.externalEffect.updateMany({
-    where: { id: effectId, status: "approved" },
+    where: { id: effectId, status: "approved", dispatchClaimToken: null },
     data: { status: "executing" },
   });
   return claimed.count === 1;
@@ -474,17 +558,30 @@ export async function claimIntendedEffect(
   effectId: string,
 ): Promise<boolean> {
   const claimed = await store.externalEffect.updateMany({
-    where: { id: effectId, status: "intended" },
+    where: { id: effectId, status: "intended", dispatchClaimToken: null },
     data: { status: "executing" },
   });
   return claimed.count === 1;
+}
+
+/** Explicit protocol failures are not evidence of successful external execution. */
+export function explicitToolFailure(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  const value = result as { isError?: unknown; error?: unknown };
+  return (
+    value.isError === true ||
+    (value.error !== undefined &&
+      value.error !== null &&
+      value.error !== false &&
+      value.error !== "")
+  );
 }
 
 export async function completeExternalEffect(
   store: {
     externalEffect: {
       updateMany: (args: {
-        where: { id: string; status: string };
+        where: { id: string; status: string; runId?: string; dispatchClaimToken: null };
         data: { status: string; result: never };
       }) => Promise<{ count: number }>;
     };
@@ -492,10 +589,16 @@ export async function completeExternalEffect(
   effectId: string,
   expectedStatus: "intended" | "executing",
   result: unknown,
+  runId?: string,
 ): Promise<boolean> {
   const completed = await store.externalEffect.updateMany({
-    where: { id: effectId, status: expectedStatus },
-    data: { status: "completed", result: result as never },
+    where: {
+      id: effectId,
+      status: expectedStatus,
+      dispatchClaimToken: null,
+      ...(runId ? { runId } : {}),
+    },
+    data: { status: explicitToolFailure(result) ? "failed" : "completed", result: result as never },
   });
   return completed.count === 1;
 }
@@ -504,16 +607,22 @@ export async function replaceCompletedExternalEffectResult(
   store: {
     externalEffect: {
       updateMany: (args: {
-        where: { id: string; status: string };
+        where: { id: string; status: string; runId?: string; dispatchClaimToken: null };
         data: { result: never };
       }) => Promise<{ count: number }>;
     };
   },
   effectId: string,
   result: unknown,
+  runId?: string,
 ): Promise<boolean> {
   const replaced = await store.externalEffect.updateMany({
-    where: { id: effectId, status: "completed" },
+    where: {
+      id: effectId,
+      status: "completed",
+      dispatchClaimToken: null,
+      ...(runId ? { runId } : {}),
+    },
     data: { result: result as never },
   });
   return replaced.count === 1;

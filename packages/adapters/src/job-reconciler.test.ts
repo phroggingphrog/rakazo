@@ -1,6 +1,7 @@
 import type { BackgroundJob, JobPublisher } from "@rakazo/adapter-kit";
 import { stuckWorkStatusMessages } from "@rakazo/core";
 import type { Pool, PrismaClient, ThreadEvents } from "@rakazo/db";
+import { getLogger } from "@rakazo/logging";
 import { describe, expect, it, vi } from "vitest";
 import { returnBotMessageOutcome } from "./bot-messages.js";
 import type { ReconciliationLeadership } from "./job-reconciler.js";
@@ -36,8 +37,18 @@ function fakePrisma(
     controlLeaseExpiresAt: Date | null;
     updatedAt: Date;
   }> = [],
+  versioned = false,
 ) {
   return {
+    $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        $queryRaw: async (parts: TemplateStringsArray) => {
+          const query = parts.join(" ");
+          if (query.includes("current_setting")) return [{ bypass: "off" }];
+          if (query.includes("routine_schedule_gate")) return [{ enabled: versioned }];
+          return [];
+        },
+      }),
     computerExecutionLease: { findMany: vi.fn(async () => []) },
     message: { findMany: vi.fn(async () => []) },
     run: { findMany: vi.fn(async () => runs) },
@@ -56,6 +67,37 @@ function deferred() {
 }
 
 describe("createJobReconciler", () => {
+  it("does not enqueue legacy routine wakes when versioned scheduling is enabled", async () => {
+    const prisma = fakePrisma([], [{ id: "routine-1", nextRunAt: new Date() }], [], true);
+    const { jobs, enqueue } = publisher();
+    await createJobReconciler({ prisma, jobs }).reconcileOnce();
+    expect(prisma.routine.findMany).not.toHaveBeenCalled();
+    expect(enqueue.mock.calls.some(([job]) => job.name === "routine.wakeup")).toBe(false);
+    expect(prisma.computer.findMany).toHaveBeenCalled();
+  });
+
+  it("reports a gate read failure and continues unrelated reconciliation", async () => {
+    const prisma = fakePrisma([], [{ id: "routine-1", nextRunAt: new Date() }]);
+    const error = new Error("synthetic gate failure");
+    Object.assign(prisma, {
+      $transaction: vi.fn(async () => {
+        throw error;
+      }),
+    });
+    const { jobs, enqueue } = publisher();
+    const log = vi.spyOn(getLogger(), "error");
+    try {
+      await createJobReconciler({ prisma, jobs }).reconcileOnce();
+      expect(log).toHaveBeenCalledWith("routine scheduler mode reconciliation", error);
+      expect(prisma.routine.findMany).not.toHaveBeenCalled();
+      expect(enqueue.mock.calls.some(([job]) => job.name === "routine.wakeup")).toBe(false);
+      expect(prisma.computer.findMany).toHaveBeenCalled();
+      expect(prisma.run.findMany).toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("continues the main scans when an auxiliary reconciler fails", async () => {
     const prisma = fakePrisma();
     const { jobs } = publisher();
@@ -66,14 +108,20 @@ describe("createJobReconciler", () => {
       throw new Error("queue unavailable");
     });
     const reconcileRoutineRetryNotices = vi.fn(async () => undefined);
+    const reconcileRoutineNotifications = vi.fn(async () => undefined);
+    const reconcileRoutineSchedules = vi.fn(async () => undefined);
     await createJobReconciler({
       prisma,
       jobs,
       reconcileRoutineRetryNotices,
+      reconcileRoutineNotifications,
+      reconcileRoutineSchedules,
       reconcileCloudAgents,
       reconcileComputerUpdates,
     }).reconcileOnce();
     expect(reconcileRoutineRetryNotices).toHaveBeenCalledOnce();
+    expect(reconcileRoutineNotifications).toHaveBeenCalledOnce();
+    expect(reconcileRoutineSchedules).toHaveBeenCalledOnce();
     expect(reconcileCloudAgents).toHaveBeenCalledOnce();
     expect(reconcileComputerUpdates).toHaveBeenCalledOnce();
     expect(prisma.run.findMany).toHaveBeenCalled();
@@ -399,6 +447,7 @@ describe("createJobReconciler", () => {
       .mockResolvedValueOnce(routines.slice(2, 4))
       .mockResolvedValueOnce(routines.slice(4));
     const prisma = {
+      ...fakePrisma(),
       computerExecutionLease: { findMany: vi.fn(async () => []) },
       run: { findMany: runFindMany },
       routine: { findMany: routineFindMany },

@@ -82,7 +82,7 @@ async function commitOwnInstructions(
     reason: string;
     previousInstructions: string;
   },
-): Promise<{ ok: true } | { error: string }> {
+): Promise<{ ok: true } | { error: string; preconditionFailed: true }> {
   const { deps, run, runId, bot, context } = ctx;
   const committed = await deps.prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM threads WHERE id = ${run.threadId} FOR UPDATE`;
@@ -101,7 +101,7 @@ async function commitOwnInstructions(
       });
     } catch (error) {
       if (!(error instanceof InstructionConflictError)) throw error;
-      return { error: error.message };
+      return { error: error.message, preconditionFailed: true as const };
     }
     if (!undoVersionId) return null;
     return persistMessageInTransaction(tx, run, "bot", [
@@ -251,13 +251,14 @@ export const fleetTools: ToolHandlers = {
     if (typeof args.previousInstructions === "string") {
       if ((call.nextApprovedTool !== call.name && !call.bypassApproval) || !call.claimedEffect)
         return call.finish({ error: "This instruction change needs the owner's approval." });
-      return call.finish(
-        await commitOwnInstructions(ctx, {
-          instructions: String(args.instructions),
-          reason: String(args.reason),
-          previousInstructions: args.previousInstructions,
-        }),
-      );
+      const result = await commitOwnInstructions(ctx, {
+        instructions: String(args.instructions),
+        reason: String(args.reason),
+        previousInstructions: args.previousInstructions,
+      });
+      if ("preconditionFailed" in result)
+        return call.finishInstructionPreconditionFailed({ error: result.error });
+      return call.finish(result);
     }
     const { instructions, model, thinkingLevel, readAloud, voice, ...profile } = args;
     const modelDeps = await fleetPrepareDeps(deps, run);

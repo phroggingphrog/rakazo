@@ -7,6 +7,24 @@ datasource db {
   provider = "postgresql"
 }
 
+model DependencyRetry {
+  kind String
+  dependencyId String
+  spaceId String
+  userId String
+  revision Int
+  failureCount Int @default(0)
+  nextAttemptAt DateTime?
+  exhausted Boolean @default(false)
+  claimToken String?
+  claimExpiresAt DateTime?
+  reasonCode String?
+  updatedAt DateTime @updatedAt
+
+  @@id([kind, dependencyId, spaceId, userId, revision])
+  @@map("dependency_retries")
+}
+
 model AiDataConsent {
   userId String
   spaceId String
@@ -22,7 +40,13 @@ model AiDataConsent {
 }
 
 model User {
+  localEffectRejections LocalEffectRejection[] @ignore
+  protectedSetupV2Claims ProtectedSetupV2Claim[] @ignore
+  protectedEffectScopes ProtectedEffectScope[] @ignore
   aiDataConsents AiDataConsent[]
+  setupPlans SetupPlan[]
+  setupTestAttempts SetupTestAttempt[]
+  protectedExecutionContent ProtectedExecutionContent[]
   id                          String                       @id
   name                        String
   email                       String
@@ -372,6 +396,9 @@ model Member {
 }
 
 model Space {
+  localEffectRejections LocalEffectRejection[] @ignore
+  protectedSetupV2Claims ProtectedSetupV2Claim[] @ignore
+  protectedEffectScopes ProtectedEffectScope[] @ignore
   aiDataConsents              AiDataConsent[]
   id                          String                       @id
   organizationId              String
@@ -396,6 +423,9 @@ model Space {
   taughtSkills                TaughtSkill[]
   agentSkills                 AgentSkill[]
   agentImports                AgentImport[]
+  setupPlans                  SetupPlan[]
+  setupTestAttempts           SetupTestAttempt[]
+  protectedExecutionContent   ProtectedExecutionContent[]
   connections                 Connection[]
   capabilities                CapabilityInstall[]
   memoryDocuments             MemoryDocument[]
@@ -749,6 +779,56 @@ model Bot {
   messagingInstallSessions MessagingInstallSession[]
 }
 
+/// A protected proposal; never an active agent or a scheduler.
+model SetupPlan {
+  id            String   @id @default(cuid())
+  spaceId       String
+  space         Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestKey    String
+  requestPayload Json
+  revision      Int      @default(1)
+  status        String   @default("draft")
+  draft         Json
+  routineId     String?  @unique
+  routine       Routine? @relation(fields: [routineId], references: [id], onDelete: SetNull)
+  configureRequestKey String?
+  configuredFromRevision Int?
+  testAttempt SetupTestAttempt?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([spaceId, userId, requestKey])
+  @@index([spaceId, userId, updatedAt])
+  @@map("setup_plans")
+}
+
+/// An explicitly prepared test. It has no Run until protected execution is verified.
+model SetupTestAttempt {
+  protectedV2Claim ProtectedSetupV2Claim? @ignore
+  id           String   @id @default(cuid())
+  spaceId      String
+  space        Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId       String   @unique
+  plan         SetupPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  taskId       String?  @unique
+  taskProtected Boolean? @default(true)
+  task         Task?    @relation(fields: [taskId, taskProtected], references: [id, protected], onDelete: SetNull, onUpdate: Restrict)
+  requestKey   String
+  planRevision Int
+  status       String   @default("prepared")
+  snapshot     Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([spaceId, userId])
+  @@unique([taskId, taskProtected])
+  @@map("setup_test_attempts")
+}
+
 model BotRuntimeProfile {
   botId     String                       @id
   bot       Bot                          @relation(fields: [botId], references: [id], onDelete: Cascade)
@@ -891,6 +971,7 @@ model Message {
   /// Blind-index search tokens for the encrypted blocks; NULL until the row is encrypted.
   searchTokens     Int[]
   sourceRuns            Run[]             @relation("RunSourceMessage")
+  routineNotification   RoutineNotificationIntent?
   externalTranscriptFor  ExternalMessage?
   steeringMessages SteeringMessage[]
   createdAt        DateTime  @default(now())
@@ -932,17 +1013,27 @@ model Task {
   thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
   userId    String
   prompt    String
+  /// A protected task cannot be linked to a run until the verified cutover.
+  protected Boolean @default(false)
   status    String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   runs      Run[]
+  guardedRuns Run[] @relation("ProtectedTaskGuard")
+  protectedContent ProtectedExecutionContent? @relation("ProtectedTaskContent")
+  setupTestAttempt SetupTestAttempt?
 
   @@index([spaceId, botId])
+  @@unique([id, protected])
   @@map("tasks")
 }
 
 model Run {
+  localEffectRejections LocalEffectRejection[] @ignore
+  protectedSetupV2Claim ProtectedSetupV2Claim? @ignore
+  protectedEffectScopes ProtectedEffectScope[] @ignore
   id                   String            @id @default(cuid())
+  protectedStorageId   String?           @db.Uuid @ignore
   spaceId              String
   space                Space             @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   botId                String
@@ -951,6 +1042,8 @@ model Run {
   thread               Thread            @relation(fields: [threadId], references: [id], onDelete: Cascade)
   taskId               String
   task                 Task              @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskProtected        Boolean           @default(false)
+  guardedTask          Task              @relation("ProtectedTaskGuard", fields: [taskId, taskProtected], references: [id, protected], onDelete: Cascade, onUpdate: Restrict)
   userId               String
   status               String
   trigger              String
@@ -971,6 +1064,8 @@ model Run {
   sourceMessage        Message?          @relation("RunSourceMessage", fields: [sourceMessageId], references: [id], onDelete: SetNull)
   routineId            String?
   routine              Routine?          @relation(fields: [routineId], references: [id], onDelete: SetNull)
+  routineProtected     Boolean?          @default(false)
+  guardedRoutine       Routine?          @relation("ProtectedRoutineGuard", fields: [routineId, routineProtected], references: [id, protected], onDelete: SetNull, onUpdate: Restrict)
   // The failed routine run this run retries. Unique, so a run is retried at most once.
   retryOfRunId         String?           @unique
   // Durable retry schedule; null means runnable immediately when queued.
@@ -988,8 +1083,11 @@ model Run {
   effects              ExternalEffect[]
   steeringMessages     SteeringMessage[]
   externalMessage      ExternalMessage?
+  routineNotification  RoutineNotificationIntent?
 
   @@unique([spaceId, clientNonce])
+  @@unique([protectedStorageId], map: "runs_protectedStorageId_key")
+  @@unique([id, protectedStorageId, spaceId, userId, taskProtected], map: "runs_protected_storage_binding_key")
   @@index([status, wakeAt])
   @@index([status, leaseExpiresAt])
   @@index([status, updatedAt, id])
@@ -1005,6 +1103,34 @@ model Run {
   // Partial index runs_bot_outcome_pending_idx (unreturned bot-message outcomes) is created in SQL.
   @@index([routineId])
   @@map("runs")
+}
+
+/// One routine completion notification; message content stays in the protected message row.
+model RoutineNotificationIntent {
+  id             String   @id @default(cuid())
+  spaceId        String
+  userId         String
+  runId          String   @unique
+  run            Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  messageId      String?  @unique
+  message        Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  status         String   @default("pending")
+  claimToken     String?
+  claimExpiresAt DateTime?
+  preSubmitFailures Int @default(0)
+  nextPreSubmitAttemptAt DateTime?
+  receiptTicketId String?
+  receiptTokenDigest String?
+  receiptStatus String?
+  receiptCheckAt DateTime?
+  receiptExpiresAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([spaceId, userId])
+  @@index([receiptStatus, receiptCheckAt])
+  @@map("routine_notification_intents")
 }
 
 model SteeringMessage {
@@ -1136,7 +1262,12 @@ model Purchase {
 }
 
 model ExternalEffect {
+  dispatchClaimToken String?
+  dispatchClaimFence Int?
+  localRejection LocalEffectRejection? @ignore
+  protectedPayloads ProtectedEffectPayload[] @ignore
   id             String   @id @default(cuid())
+  protectedStorageId String? @db.Uuid @ignore
   spaceId        String
   space          Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   runId          String
@@ -1156,6 +1287,8 @@ model ExternalEffect {
   updatedAt      DateTime @updatedAt
 
   @@unique([idempotencyKey])
+  @@unique([protectedStorageId], map: "external_effects_protectedStorageId_key")
+  @@unique([id, runId, protectedStorageId], map: "external_effects_protected_storage_binding_key")
   @@index([runId, status])
   @@index([spaceId, kind, status])
   @@map("external_effects")
@@ -1163,6 +1296,8 @@ model ExternalEffect {
 
 model Routine {
   id             String    @id @default(cuid())
+  /// Internal database fence; excluded from ordinary Routine DTOs.
+  scheduleGeneration BigInt @default(0) @ignore
   spaceId        String
   space          Space     @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   botId          String
@@ -1172,6 +1307,8 @@ model Routine {
   thread         Thread?   @relation(fields: [threadId], references: [id], onDelete: SetNull)
   name           String
   prompt         String
+  /// A protected routine remains inactive until protected execution is available.
+  protected Boolean @default(false)
   crons          String[]
   timezone       String    @default("UTC")
   active         Boolean   @default(false)
@@ -1182,6 +1319,8 @@ model Routine {
   modelProvider  String?
   modelId        String?
   thinkingLevel  String?
+  /// Constrained monitor policy; null preserves existing routine behavior.
+  monitor        Json?
   /// Change trigger (RoutineWatchSchema); null when the routine does not watch anything.
   watch          Json?
   /// Last check's result (RoutineWatchStateSchema), written by the checker.
@@ -1193,10 +1332,72 @@ model Routine {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   runs           Run[]
+  setupPlan      SetupPlan?
+  guardedRuns    Run[] @relation("ProtectedRoutineGuard")
+  protectedContent ProtectedExecutionContent? @relation("ProtectedRoutineContent")
 
   @@index([active, nextRunAt])
   @@index([spaceId, botId])
+  @@unique([id, protected])
   @@map("routines")
+}
+
+/// Internal scheduler state is accessed only through system-scoped SQL.
+model RoutineScheduleGate {
+  id Boolean @id @default(true)
+  enabled Boolean @default(false)
+
+  @@map("routine_schedule_gate")
+  @@ignore
+}
+
+model RoutineScheduleOutbox {
+  routineId String @id
+  generation BigInt
+  publishedGeneration BigInt @default(0)
+  active Boolean
+  nextRunAt DateTime?
+  operation String
+  updatedAt DateTime @default(now())
+
+  @@index([updatedAt, routineId])
+  @@map("routine_schedule_outbox")
+  @@ignore
+}
+
+model RoutineWatchAttempt {
+  routineId String
+  generation BigInt
+  scheduledFor DateTime
+  state String @default("uncertain")
+  claimedAt DateTime @default(now())
+
+  @@id([routineId, generation])
+  @@index([claimedAt, routineId, generation])
+  @@map("routine_watch_attempts")
+  @@ignore
+}
+
+/// Owner-scoped encrypted setup content, separate from space-shared routine and task rows.
+model ProtectedExecutionContent {
+  id        String   @id @default(cuid())
+  spaceId   String
+  space     Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  protected Boolean  @default(true)
+  routineId String?  @unique
+  routine   Routine? @relation("ProtectedRoutineContent", fields: [routineId, protected], references: [id, protected], onDelete: Cascade, onUpdate: Restrict)
+  taskId    String?  @unique
+  task      Task?    @relation("ProtectedTaskContent", fields: [taskId, protected], references: [id, protected], onDelete: Cascade, onUpdate: Restrict)
+  text      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([routineId, protected])
+  @@unique([taskId, protected])
+  @@index([spaceId, userId])
+  @@map("protected_execution_content")
 }
 
 model ScratchpadItem {
@@ -1293,6 +1494,8 @@ model AgentSkill {
 }
 
 model Connection {
+  /// Database-owned authorization generation; read explicitly when binding an effect.
+  accountGeneration BigInt @default(0) @ignore
   id          String   @id @default(cuid())
   spaceId     String
   space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
@@ -1312,6 +1515,8 @@ model Connection {
 }
 
 model CapabilityInstall {
+  /// Database-owned source generation, combined with secret and selected-space generations.
+  sourceGeneration BigInt @default(0) @ignore
   id        String   @id @default(cuid())
   spaceId   String
   space     Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
@@ -1615,6 +1820,8 @@ model SpaceMemoryConfig {
 }
 
 model Secret {
+  /// Database-owned credential generation; never contains credential material.
+  credentialGeneration BigInt @default(0) @ignore
   id                String             @id @default(cuid())
   userId            String
   user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1658,6 +1865,8 @@ model McpServer {
   /// Tool results from this server stay whole. A result that cannot fit fails the turn.
   verbatimResults Boolean         @default(false)
   revision      Int               @default(1)
+  /// Terminal typed auth failure; only blocks this credential/settings revision.
+  authFailureRevision Int?
   /// Last launch/discovery outcome: unknown | installing | ok | error.
   healthStatus    String          @default("unknown")
   healthMessage   String?
@@ -1960,6 +2169,15 @@ model IntegrationProviderConfig {
   updatedAt  DateTime @updatedAt
 
   @@map("integration_provider_configs")
+}
+
+/// Global provider-config fences; queried with a row lock through the database client.
+model IntegrationProviderEpoch {
+  providerId String @id
+  epoch      BigInt
+
+  @@ignore
+  @@map("integration_provider_epochs")
 }
 
 model Board {
@@ -2296,6 +2514,8 @@ model McpToolOutput {
 
 /// A further space an account-owned plugin or tool source is available in, beyond the one it was added in.
 model CapabilityInstallSpace {
+  /// Database-owned generation for this particular space assignment.
+  availabilityGeneration BigInt @default(0) @ignore
   installId String
   install   CapabilityInstall @relation(fields: [installId], references: [id], onDelete: Cascade)
   spaceId   String
@@ -2377,4 +2597,82 @@ model ProactiveTimer {
   state String @default("pending")
 
   @@map("proactive_timers")
+}
+
+/// Disabled protected-test protocol foundation, accessed only by guarded SQL.
+model ProtectedSetupV2Gate {
+  id Boolean @id @default(true)
+  enabled Boolean @default(false)
+
+  @@map("protected_setup_v2_gate")
+  @@ignore
+}
+
+/// One non-replayable marker per prepared test; it is not execution evidence.
+model ProtectedSetupV2Claim {
+  attemptId String @id
+  attempt SetupTestAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  runId String? @unique
+  run Run? @relation(fields: [runId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  spaceId String
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  protocol Int @default(2)
+  claimedAt DateTime @default(now())
+
+  @@map("protected_setup_v2_claims")
+  @@ignore
+}
+
+/// Provenance for a specific trusted local rejection, not tool-supplied content.
+model LocalEffectRejection {
+  effectId String @id
+  effect ExternalEffect @relation(fields: [effectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  runId String
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  spaceId String
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  reason String
+  createdAt DateTime @default(now())
+
+  @@map("local_effect_rejections")
+  @@ignore
+}
+
+/// Protected effect storage is inaccessible while the protected-run CHECK is enabled.
+model ProtectedEffectScope {
+  id String @id
+  runId String
+  runStorageId String @unique @db.Uuid
+  spaceId String
+  userId String
+  runProtected Boolean @default(true)
+  keyCiphertext String
+  createdAt DateTime @default(now())
+  run Run @relation(fields: [runId, runStorageId, spaceId, userId, runProtected], references: [id, protectedStorageId, spaceId, userId, taskProtected], onDelete: Cascade, onUpdate: Cascade)
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  payloads ProtectedEffectPayload[]
+  @@unique([id, runId, spaceId, userId])
+  @@map("protected_effect_scopes")
+  @@ignore
+}
+
+/// Ciphertext stays in an owner-scoped companion to the ordinary effect marker.
+model ProtectedEffectPayload {
+  id String @id
+  effectId String @unique
+  effectStorageId String @unique @db.Uuid
+  scopeId String
+  runId String
+  spaceId String
+  userId String
+  ciphertext String
+  effect ExternalEffect @relation(fields: [effectId, runId, effectStorageId], references: [id, runId, protectedStorageId], onDelete: Cascade, onUpdate: Cascade)
+  scope ProtectedEffectScope @relation(fields: [scopeId, runId, spaceId, userId], references: [id, runId, spaceId, userId], onDelete: Cascade, onUpdate: Cascade)
+  @@map("protected_effect_payloads")
+  @@ignore
 }

@@ -12,7 +12,7 @@ import { catalogToolPrefix } from "./approval-effect.js";
 import { collectPages, filterCatalog } from "./composio-connector.js";
 import {
   combineSignals,
-  redactConnectorPayload,
+  redactConnectorPayloadStrict,
   sanitizeConnectorError,
 } from "./connector-safety.js";
 import {
@@ -22,6 +22,7 @@ import {
   executeLazyCatalogControl,
   isLazyCatalogControlRoute,
   lazyCatalogTools,
+  loadCatalogEntry,
   resolveCatalogCall,
 } from "./lazy-tool-catalog.js";
 import type { RemoteTransportDependencies } from "./remote-mcp.js";
@@ -74,7 +75,7 @@ type PipedreamApp = {
   img_src?: string;
 };
 
-type ApprovedAccount = { id: string; label: string };
+type ApprovedAccount = { id: string; ref: string; label: string };
 
 type PipedreamAccount = {
   id: string;
@@ -127,6 +128,16 @@ export class PipedreamConnector implements ManagedConnectorProvider {
     };
   }
 
+  async pipedreamAccountNamespace(context: AdapterContext): Promise<string> {
+    return createHmac("sha256", this.config.identitySecret)
+      .update("rakazo:pipedream-account-namespace:v2\0")
+      .update(JSON.stringify([
+        this.config.projectId, this.config.environment, this.config.clientId, this.config.clientSecret,
+        context.spaceId, context.userId,
+      ]))
+      .digest("hex");
+  }
+
   async catalog(context: AdapterContext, query?: string): Promise<ConnectorCatalogItem[]> {
     const [apps, connected] = await Promise.all([
       this.apps(),
@@ -176,21 +187,41 @@ export class PipedreamConnector implements ManagedConnectorProvider {
           if (!accounts[0]) throw new Error("no approved account can be identified");
           const tools = await listRemoteMcpTools({
             endpoint: MCP_ENDPOINT,
-            headers: this.mcpHeaders(context, app, accounts[0].id, token),
+            headers: this.mcpHeaders(context, app, accounts[0].ref, token),
             signal: context.signal,
             fetch: this.dependencies.fetch,
             resolveHostname: this.dependencies.resolveHostname,
           });
-          return tools.map((tool) => ({
-            ...tool,
-            inputSchema: withAccountChoice(tool.inputSchema, accounts),
-            route: {
-              connectorId: "pipedream",
-              resourceId: app,
-              toolName: tool.name,
-              catalogGroup: app,
-            },
-          }));
+          return tools.map((tool) => {
+            const flatSelector = accounts.length > 1 ? accountSelector(tool.inputSchema) : null;
+            const envelope =
+              accounts.length > 1 &&
+              (requiresAccountEnvelope(tool.inputSchema) || flatSelector === undefined);
+            const unsupported = envelope && !supportsAccountEnvelope(tool.inputSchema);
+            const catalogUnsupported =
+              accounts.length > 1 && lacksCatalogValidation(tool.inputSchema);
+            const selector = unsupported ? undefined : envelope ? ACCOUNT_ARGUMENT : flatSelector;
+            return {
+              ...tool,
+              inputSchema: withAccountChoice(
+                tool.inputSchema,
+                accounts,
+                selector ?? null,
+                envelope,
+              ),
+              route: {
+                connectorId: "pipedream",
+                resourceId: app,
+                toolName: tool.name,
+                catalogGroup: app,
+                pipedreamAccountSelector: selector ?? null,
+                ...(accounts.length === 1 ? { pipedreamSingletonConnectionId: accounts[0]!.id } : {}),
+                ...(selector === undefined ? { pipedreamAccountSelectorUnsupported: true } : {}),
+                ...(envelope && !unsupported ? { pipedreamAccountEnvelope: true } : {}),
+                ...(catalogUnsupported ? { pipedreamAccountCatalogUnsupported: true } : {}),
+              },
+            };
+          });
         } catch (error) {
           // A single unavailable app must not hide tools from other connections.
           getLogger().error(
@@ -221,16 +252,33 @@ export class PipedreamConnector implements ManagedConnectorProvider {
   ): Promise<{ call: ConnectorCall; tool: ConnectorTool } | undefined> {
     // Wrappers have no resourceId; real tools always do.
     if (call.route?.resourceId || call.route?.toolName !== CATALOG_EXECUTE) return undefined;
-    return resolveCatalogCall(call, catalogEntries(await this.allTools(context)));
+    const entries = catalogEntries(await this.allTools(context));
+    const target = loadCatalogEntry(entries, call.args).tool.route;
+    if (target?.pipedreamAccountSelectorUnsupported || target?.pipedreamAccountCatalogUnsupported)
+      throw new Error("This tool's schema does not support selecting between connected accounts.");
+    return resolveCatalogCall(call, entries);
   }
 
   async *execute(call: ConnectorCall, context: AdapterContext): AsyncIterable<ConnectorEvent> {
     if (isLazyCatalogControlRoute(call.route)) {
       try {
-        yield* executeLazyCatalogControl(
-          call,
-          catalogEntries(await this.allTools(context)),
-          (resolved) => this.execute(resolved, context),
+        const entries = catalogEntries(await this.allTools(context));
+        const target =
+          call.route?.toolName === CATALOG_EXECUTE
+            ? loadCatalogEntry(entries, call.args).tool.route
+            : undefined;
+        if (
+          target?.pipedreamAccountSelectorUnsupported ||
+          target?.pipedreamAccountCatalogUnsupported
+        ) {
+          yield {
+            type: "error",
+            message: "This tool's schema does not support selecting between connected accounts.",
+          };
+          return;
+        }
+        yield* executeLazyCatalogControl(call, entries, (resolved) =>
+          this.execute(resolved, context),
         );
       } catch (error) {
         yield { type: "error", message: sanitizeConnectorError(error) };
@@ -243,43 +291,120 @@ export class PipedreamConnector implements ManagedConnectorProvider {
       return;
     }
     let token: string | undefined;
+    let toolDispatched = false;
     try {
       const accounts = approvedAccounts(context, app);
-      const { [ACCOUNT_ARGUMENT]: chosen, ...args } = call.args;
+      let selector = call.route?.pipedreamAccountSelector;
+      let unsupportedSelector = call.route?.pipedreamAccountSelectorUnsupported === true;
+      let envelope = call.route?.pipedreamAccountEnvelope === true;
+      if (
+        selector === undefined &&
+        accounts.length === 1 &&
+        Object.hasOwn(call.args, ACCOUNT_ARGUMENT)
+      ) {
+        yield {
+          type: "error",
+          message: "Refresh this tool to verify its connected account before running it.",
+        };
+        return;
+      }
+      if (selector === undefined && accounts.length > 1) {
+        // Older in-flight routes do not say whether the provider owns the old chooser name.
+        const tool = (await this.allTools(context)).find(
+          (candidate) =>
+            candidate.route?.resourceId === app &&
+            candidate.route.toolName === call.route?.toolName,
+        );
+        if (!tool) throw new Error("Account selection could not be refreshed for this tool.");
+        selector = tool.route?.pipedreamAccountSelector;
+        unsupportedSelector = tool.route?.pipedreamAccountSelectorUnsupported === true;
+        envelope = tool.route?.pipedreamAccountEnvelope === true;
+      }
+      if (unsupportedSelector && accounts.length > 1) {
+        yield {
+          type: "error",
+          message: "This tool's schema does not support selecting between connected accounts.",
+        };
+        return;
+      }
+      if (selector === null && accounts.length > 1) {
+        yield {
+          type: "error",
+          message: "Connected accounts changed. Refresh this tool and select an account.",
+        };
+        return;
+      }
+      const chosen = typeof selector === "string" ? call.args[selector] : undefined;
+      const matchingAccounts = typeof selector === "string"
+        ? accounts.filter(({ id, ref }) => id === chosen || (context.legacyPipedreamWatchSelection === true && ref === chosen))
+        : [];
       const account =
-        accounts.length === 1 ? accounts[0] : accounts.find(({ id }) => id === chosen);
+        typeof selector === "string"
+          ? matchingAccounts.length === 1 ? matchingAccounts[0] : undefined
+          : accounts.length === 1
+            ? accounts[0]
+            : undefined;
       if (!account) {
         yield {
           type: "error",
           message: accounts.length
-            ? `Set ${ACCOUNT_ARGUMENT} to one of the accounts connected for ${app}.`
+            ? `Set ${selector ?? ACCOUNT_ARGUMENT} to one of the accounts connected for ${app}.`
             : `No connected ${app} account can be identified. Reconnect ${app}.`,
         };
         return;
+      }
+      let args: Record<string, unknown>;
+      if (envelope) {
+        const nested = call.args.arguments;
+        if (
+          !nested ||
+          typeof nested !== "object" ||
+          Array.isArray(nested) ||
+          Object.keys(call.args).some((key) => key !== selector && key !== "arguments")
+        ) {
+          yield {
+            type: "error",
+            message: "Refresh this tool and provide its account and arguments.",
+          };
+          return;
+        }
+        args = nested as Record<string, unknown>;
+      } else {
+        args = { ...call.args };
+        if (typeof selector === "string") delete args[selector];
       }
       token = await this.token();
       const result = await callRemoteMcpTool(
         {
           endpoint: MCP_ENDPOINT,
-          headers: this.mcpHeaders(context, app, account.id, token),
+          headers: this.mcpHeaders(context, app, account.ref, token),
           signal: context.signal,
           fetch: this.dependencies.fetch,
           resolveHostname: this.dependencies.resolveHostname,
+          onToolDispatch: () => { toolDispatched = true; },
         },
         call.route?.toolName ?? call.tool,
-        accounts.length === 1 ? call.args : args,
+        args,
       );
+      const redacted = redactConnectorPayloadStrict(result, [token, this.config.clientSecret]);
+      const explicitFailure = result && typeof result === "object" &&
+        !Array.isArray(result) && "isError" in result && result.isError === true;
       yield {
         type: "result",
-        data: redactConnectorPayload(result, [token, this.config.clientSecret]),
+        data: explicitFailure && redacted && typeof redacted === "object" && !Array.isArray(redacted)
+          ? { ...redacted, isError: true }
+          : redacted,
       };
     } catch (error) {
       yield {
         type: "error",
-        message: sanitizeConnectorError(
-          error,
-          [token, this.config.clientSecret].filter((value): value is string => Boolean(value)),
-        ),
+        ...(toolDispatched ? { outcome: "unknown" as const } : {}),
+        message: toolDispatched
+          ? "The Pipedream operation may have run, but its outcome could not be verified."
+          : sanitizeConnectorError(
+              error,
+              [token, this.config.clientSecret].filter((value): value is string => Boolean(value)),
+            ),
       };
     }
   }
@@ -559,36 +684,279 @@ export class PipedreamConnector implements ManagedConnectorProvider {
  * account such a row stands for.
  */
 function approvedAccounts(context: AdapterContext, app: string): ApprovedAccount[] {
-  const approved = new Map<string, string>();
-  for (const connection of context.connectedConnections ?? []) {
+  const approved = new Map<string, ApprovedAccount>();
+  const rows = [...(context.connectedConnections ?? [])].sort((a, b) => a.id.localeCompare(b.id));
+  for (const connection of rows) {
     if (connection.connectorId !== "pipedream" || connection.externalId !== app) continue;
     const ref = connection.providerRef?.trim();
-    if (ref && ref !== app && !approved.has(ref)) approved.set(ref, connection.displayName);
+    if (ref && ref !== app && !approved.has(ref))
+      approved.set(ref, { id: connection.id, ref, label: connection.displayName });
   }
-  return [...approved].map(([id, label]) => ({ id, label }));
+  return [...approved.values()];
 }
 
 /** With several approved accounts the model must name one; with one there is nothing to choose. */
+function requiresAccountEnvelope(schema: Record<string, unknown>): boolean {
+  const keywords = [
+    "maxProperties",
+    "minProperties",
+    "propertyNames",
+    "dependencies",
+    "dependentRequired",
+    "dependentSchemas",
+    "patternProperties",
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "not",
+    "if",
+    "then",
+    "else",
+  ];
+  let node: unknown = schema;
+  const seen = new Set<object>();
+  while (node && typeof node === "object" && !Array.isArray(node) && !seen.has(node)) {
+    seen.add(node);
+    const current = node as Record<string, unknown>;
+    if (keywords.some((key) => Object.hasOwn(current, key))) return true;
+    if (current.$ref === undefined) return false;
+    if (typeof current.$ref !== "string" || !current.$ref.startsWith("#/")) return true;
+    node = schema;
+    for (const part of current.$ref.slice(2).split("/")) {
+      const key = part.replace(/~1/g, "/").replace(/~0/g, "~");
+      if (!node || typeof node !== "object" || !Object.hasOwn(node, key)) return true;
+      node = (node as Record<string, unknown>)[key];
+    }
+  }
+  return true;
+}
+
+function supportsAccountEnvelope(schema: Record<string, unknown>): boolean {
+  const pending: unknown[] = [schema];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const value = pending.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (seen.size > 10_000) return false;
+    if (Array.isArray(value)) {
+      for (const item of value) pending.push(item);
+      continue;
+    }
+    const node = value as Record<string, unknown>;
+    if (node.$ref !== undefined) return false;
+    if (
+      node.patternProperties &&
+      typeof node.patternProperties === "object" &&
+      !Array.isArray(node.patternProperties)
+    ) {
+      if (node.additionalProperties === false) return false;
+      const patterns = Object.keys(node.patternProperties);
+      if (patterns.length > 256 || patterns.some((pattern) => !safeAccountPattern(pattern)))
+        return false;
+    }
+    for (const child of schemaChildren(node)) pending.push(child);
+  }
+  return true;
+}
+
+function lacksCatalogValidation(schema: Record<string, unknown>): boolean {
+  const pending: unknown[] = [schema];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const value = pending.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (seen.size > 10_000) return true;
+    if (Array.isArray(value)) {
+      for (const item of value) pending.push(item);
+      continue;
+    }
+    const node = value as Record<string, unknown>;
+    if (
+      node.dependentRequired !== undefined ||
+      node.dependentSchemas !== undefined ||
+      node.unevaluatedProperties !== undefined
+    )
+      return true;
+    if (node.$ref !== undefined) {
+      const reference = localSchemaReference(schema, node.$ref);
+      if (!reference.found) return true;
+      pending.push(reference.value);
+    }
+    for (const child of schemaChildren(node)) pending.push(child);
+  }
+  return false;
+}
+
+function localSchemaReference(
+  schema: Record<string, unknown>,
+  reference: unknown,
+): { found: true; value: unknown } | { found: false } {
+  if (reference === "#") return { found: true, value: schema };
+  if (typeof reference !== "string" || !reference.startsWith("#/")) return { found: false };
+  let value: unknown = schema;
+  for (const part of reference.slice(2).split("/")) {
+    const key = part.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (!value || typeof value !== "object" || !Object.hasOwn(value, key)) return { found: false };
+    value = (value as Record<string, unknown>)[key];
+  }
+  return { found: true, value };
+}
+
+/** JSON values in default, const, enum and examples are not schemas. */
+function schemaChildren(node: Record<string, unknown>): unknown[] {
+  const children: unknown[] = [];
+  for (const key of [
+    "additionalProperties",
+    "unevaluatedProperties",
+    "propertyNames",
+    "items",
+    "contains",
+    "additionalItems",
+    "not",
+    "if",
+    "then",
+    "else",
+    "contentSchema",
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "prefixItems",
+  ])
+    if (node[key] !== undefined) children.push(node[key]);
+  for (const key of ["properties", "patternProperties", "dependentSchemas", "dependencies"]) {
+    const map = node[key];
+    if (!map || typeof map !== "object" || Array.isArray(map)) continue;
+    for (const child of Object.values(map)) {
+      if (child && typeof child === "object" && !Array.isArray(child)) children.push(child);
+    }
+  }
+  return children;
+}
+
+function accountSelector(schema: Record<string, unknown>): string | undefined {
+  const names = new Set<string>();
+  const patterns: Array<(name: string) => boolean> = [];
+  const pending: unknown[] = [schema];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const value = pending.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (seen.size > 10_000) return undefined;
+    if (Array.isArray(value)) {
+      for (const item of value) pending.push(item);
+      continue;
+    }
+    const node = value as Record<string, unknown>;
+    // Adding a root property cannot make a closed composed subschema accept it.
+    if (
+      node !== schema &&
+      (node.additionalProperties === false || node.unevaluatedProperties === false)
+    )
+      return undefined;
+    if (node.properties && typeof node.properties === "object" && !Array.isArray(node.properties))
+      for (const name of Object.keys(node.properties)) names.add(name);
+    if (Array.isArray(node.required))
+      for (const name of node.required) if (typeof name === "string") names.add(name);
+    if (
+      node.patternProperties &&
+      typeof node.patternProperties === "object" &&
+      !Array.isArray(node.patternProperties)
+    ) {
+      for (const pattern of Object.keys(node.patternProperties)) {
+        if (patterns.length >= 256) return undefined;
+        const matches = safeAccountPattern(pattern);
+        if (!matches) return undefined;
+        patterns.push(matches);
+      }
+    }
+    for (const key of ["allOf", "anyOf", "oneOf", "not", "if", "then", "else"])
+      if (node[key]) pending.push(node[key]);
+    for (const key of ["dependentSchemas", "dependencies"]) {
+      const dependencies = node[key];
+      if (dependencies && typeof dependencies === "object" && !Array.isArray(dependencies))
+        for (const dependency of Object.values(dependencies))
+          if (dependency && typeof dependency === "object" && !Array.isArray(dependency))
+            pending.push(dependency);
+    }
+    if (typeof node.$ref === "string") {
+      if (node.$ref === "#") {
+        pending.push(schema);
+        continue;
+      }
+      if (!node.$ref.startsWith("#/")) return undefined;
+      let target: unknown = schema;
+      for (const part of node.$ref.slice(2).split("/")) {
+        const key = part.replace(/~1/g, "/").replace(/~0/g, "~");
+        if (!target || typeof target !== "object" || !Object.hasOwn(target, key)) return undefined;
+        target = (target as Record<string, unknown>)[key];
+      }
+      pending.push(target);
+    }
+  }
+  for (let index = 0; index < 128; index += 1) {
+    const name =
+      index === 0
+        ? ACCOUNT_ARGUMENT
+        : index === 1
+          ? "rakazo_connected_account"
+          : `rakazo_connected_account_${index}`;
+    if (!names.has(name) && !patterns.some((matches) => matches(name))) return name;
+  }
+  return undefined;
+}
+
+/** Never execute provider-supplied regular expressions in the application process. */
+function safeAccountPattern(pattern: string): ((name: string) => boolean) | undefined {
+  if (pattern.length > 128) return undefined;
+  const starts = pattern.startsWith("^");
+  const ends = pattern.endsWith("$");
+  let literal = pattern.slice(starts ? 1 : 0, ends ? -1 : undefined);
+  const leadingAny = literal.startsWith(".*");
+  if (leadingAny) literal = literal.slice(2);
+  const trailingAny = literal.endsWith(".*");
+  if (trailingAny) literal = literal.slice(0, -2);
+  if (!literal && (leadingAny || trailingAny)) return () => true;
+  if (!/^[A-Za-z0-9_-]+$/.test(literal)) return undefined;
+  if (starts && !leadingAny && ends && !trailingAny) return (name) => name === literal;
+  if (starts && !leadingAny) return (name) => name.startsWith(literal);
+  if (ends && !trailingAny) return (name) => name.endsWith(literal);
+  return (name) => name.includes(literal);
+}
+
 function withAccountChoice(
   schema: Record<string, unknown>,
   accounts: ApprovedAccount[],
+  selector: string | null,
+  envelope: boolean,
 ): Record<string, unknown> {
-  if (accounts.length < 2) return schema;
+  if (!selector) return schema;
   const properties = (schema.properties ?? {}) as Record<string, unknown>;
   const required = Array.isArray(schema.required) ? schema.required : [];
+  const choice = {
+    type: "string",
+    enum: accounts.map(({ id }) => id),
+    description: `Connected account to use: ${accounts
+      .map(({ id, label }) => `${id} = ${JSON.stringify(label)}`)
+      .join(", ")}`,
+  };
+  if (envelope) {
+    return {
+      type: "object",
+      properties: { [selector]: choice, arguments: schema },
+      required: [selector, "arguments"],
+      additionalProperties: false,
+    };
+  }
   return {
     ...schema,
     properties: {
       ...properties,
-      [ACCOUNT_ARGUMENT]: {
-        type: "string",
-        enum: accounts.map(({ id }) => id),
-        description: `Connected account to use: ${accounts
-          .map(({ id, label }) => `${id} = ${JSON.stringify(label)}`)
-          .join(", ")}`,
-      },
+      [selector]: choice,
     },
-    required: [...required, ACCOUNT_ARGUMENT],
+    required: [...required, selector],
   };
 }
 

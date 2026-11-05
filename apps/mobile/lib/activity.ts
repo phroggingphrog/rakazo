@@ -1,4 +1,4 @@
-import type { RunActivityRow } from "@rakazo/contracts";
+import type { RoutineRun, RunActivityRow } from "@rakazo/contracts";
 import { rpc } from "../lib/api";
 import { dateLocaleForUi, t } from "./i18n";
 
@@ -27,8 +27,18 @@ export function formatActivityRelativeTime(iso: string, now = new Date()): strin
   return date.toLocaleDateString(dateLocaleForUi(), { month: "short", day: "numeric" });
 }
 
-export function activityStatusLabel(status: RunActivityRow["status"]): string {
+export function activityStatusLabel(
+  status: RunActivityRow["status"] | NonNullable<RoutineRun["lifecycle"]>,
+): string {
   switch (status) {
+    case "created":
+      return t("Created");
+    case "retrying":
+      return t("Retrying");
+    case "waiting_for_approval":
+      return t("Needs approval");
+    case "waiting_for_external_dependency":
+      return t("Waiting for dependency");
     case "queued":
       return t("Queued");
     case "leased":

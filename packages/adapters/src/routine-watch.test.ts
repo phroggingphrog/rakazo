@@ -131,6 +131,15 @@ describe("tickRoutineWatch", () => {
     const updateMany = vi.fn(async () => ({ count: 1 }));
     const messages: Array<{ role: string; blocks: unknown }> = [];
     const tx = {
+      $queryRaw: vi.fn(async (sql: TemplateStringsArray) => {
+        const text = sql.join("");
+        if (text.includes("current_setting")) return [{ bypass: "off" }];
+        if (text.includes("routine_schedule_gate")) return [{ enabled: true }];
+        if (text.includes("FROM routines")) return [{ id: "routine-1" }];
+        if (text.includes("UPDATE routine_watch_attempts")) return [{ routineId: "routine-1" }];
+        return [];
+      }),
+      routine: { updateMany },
       thread: { update: vi.fn(async () => ({ nextMessageSeq: 1, nextEventSeq: 1 })) },
       message: {
         create: vi.fn(async ({ data }: { data: { role: string; blocks: unknown } }) => {
@@ -181,8 +190,45 @@ describe("tickRoutineWatch", () => {
         detail: null,
       },
     };
-    return { deps, routine, updateMany, messages };
+    return { deps, routine, updateMany, messages, tx };
   }
+
+  it("commits a versioned no-change check without a legacy queue write", async () => {
+    const { deps, routine, updateMany, tx } = setup({ data: { changes: [] } });
+    await expect(tickRoutineWatch(deps, routine, target, scheduledAt, "1")).resolves.toEqual({
+      run: false,
+    });
+    const completed = tx.$queryRaw.mock.calls.findIndex(([sql]) =>
+      sql.join("").includes("UPDATE routine_watch_attempts"),
+    );
+    expect(completed).toBeGreaterThanOrEqual(0);
+    expect(tx.$queryRaw.mock.invocationCallOrder[completed]).toBeLessThan(
+      updateMany.mock.invocationCallOrder[0]!,
+    );
+    expect(deps.jobs.enqueue).not.toHaveBeenCalled();
+    expect(deps.jobs.cancel).not.toHaveBeenCalled();
+  });
+
+  it("leaves a versioned failed external check uncertain without replaying it", async () => {
+    const { deps, routine, updateMany, tx } = setup({ error: "synthetic failure" });
+    await expect(tickRoutineWatch(deps, routine, target, scheduledAt, "1")).rejects.toThrow(
+      "synthetic failure",
+    );
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(deps.jobs.enqueue).not.toHaveBeenCalled();
+    expect(deps.jobs.cancel).not.toHaveBeenCalled();
+  });
+
+  it("leaves a versioned source check uncertain if the stream ends without a result", async () => {
+    const { deps, routine, updateMany, tx } = setup({ data: null });
+    vi.mocked(deps.connector!.execute).mockImplementation(async function* () {});
+    await expect(tickRoutineWatch(deps, routine, target, scheduledAt, "1")).rejects.toThrow(
+      "did not report a result",
+    );
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+  });
 
   it("records a quiet no-change check without a message and schedules the next", async () => {
     const { deps, routine, updateMany, messages } = setup({ data: { changes: [] } });

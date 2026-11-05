@@ -52,6 +52,7 @@ type ToolCall = {
 
 function fixture(runId = "run-1") {
   const effects: Effect[] = [];
+  const localRejections = new Map<string, string>();
   const results: unknown[] = [];
   const media = new FakeMediaGenerationProvider();
   const artifactRows: Array<{ id: string; name: string; mimeType: string; size: number }> = [];
@@ -85,6 +86,14 @@ function fixture(runId = "run-1") {
   const memoryCommit = vi.fn(async (_request: MemoryCommitRequest) => ({ revision: "rev-1" }));
   const memoryDocuments: MemorySnapshot["documents"] = [];
   const externalEffect = {
+    count: vi.fn(
+      async ({ where }: { where: { runId: string; status: { in: string[] } } }) =>
+        effects.filter(
+          (effect) =>
+            (!effect.runId || effect.runId === where.runId) &&
+            where.status.in.includes(effect.status),
+        ).length,
+    ),
     findFirst: vi.fn(
       async ({
         where,
@@ -133,12 +142,13 @@ function fixture(runId = "run-1") {
         where,
         data,
       }: {
-        where: { id: string; status?: string | { not: string } };
+        where: { id: string; runId?: string; status?: string | { not: string } };
         data: Partial<Effect>;
       }) => {
         const effect = effects.find(
           (effect) =>
             effect.id === where.id &&
+            (!where.runId || !effect.runId || effect.runId === where.runId) &&
             (!where.status ||
               (typeof where.status === "string"
                 ? effect.status === where.status
@@ -152,7 +162,29 @@ function fixture(runId = "run-1") {
   };
   const prisma = {
     $transaction: vi.fn(async (write: (tx: unknown) => unknown) => write(prisma)),
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn(async (query: TemplateStringsArray) =>
+      String(query).includes("FROM external_effects e")
+        ? effects
+            .filter((effect) => ["failed", "uncertain", "executing"].includes(effect.status))
+            .map((effect) => ({
+              status: effect.status,
+              reason: localRejections.get(effect.id) ?? null,
+            }))
+        : [],
+    ),
+    $executeRaw: vi.fn(
+      async (
+        _query: TemplateStringsArray,
+        effectId: string,
+        _runId: string,
+        _spaceId: string,
+        _userId: string,
+        reason: string,
+      ) => {
+        localRejections.set(effectId, reason);
+        return 1;
+      },
+    ),
     user: { findUnique: vi.fn(async () => null) },
     run: {
       findUnique: vi.fn(async () => run),
@@ -293,6 +325,7 @@ function fixture(runId = "run-1") {
 
   return {
     effects,
+    localRejections,
     media,
     artifactRows,
     artifactPut,
@@ -301,15 +334,19 @@ function fixture(runId = "run-1") {
     scratchpadRows,
     memoryCommit,
     memoryDocuments,
+    finalizeRun,
     setCalls(next: ToolCall[]) {
       calls = next;
     },
-    async run() {
+    async run(allowFailure = false) {
       run.status = "queued";
       await executor.continueRun(run.id, "worker-1");
       expect(runtimeRun).toHaveBeenCalled();
       expect(prisma.attempt.update).not.toHaveBeenCalled();
-      expect(finalizeRun).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed" }));
+      if (!allowFailure)
+        expect(finalizeRun).not.toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: "failed" }),
+        );
     },
   };
 }
@@ -408,9 +445,18 @@ describe("mutating tool effect idempotency keys", () => {
     });
     const submit = vi.spyOn(f.media, "generateVideo");
     f.setCalls([{ name: "generate_video", args, executionId: "changed-call-id" }]);
-    await f.run();
+    await f.run(true);
     expect(f.results[0]).toMatchObject({ uncertain: true });
     expect(submit).not.toHaveBeenCalled();
+    expect(f.finalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "failed",
+        error: expect.stringContaining("reconcile destination evidence"),
+      }),
+    );
+    expect(f.finalizeRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "failed", partialReply: expect.anything() }),
+    );
   });
   it("executes different tools that share a reused provider tool-call id", async () => {
     const f = fixture("run-a");
@@ -842,10 +888,13 @@ describe("add_mcp_server", () => {
       },
     ]);
 
-    await f.run();
+    await f.run(true);
 
     expect(f.results[0]).toEqual({
       error: "Bots can't add local (stdio) MCP servers. Ask an admin to add it in Settings.",
     });
+    expect(f.effects[0]).toMatchObject({ kind: "add_mcp_server", status: "failed" });
+    expect(f.localRejections.get(f.effects[0]!.id)).toBe("stdio_mcp_forbidden");
+    expect(f.finalizeRun).toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed" }));
   });
 });

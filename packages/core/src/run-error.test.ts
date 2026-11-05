@@ -1,6 +1,7 @@
 import { COMPUTER_RATE_LIMIT_ERROR } from "@rakazo/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  APPROVED_ACCOUNT_UNAVAILABLE_ERROR,
   APPROVED_ACTION_NOT_RUN_ERROR,
   HOSTED_MODEL_CREDITS_REQUIRED_ERROR,
   isImageInputConfirmation,
@@ -407,7 +408,7 @@ describe("normalizeRunError", () => {
       });
     });
 
-    it.each([MISSING_TOOL_FINAL_RESPONSE_ERROR, APPROVED_ACTION_NOT_RUN_ERROR])(
+    it.each([MISSING_TOOL_FINAL_RESPONSE_ERROR, APPROVED_ACTION_NOT_RUN_ERROR, APPROVED_ACCOUNT_UNAVAILABLE_ERROR])(
       "keeps the advice while attributing it to the model: %s",
       (details) => {
         expect(normalizeRunError(details)).toEqual({ summary: details, details, kind: "output" });

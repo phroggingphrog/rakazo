@@ -144,6 +144,7 @@ import {
   VoiceCredentialSchema,
   VoiceInfoSchema,
   VoiceStatusSchema,
+  WorkspaceMonitorSchema,
 } from "./domain.js";
 import { ComputerCommandSchema, ProductEventSchema } from "./events.js";
 import { Id, IsoDate, ThinkingLevelSchema } from "./ids.js";
@@ -165,6 +166,14 @@ import {
 import { SearchQueryOutputSchema } from "./search.js";
 import { SecurityEventListInputSchema, SecurityEventSchema } from "./security-events.js";
 import { SettingsScopeSchema, SpaceSettingSchema, settingsScopeInput } from "./settings-scope.js";
+import {
+  SetupPlanCandidateOperationsSchema,
+  SetupPlanDraftSchema,
+  SetupPlanPrerequisitesSchema,
+  SetupPlanRevisionSchema,
+  SetupPlanSchema,
+  SetupPreparedTestSchema,
+} from "./setup-plan.js";
 
 const botId = z.object({ botId: Id });
 const BotRuntimeProfileResponse = z.object({
@@ -469,15 +478,83 @@ export const appContract = {
       .input(z.object({ provider: z.string().trim().min(1), credentialId: Id.optional() }))
       .output(z.object({ ok: z.literal(true) })),
   },
+  setupPlans: {
+    create: oc
+      .input(z.object({ requestKey: z.uuid(), draft: SetupPlanDraftSchema }).strict())
+      .output(SetupPlanSchema),
+    get: oc.input(z.object({ id: Id }).strict()).output(SetupPlanSchema),
+    prerequisites: oc
+      .input(z.object({ id: Id, expectedRevision: SetupPlanRevisionSchema }).strict())
+      .output(SetupPlanPrerequisitesSchema),
+    discoverCandidates: oc
+      .input(z.object({ id: Id, expectedRevision: SetupPlanRevisionSchema }).strict())
+      .output(SetupPlanCandidateOperationsSchema),
+    list: oc
+      .input(
+        z
+          .object({ cursor: Id.optional(), limit: z.number().int().min(1).max(100).default(25) })
+          .strict(),
+      )
+      .output(z.object({ plans: z.array(SetupPlanSchema), nextCursor: Id.nullable() })),
+    update: oc
+      .input(
+        z
+          .object({
+            id: Id,
+            expectedRevision: SetupPlanRevisionSchema,
+            draft: SetupPlanDraftSchema,
+          })
+          .strict(),
+      )
+      .output(SetupPlanSchema),
+    propose: oc
+      .input(z.object({ id: Id, expectedRevision: SetupPlanRevisionSchema }).strict())
+      .output(SetupPlanSchema),
+    configure: oc
+      .input(
+        z
+          .object({ id: Id, expectedRevision: SetupPlanRevisionSchema, requestKey: z.uuid() })
+          .strict(),
+      )
+      .output(SetupPlanSchema),
+    prepareTest: oc
+      .input(
+        z
+          .object({ id: Id, expectedRevision: SetupPlanRevisionSchema, requestKey: z.uuid() })
+          .strict(),
+      )
+      .output(SetupPreparedTestSchema),
+    preparedTest: oc
+      .input(z.object({ id: Id }).strict())
+      .output(SetupPreparedTestSchema.nullable()),
+  },
   bots: {
-    proactiveConfigure: oc.input(z.object({
-      botId: Id,
-      config: z.object({
-        fallbackMs: z.number().int().min(300000).max(604800000).optional(),
-        decisionOrder: z.array(z.enum(["steer", "dm", "mention", "timer", "rules", "judge"])).length(6).optional(),
-        hooks: z.array(z.object({ id: z.string().min(1).max(100), source: z.string().min(1).max(200), contains: z.string().max(500).optional() })).max(20).optional(),
-      }),
-    })).output(z.object({ updated: z.boolean() })),
+    proactiveConfigure: oc
+      .input(
+        z.object({
+          botId: Id,
+          config: z.object({
+            fallbackMs: z
+              .union([z.literal(0), z.number().int().min(300000).max(604800000)])
+              .optional(),
+            decisionOrder: z
+              .array(z.enum(["steer", "dm", "mention", "timer", "rules", "judge"]))
+              .length(6)
+              .optional(),
+            hooks: z
+              .array(
+                z.object({
+                  id: z.string().min(1).max(100),
+                  source: z.string().min(1).max(200),
+                  contains: z.string().max(500).optional(),
+                }),
+              )
+              .max(20)
+              .optional(),
+          }),
+        }),
+      )
+      .output(z.object({ updated: z.boolean() })),
     runtimeProfileGet: oc.input(botId).output(BotRuntimeProfileResponse),
     runtimeProfileValidate: oc
       .input(BotRuntimeProfileValidationInput)
@@ -778,6 +855,9 @@ export const appContract = {
       .input(z.object({ botIds: z.array(Id).min(1).max(ROUTINE_MENTION_BATCH_MAX) }))
       .output(z.array(z.object({ botId: Id, routines: z.array(RoutineSchema) }))),
     list: oc.input(botId).output(z.array(RoutineSchema)),
+    watchAttempt: oc
+      .input(z.object({ routineId: Id }))
+      .output(z.object({ state: z.enum(["none", "uncertain"]) })),
     history: oc
       .input(
         z.object({
@@ -812,10 +892,11 @@ export const appContract = {
             modelProvider: z.string().trim().min(1).max(80).nullable().optional(),
             modelId: z.string().trim().min(1).max(200).nullable().optional(),
             thinkingLevel: ThinkingLevelSchema.nullable().optional(),
-            /** ISO datetime to arm a never-run one-shot. */
+            /** ISO datetime to arm an unarmed one-shot. */
             runAt: IsoDate.optional(),
             /** Null removes the change trigger. */
             watch: RoutineWatchSchema.nullable().optional(),
+            monitor: WorkspaceMonitorSchema.nullable().optional(),
           })
           .superRefine((value, ctx) => {
             if (
@@ -1019,6 +1100,20 @@ export const appContract = {
       remove: oc.input(z.object({ id: Id })).output(z.object({ ok: z.literal(true) })),
       /** Launch the server once (installing a stdio package if needed), list its tools, close it. */
       test: oc.input(z.object({ id: Id })).output(McpServerSchema),
+      /** Candidate reads require review; a read-only declaration does not prove scope or access. */
+      monitorTools: oc.input(z.object({ id: Id, botId: Id })).output(
+        z.object({
+          status: z.enum(["ok", "unavailable", "not_assigned"]),
+          revision: z.number().int().positive(),
+          tools: z.array(
+            z.object({
+              name: z.string(),
+              description: z.string(),
+              inputSchema: z.record(z.string(), z.unknown()),
+            }),
+          ),
+        }),
+      ),
       /** Which agents can use the server: all of them, or only `botIds`. */
       agents: oc
         .input(z.object({ id: Id, allBots: z.boolean(), botIds: z.array(Id).max(500).default([]) }))

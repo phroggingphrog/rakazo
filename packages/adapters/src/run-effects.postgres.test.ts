@@ -58,6 +58,7 @@ postgres("tool effects under the run lease (PostgreSQL)", () => {
           trigger: "user_message",
           leaseOwner: "worker-1",
           leaseFence: 1,
+          leaseExpiresAt: new Date(Date.now() + 60_000),
         },
         select: { id: true, spaceId: true, threadId: true, botId: true },
       });

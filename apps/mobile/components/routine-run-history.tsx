@@ -1,5 +1,5 @@
 import type { RoutineRun } from "@rakazo/contracts";
-import { formatRoutineRunAt } from "@rakazo/core";
+import { formatRoutineRunAt, routineRunNeedsReview } from "@rakazo/core";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import { ActivityIndicator } from "react-native";
@@ -93,17 +93,49 @@ function RunRow({
   const { locale, t } = useI18n();
   const failure = useRunError(error);
   const title = formatRoutineRunAt(run, dateLocaleForUi(locale));
+  const notification =
+    run.notification === "pending"
+      ? t("Notification queued")
+      : run.notification === "submitting"
+        ? t("Notification submission started; outcome pending")
+        : run.notification === "uncertain"
+          ? t("Notification delivery unknown")
+          : run.notification === "undeliverable"
+            ? t("No available push recipient")
+            : run.notification === "cancelled"
+              ? t("Notification cancelled")
+              : run.notification === "blocked"
+                ? run.notificationRetryExhausted
+                  ? t("Notification not sent; preparation retries exhausted")
+                  : t("Notification blocked before sending")
+                : run.notification === "expo_accepted"
+                  ? t("Push accepted by Expo; device delivery not confirmed")
+                  : run.notification === "expo_receipt_ok"
+                    ? t("Expo receipt was successful; device display not confirmed")
+                    : run.notification === "expo_receipt_error"
+                      ? t("Expo reported a push delivery error")
+                      : run.notification === "expo_receipt_unavailable"
+                        ? t("Expo receipt unavailable; device delivery not confirmed")
+                        : t("Notification status unknown");
   return (
     <SettingsRow
       accessibilityRole={onPress ? "button" : undefined}
       title={title}
-      detail={failure?.summary}
+      detail={[
+        failure?.summary,
+        routineRunNeedsReview(run) ? t("Actions need review") : null,
+        notification,
+      ]
+        .filter(Boolean)
+        .join("\n")}
       value={
-        run.status !== "completed"
-          ? activityStatusLabel(run.status)
-          : run.messageId
-            ? undefined
-            : t("No reply")
+        run.lifecycle
+          ? activityStatusLabel(run.lifecycle)
+          : run.status !== "completed"
+            ? activityStatusLabel(run.status)
+            : run.messageId
+              ? undefined
+              : t("No reply")
       }
       chevron={onPress ? "right" : undefined}
       onPress={onPress}

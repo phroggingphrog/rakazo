@@ -5,6 +5,30 @@ import { getLogger } from "@rakazo/logging";
 
 const HEALTH_MESSAGE_MAX = 2000;
 
+export const MCP_AUTH_INTERVENTION_REASON = "Sign in again to reconnect this MCP server.";
+
+/** Compare-and-set: an old in-flight failure cannot poison new credentials. */
+export async function recordMcpAuthFailure(
+  prisma: PrismaClient,
+  serverId: string,
+  revision: number,
+): Promise<void> {
+  try {
+    await prisma.mcpServer.updateMany({
+      where: { id: serverId, revision },
+      data: {
+        authFailureRevision: revision,
+        healthStatus: "error",
+        healthMessage: MCP_AUTH_INTERVENTION_REASON,
+        healthToolCount: null,
+        healthCheckedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    getLogger().error("mcp auth intervention write failed", error, { "mcp.server.id": serverId });
+  }
+}
+
 /** What the MCP SDK throws when an authorization server offers no dynamic client
  * registration; only a client registered with it out of band can sign in. */
 export const MCP_DYNAMIC_REGISTRATION_UNSUPPORTED =

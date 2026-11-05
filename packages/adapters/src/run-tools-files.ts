@@ -62,6 +62,8 @@ export async function callMediaTool(ctx: RunContext, call: ToolCall, recoverOnly
             const checkpointed = await tx.externalEffect.updateMany({
               where: {
                 id: job.id,
+                kind: "media_generation_job",
+                dispatchClaimToken: null,
                 status: { not: "media_completed" },
                 result: { equals: job.result },
               },
@@ -78,7 +80,12 @@ export async function callMediaTool(ctx: RunContext, call: ToolCall, recoverOnly
       const committed = await deps.prisma.$transaction(async (tx) => {
         // Commit completion with the message so a restarted poll cannot post twice.
         const claimed = await tx.externalEffect.updateMany({
-          where: { id: jobId, status: { not: "media_completed" } },
+          where: {
+            id: jobId,
+            kind: "media_generation_job",
+            dispatchClaimToken: null,
+            status: { not: "media_completed" },
+          },
           data: {
             status: "media_completed",
             result: { provider: mediaGeneration.id, artifactId },

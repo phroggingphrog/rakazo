@@ -407,6 +407,32 @@ describe("GraphileJobWorkerHost runner lifecycle", () => {
     vi.useRealTimers();
   });
 
+  it("accounts for a legacy Graphile wake around its handler", async () => {
+    run.mockResolvedValueOnce(mockRunner().runner);
+    const steps: string[] = [];
+    const pool = {
+      connect: async () => ({
+        query: async (sql: string) => {
+          steps.push(sql.includes("wake_begin") ? "admit" : "settle");
+        },
+        release: () => steps.push("release"),
+      }),
+    } as unknown as Pool;
+    const host = new GraphileJobWorkerHost(pool, { concurrency: 1 });
+    const target = handlers();
+    target["routine.wakeup"] = async () => {
+      steps.push("handler");
+    };
+    try {
+      await host.start(target);
+      const dispatch = run.mock.calls[0]![0].taskList["routine.wakeup"];
+      await dispatch({ routineId: "routine-a", scheduledFor: "2030-01-01T00:00:00Z" });
+      expect(steps).toEqual(["admit", "release", "handler", "settle", "release"]);
+    } finally {
+      await host.stop();
+    }
+  });
+
   it("releases dispatch slots after durable handoff and drains executions at shutdown", async () => {
     run.mockResolvedValueOnce(mockRunner().runner);
     const host = new GraphileJobWorkerHost({} as Pool, { concurrency: 4 });

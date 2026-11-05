@@ -38,6 +38,12 @@ export function redactConnectorPayload(value: unknown, secrets: string[]): unkno
   }
 }
 
+/** Fail closed when a dispatched connector response cannot be safely redacted. */
+export function redactConnectorPayloadStrict(value: unknown, secrets: string[]): unknown {
+  if (secrets.length === 0) return value;
+  return redactPayloadValue(JSON.parse(JSON.stringify(value)), secrets);
+}
+
 function redactPayloadValue(value: unknown, secrets: string[]): unknown {
   if (typeof value === "string") return redactSecrets(value, secrets);
   if (Array.isArray(value)) return value.map((item) => redactPayloadValue(item, secrets));

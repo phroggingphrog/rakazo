@@ -1,4 +1,8 @@
 export const RU_MESSAGES: Record<string, string> = {
+  "Arguments are saved with this setup.": "Аргументы сохраняются вместе с этой настройкой.",
+  "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested.":
+    "Проверьте поля, необходимые для выбранной операции. Не вводите пароли, токены и другие секретные данные; настройте аутентификацию в интеграции. Аргументы ещё не проверены на соответствие операции и не протестированы.",
+  "Enter a valid JSON object up to 8 KB.": "Введите корректный объект JSON размером не более 8 КБ.",
   "How other bots see it": "Как его видят другие боты",
   "Share to": "Отправить в",
   "{count} files": "Файлов: {count}",
@@ -1160,6 +1164,7 @@ export const RU_MESSAGES: Record<string, string> = {
   "Always open {site}": "Всегда открывать {site}",
   "Trusted sites": "Доверенные сайты",
   "Run history": "История запусков",
+  "Actions need review": "Некоторые действия требуют проверки",
   "No reply": "Без ответа",
   "No runs yet": "Запусков пока нет",
   "Load older runs": "Загрузить более ранние запуски",

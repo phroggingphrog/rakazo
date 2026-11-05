@@ -101,3 +101,71 @@ it("sends on/off only when the save changes it", async () => {
   });
   expect(update.mock.calls[1]![0]).toMatchObject({ active: false });
 });
+
+it("keeps a completed one-shot paused when changing its name", async () => {
+  const completed = {
+    ...routine,
+    crons: ["@once"],
+    active: false,
+    lastRunAt: "2026-10-01T10:00:00.000Z",
+  };
+  update.mockResolvedValue(completed);
+  act(() => editor.editRoutine(completed));
+  act(() => editor.editorProps!.onChange({ ...editor.editorProps!.draft, name: "Renamed" }));
+  await act(async () => {
+    await editor.editorProps!.onSave();
+  });
+  expect(update.mock.calls[0]![0]).not.toHaveProperty("active");
+  expect(update.mock.calls[0]![0]).not.toHaveProperty("runAt");
+});
+
+it("asks for a new time when a completed one-shot is turned on", async () => {
+  const completed = {
+    ...routine,
+    crons: ["@once"],
+    active: false,
+    lastRunAt: "2026-10-01T10:00:00.000Z",
+  };
+  update.mockResolvedValue({ ...completed, active: true });
+  act(() => editor.editRoutine(completed));
+  expect(editor.editorProps!.draft.runAtLocal).toBe("");
+  act(() => editor.editorProps!.onChange({ ...editor.editorProps!.draft, active: true }));
+  await act(async () => {
+    await editor.editorProps!.onSave();
+  });
+  expect(update).not.toHaveBeenCalled();
+  expect(editor.editorProps!.error).toContain("run time");
+
+  const localTime = "2099-11-04T10:30";
+  act(() => editor.editorProps!.onChange({ ...editor.editorProps!.draft, runAtLocal: localTime }));
+  await act(async () => {
+    await editor.editorProps!.onSave();
+  });
+  expect(update).toHaveBeenCalledWith(
+    expect.objectContaining({ active: true, runAt: new Date(localTime).toISOString() }),
+  );
+});
+
+it("does not rearm if activation is switched back off before saving", async () => {
+  const completed = {
+    ...routine,
+    crons: ["@once"],
+    active: false,
+    lastRunAt: "2026-10-01T10:00:00.000Z",
+  };
+  update.mockResolvedValue(completed);
+  act(() => editor.editRoutine(completed));
+  act(() =>
+    editor.editorProps!.onChange({
+      ...editor.editorProps!.draft,
+      active: true,
+      runAtLocal: "2099-11-04T10:30",
+    }),
+  );
+  act(() => editor.editorProps!.onChange({ ...editor.editorProps!.draft, active: false }));
+  await act(async () => {
+    await editor.editorProps!.onSave();
+  });
+  expect(update.mock.calls[0]![0]).not.toHaveProperty("active");
+  expect(update.mock.calls[0]![0]).not.toHaveProperty("runAt");
+});

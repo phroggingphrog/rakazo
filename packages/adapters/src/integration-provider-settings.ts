@@ -201,6 +201,11 @@ class ConfiguredIntegrationProvider implements ManagedConnectorProvider {
     const provider = await (call.route ? this.required() : this.resolve());
     return provider?.resolveCall?.(call, context);
   }
+  async pipedreamAccountNamespace(context: AdapterContext) {
+    const provider = await this.required();
+    if (!provider.pipedreamAccountNamespace) throw new Error("Account namespace is unavailable");
+    return provider.pipedreamAccountNamespace(context);
+  }
   async *execute(call: ConnectorCall, context: AdapterContext) {
     yield* (await this.required()).execute(call, context);
   }

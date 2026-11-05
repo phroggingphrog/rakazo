@@ -112,5 +112,6 @@ async function dispatchTool(
 }
 
 function isToolError(result: unknown): boolean {
-  return typeof result === "object" && result !== null && "error" in result;
+  return typeof result === "object" && result !== null &&
+    ("error" in result || ("isError" in result && result.isError === true));
 }

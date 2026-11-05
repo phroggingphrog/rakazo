@@ -99,6 +99,71 @@ async function mounted({
   };
 }
 
+it("shows provider acceptance without claiming device delivery", async () => {
+  routines.history.mockResolvedValue(page([{ ...run, notification: "expo_accepted" }]));
+  const view = await mounted();
+  try {
+    await view.settled(() => expect(view.rows()).toHaveLength(1));
+    expect(view.container.textContent).toContain(
+      "Push accepted by Expo; device delivery not confirmed",
+    );
+  } finally {
+    await view.close();
+  }
+});
+
+it("explains when notification preparation retries are exhausted", async () => {
+  routines.history.mockResolvedValue(
+    page([{ ...run, notification: "blocked", notificationRetryExhausted: true }]),
+  );
+  const view = await mounted();
+  try {
+    await view.settled(() => expect(view.rows()).toHaveLength(1));
+    expect(view.container.textContent).toContain(
+      "Notification not sent; preparation retries exhausted",
+    );
+  } finally {
+    await view.close();
+  }
+});
+
+it.each([
+  ["unknown", "Notification status unknown"],
+  ["pending", "Notification queued"],
+  ["submitting", "Notification submission started; outcome pending"],
+  ["uncertain", "Notification delivery unknown"],
+  ["undeliverable", "No available push recipient"],
+  ["cancelled", "Notification cancelled"],
+  ["blocked", "Notification blocked before sending"],
+] as const)("shows notification state %s", async (notification, label) => {
+  routines.history.mockResolvedValue(page([{ ...run, notification }]));
+  const view = await mounted();
+  try {
+    await view.settled(() => expect(view.rows()).toHaveLength(1));
+    expect(view.container.textContent).toContain(label);
+  } finally {
+    await view.close();
+  }
+});
+
+it.each([
+  ["expo_receipt_ok", "Expo receipt was successful; device display not confirmed"],
+  ["expo_receipt_error", "Expo reported a push delivery error"],
+  ["expo_receipt_unavailable", "Expo receipt unavailable; device delivery not confirmed"],
+] as const)(
+  "shows the receipt outcome %s without claiming device display",
+  async (notification, label) => {
+    routines.history.mockResolvedValue(page([{ ...run, notification }]));
+    const view = await mounted();
+    try {
+      await view.settled(() => expect(view.rows()).toHaveLength(1));
+      expect(view.container.textContent).toContain(label);
+    } finally {
+      await view.close();
+    }
+  },
+);
+
 it("shows loading, then the latest runs as rows that open their chat", async () => {
   let finish!: (value: RoutineHistory) => void;
   routines.history.mockReturnValue(

@@ -7,6 +7,7 @@ import {
   normalizeRunError,
   routineHistoryPage,
   routineRunAt,
+  routineRunNeedsReview,
 } from "@rakazo/core";
 import { Button, SectionHeading, Spinner } from "@rakazo/ui-web";
 import { useInfiniteQuery } from "@tanstack/react-query";
@@ -117,6 +118,44 @@ function RunRow({ run }: { run: RoutineRun }) {
             <pre className="mt-2 whitespace-pre-wrap break-words text-xs">{run.error}</pre>
           </details>
         </div>
+      ) : null}
+      {routineRunNeedsReview(run) ? (
+        <p className="pb-2 text-foreground">{t`Actions need review`}</p>
+      ) : null}
+      {run.notification === undefined || run.notification === "unknown" ? (
+        <p className="pb-2">{t`Notification status unknown`}</p>
+      ) : null}
+      {run.notification === "pending" ? <p className="pb-2">{t`Notification queued`}</p> : null}
+      {run.notification === "submitting" ? (
+        <p className="pb-2">{t`Notification submission started; outcome pending`}</p>
+      ) : null}
+      {run.notification === "uncertain" ? (
+        <p className="pb-2">{t`Notification delivery unknown`}</p>
+      ) : null}
+      {run.notification === "undeliverable" ? (
+        <p className="pb-2">{t`No available push recipient`}</p>
+      ) : null}
+      {run.notification === "cancelled" ? (
+        <p className="pb-2">{t`Notification cancelled`}</p>
+      ) : null}
+      {run.notification === "blocked" ? (
+        <p className="pb-2">
+          {run.notificationRetryExhausted
+            ? t`Notification not sent; preparation retries exhausted`
+            : t`Notification blocked before sending`}
+        </p>
+      ) : null}
+      {run.notification === "expo_accepted" ? (
+        <p className="pb-2">{t`Push accepted by Expo; device delivery not confirmed`}</p>
+      ) : null}
+      {run.notification === "expo_receipt_ok" ? (
+        <p className="pb-2">{t`Expo receipt was successful; device display not confirmed`}</p>
+      ) : null}
+      {run.notification === "expo_receipt_error" ? (
+        <p className="pb-2">{t`Expo reported a push delivery error`}</p>
+      ) : null}
+      {run.notification === "expo_receipt_unavailable" ? (
+        <p className="pb-2">{t`Expo receipt unavailable; device delivery not confirmed`}</p>
       ) : null}
     </li>
   );

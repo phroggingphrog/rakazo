@@ -3,7 +3,9 @@ import { ModelAccountError, routineWakeupJob } from "@rakazo/adapter-kit";
 import type { RunErrorKind } from "@rakazo/contracts";
 import { nextCronDateAcross, nextRoutineRunDateAcross, normalizeRunError } from "@rakazo/core";
 import type { Prisma, PrismaClient } from "@rakazo/db";
+import { currentDbContext } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
+import { routineSchedulerMode } from "./routine-scheduler-mode.js";
 
 /** The first account-error failure holds the routine this long; each further one doubles it. */
 const ROUTINE_ACCOUNT_BACKOFF_BASE_MS = 5 * 60_000;
@@ -95,9 +97,10 @@ export async function clearRoutineBackoff(
   routineId: string,
   now = new Date(),
 ): Promise<void> {
+  const owner = routineTenant();
   // Most completions have nothing to clear; skip the locked write for them.
   const held = await deps.prisma.routine
-    .count({ where: { id: routineId, accountFailures: { gt: 0 } } })
+    .count({ where: { id: routineId, ...owner, accountFailures: { gt: 0 } } })
     .catch((error: unknown) => {
       getLogger().error("routine.backoff_clear", error);
       return 0;
@@ -115,6 +118,11 @@ export async function clearRoutineBackoff(
   });
 }
 
+function routineTenant() {
+  const context = currentDbContext();
+  return context?.kind === "tenant" ? { spaceId: context.spaceId, userId: context.userId } : {};
+}
+
 /**
  * Reads and writes the routine under its row lock, so a success and a failure of overlapping
  * runs cannot interleave and undo each other's schedule.
@@ -126,10 +134,17 @@ async function updateSchedule(
   change: (routine: RoutineSchedule) => { accountFailures: number; nextRunAt?: Date } | null,
 ): Promise<void> {
   try {
-    const nextRunAt = await deps.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      await tx.$queryRaw`SELECT id FROM routines WHERE id = ${routineId} FOR UPDATE`;
-      const routine = await tx.routine.findUnique({
-        where: { id: routineId },
+    const owner = routineTenant();
+    const result = await deps.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const versioned = await routineSchedulerMode(tx);
+      if (owner.userId) {
+        await tx.$queryRaw`SELECT id FROM routines WHERE id = ${routineId}
+          AND "spaceId" = ${owner.spaceId} AND "userId" = ${owner.userId} FOR UPDATE`;
+      } else {
+        await tx.$queryRaw`SELECT id FROM routines WHERE id = ${routineId} FOR UPDATE`;
+      }
+      const routine = await tx.routine.findFirst({
+        where: { id: routineId, ...owner },
         select: {
           active: true,
           crons: true,
@@ -141,10 +156,15 @@ async function updateSchedule(
       });
       const data = routine ? change(routine) : null;
       if (!data) return null;
-      await tx.routine.update({ where: { id: routineId }, data });
-      return data.nextRunAt ?? null;
+      if (versioned && routine?.watch != null && data.nextRunAt) {
+        throw new Error("Versioned routine watch execution is unavailable");
+      }
+      await tx.routine.update({ where: { id: routineId, ...owner }, data });
+      return { nextRunAt: data.nextRunAt ?? null, versioned };
     });
-    if (nextRunAt) await deps.jobs.enqueue(routineWakeupJob(routineId, nextRunAt));
+    if (result?.nextRunAt && !result.versioned) {
+      await deps.jobs.enqueue(routineWakeupJob(routineId, result.nextRunAt));
+    }
   } catch (error) {
     getLogger().error(logMessage, error);
   }

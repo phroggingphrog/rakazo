@@ -152,7 +152,7 @@ async function connectedUserComputer(ctx: RunContext) {
 export async function userComputerShell(ctx: RunContext, call: ToolCall) {
   const { bot, runId } = ctx;
   const connected = await connectedUserComputer(ctx);
-  if (!connected) return call.finish({ error: USER_COMPUTER_UNAVAILABLE });
+  if (!connected) return call.finishComputerUnavailable({ error: USER_COMPUTER_UNAVAILABLE });
   const { owner, devices, deviceId } = connected;
   const { signal } = ctx.context;
   const command = String(call.args.command ?? "");
@@ -218,7 +218,7 @@ export function userComputerAct(ctx: RunContext, call: ToolCall) {
   if (!actions.success) {
     const issue = actions.error.issues[0];
     const where = issue?.path.length ? `actions.${issue.path.join(".")}: ` : "actions: ";
-    return call.finish({ error: `${where}${issue?.message ?? "invalid"}` });
+    return call.finishInvalidScreenAction({ error: `${where}${issue?.message ?? "invalid"}` });
   }
   return userComputerScreen(ctx, call, {
     method: "screenAct",
@@ -235,7 +235,7 @@ type ScreenRequest =
 async function userComputerScreen(ctx: RunContext, call: ToolCall, request: ScreenRequest) {
   if (!request.app) return call.finish({ error: "app must name an app on the user's computer." });
   const connected = await connectedUserComputer(ctx);
-  if (!connected) return call.finish({ error: USER_COMPUTER_UNAVAILABLE });
+  if (!connected) return call.finishComputerUnavailable({ error: USER_COMPUTER_UNAVAILABLE });
   const { owner, devices, deviceId } = connected;
   const { signal } = ctx.context;
   try {

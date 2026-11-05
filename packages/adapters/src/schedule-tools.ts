@@ -1,4 +1,8 @@
-import type { ConnectorProvider, JobPublisher } from "@rakazo/adapter-kit";
+import type {
+  ConnectorProvider,
+  JobPublisher,
+  ManagedConnectorProvider,
+} from "@rakazo/adapter-kit";
 import { routineJobKey, routineWakeupJob } from "@rakazo/adapter-kit";
 import type { RoutineWatch } from "@rakazo/contracts";
 import { RoutineWatchSchema, TimeZoneSchema } from "@rakazo/contracts";
@@ -14,10 +18,20 @@ import {
   wallClock,
   zonedDateTime,
 } from "@rakazo/core";
-import type { Prisma, PrismaClient, ThreadEvents } from "@rakazo/db";
+import { Prisma, type PrismaClient, type ThreadEvents } from "@rakazo/db";
 
 import { localDateTime } from "./current-time.js";
-import { validateRoutineWatch } from "./routine-watch.js";
+import { routineSchedulerMode } from "./routine-scheduler-mode.js";
+import {
+  parseRoutineWatch,
+  prepareRoutineWatchBinding,
+  stableStringify,
+  validateRoutineWatch,
+} from "./routine-watch.js";
+import {
+  isRoutineWatchUncertainError,
+  ROUTINE_WATCH_UNCERTAIN_MESSAGE,
+} from "./routine-watch-attempt.js";
 
 export { isOneShotRoutineCron, ONCE_ROUTINE_CRON };
 
@@ -151,6 +165,9 @@ export function resolveScheduleTiming(
       if (!parsed) return { ok: false, error: "runAt must be a valid ISO datetime." };
       nextRunAt = parsed;
     }
+    if (!Number.isFinite(nextRunAt.getTime())) {
+      return { ok: false, error: "One-shot delay is outside the supported date range." };
+    }
     if (nextRunAt.getTime() <= Date.now()) {
       return { ok: false, error: `One-shot schedules must run in the future. ${nowIn(timezone)}` };
     }
@@ -251,6 +268,7 @@ function validateRepeatingCron(cron: string): string | null {
 
 export interface ScheduleToolDeps {
   connector?: ConnectorProvider;
+  connectors?: { managed(id: string): ManagedConnectorProvider | undefined };
   prisma: PrismaClient;
   events: ThreadEvents;
   jobs: JobPublisher;
@@ -321,24 +339,28 @@ export async function createScheduleFromTool(
   const resolved = resolveScheduleTiming(input.schedule, timezone);
   if (!resolved.ok) return { error: resolved.error };
 
-  const row = await deps.prisma.routine.create({
-    data: {
-      spaceId: input.spaceId,
-      botId: routineBotId,
-      userId: input.userId,
-      threadId: routineThreadId,
-      name,
-      prompt,
-      crons: [resolved.cron],
-      timezone,
-      notify: true,
-      active: true,
-      nextRunAt: resolved.nextRunAt,
-    },
+  const { row, versioned } = await deps.prisma.$transaction(async (tx) => {
+    const versioned = await routineSchedulerMode(tx);
+    const row = await tx.routine.create({
+      data: {
+        spaceId: input.spaceId,
+        botId: routineBotId,
+        userId: input.userId,
+        threadId: routineThreadId,
+        name,
+        prompt,
+        crons: [resolved.cron],
+        timezone,
+        notify: true,
+        active: true,
+        nextRunAt: resolved.nextRunAt,
+      },
+    });
+    return { row, versioned };
   });
 
   try {
-    await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
+    if (!versioned) await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
   } catch {
     try {
       await deps.prisma.routine.delete({ where: { id: row.id } });
@@ -406,6 +428,7 @@ async function createWatchFromTool(
   if (!parsed.success) {
     return { error: parsed.error.issues.map((issue) => issue.message).join("; ") };
   }
+  let prepared: Awaited<ReturnType<typeof prepareRoutineWatchBinding>>;
   try {
     // Match routine editing's owner/space boundary before creating unattended work.
     const bot = await deps.prisma.bot.findFirst({
@@ -414,26 +437,35 @@ async function createWatchFromTool(
     });
     if (!bot) return { error: "Bot not found." };
     await validateRoutineWatch(deps, parsed.data, input, bot.computer);
+    prepared = await prepareRoutineWatchBinding(deps, input, parsed.data);
   } catch (error) {
     return { error: error instanceof Error ? error.message : "Invalid change trigger." };
   }
   const nextRunAt = new Date(Date.now() + 2_000);
-  const row = await deps.prisma.routine.create({
-    data: {
-      spaceId: input.spaceId,
-      botId: input.botId,
-      userId: input.userId,
-      threadId: input.threadId,
-      name: input.name,
-      prompt: input.prompt,
-      crons: [],
-      timezone: input.timezone,
-      notify: true,
-      active: true,
-      watch: parsed.data as Prisma.InputJsonValue,
-      nextRunAt,
-    },
+  const created = await deps.prisma.$transaction(async (tx) => {
+    const versioned = await routineSchedulerMode(tx);
+    if (versioned) return null;
+    if (prepared.recheck && !(await prepared.recheck(tx)))
+      throw new Error("The selected account changed. Choose it again.");
+    return tx.routine.create({
+      data: {
+        spaceId: input.spaceId,
+        botId: input.botId,
+        userId: input.userId,
+        threadId: input.threadId,
+        name: input.name,
+        prompt: input.prompt,
+        crons: [],
+        timezone: input.timezone,
+        notify: true,
+        active: true,
+        watch: prepared.watch as Prisma.InputJsonValue,
+        nextRunAt,
+      },
+    });
   });
+  if (!created) return { error: "Versioned routine watch execution is unavailable." };
+  const row = created;
   try {
     await deps.jobs.enqueue(routineWakeupJob(row.id, nextRunAt));
   } catch {
@@ -457,7 +489,7 @@ async function createWatchFromTool(
     ok: true as const,
     routineId: row.id,
     name: row.name,
-    watch: parsed.data,
+    watch: prepared.watch,
     note: `Takes a first reading now, then checks every ${parsed.data.everyMinutes} minutes and runs only when it changes.`,
   };
 }
@@ -533,6 +565,38 @@ export async function updateScheduleFromTool(
   });
   if (!existing) return { error: "Schedule not found." };
 
+  let preparedWatch: Awaited<ReturnType<typeof prepareRoutineWatchBinding>> | undefined;
+  if (isScheduleValueProvided(input.schedule.watch)) {
+    if (existing.watch == null) return { error: "This routine does not have a change trigger." };
+    let raw = input.schedule.watch;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        return { error: "watch must be a JSON object." };
+      }
+    }
+    const parsed = RoutineWatchSchema.safeParse(raw);
+    if (!parsed.success)
+      return { error: parsed.error.issues.map((issue) => issue.message).join("; ") };
+    try {
+      const bot = await deps.prisma.bot.findFirst({
+        where: { id: input.botId, spaceId: input.spaceId, userId: input.userId, archivedAt: null },
+        include: { computer: true },
+      });
+      if (!bot) return { error: "Bot not found." };
+      await validateRoutineWatch(deps, parsed.data, input, bot.computer);
+      preparedWatch = await prepareRoutineWatchBinding(
+        deps,
+        input,
+        parsed.data,
+        parseRoutineWatch(existing.watch),
+      );
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : "Invalid change trigger." };
+    }
+  }
+
   let timezone = existing.timezone;
   if (input.timezone !== undefined) {
     const parsed = TimeZoneSchema.safeParse(input.timezone);
@@ -544,7 +608,13 @@ export async function updateScheduleFromTool(
   const hasTiming = TIMING_FIELDS.some((field) => isScheduleValueProvided(input.schedule[field]));
   const retime =
     hasTiming || isScheduleValueProvided(input.schedule.startAt) || timezone !== existing.timezone;
-  if (!retime && name === undefined && prompt === undefined && input.active === undefined) {
+  if (
+    !retime &&
+    name === undefined &&
+    prompt === undefined &&
+    input.active === undefined &&
+    !preparedWatch
+  ) {
     return { error: "Nothing to update." };
   }
   if (retime && existing.watch != null) {
@@ -597,25 +667,56 @@ export async function updateScheduleFromTool(
     } else nextRunAt = nextCronDateAcross(crons, new Date(), timezone);
   }
   if (!active) nextRunAt = null;
+  const watchChanged =
+    preparedWatch !== undefined &&
+    stableStringify(preparedWatch.watch) !== stableStringify(parseRoutineWatch(existing.watch));
+  if (watchChanged && active) nextRunAt = new Date(Date.now() + 2_000);
   const timingChanged =
-    retime || active !== existing.active || nextRunAt?.getTime() !== existing.nextRunAt?.getTime();
+    watchChanged ||
+    retime ||
+    active !== existing.active ||
+    nextRunAt?.getTime() !== existing.nextRunAt?.getTime();
 
   // The scope is part of the write, so the routine cannot change hands between the read and it.
   // A name or prompt edit writes only those fields, so a run claimed meanwhile keeps its advance;
   // a timing edit applies only if no run advanced the routine since the read.
-  const { count } = await deps.prisma.routine.updateMany({
-    where: {
-      ...scope,
-      id: existing.id,
-      bot: { archivedAt: null },
-      ...(timingChanged ? { active: existing.active, nextRunAt: existing.nextRunAt } : {}),
-    },
-    data: {
-      ...(name === undefined ? {} : { name }),
-      ...(prompt === undefined ? {} : { prompt }),
-      ...(timingChanged ? { crons, timezone, active, nextRunAt } : {}),
-    },
-  });
+  const update = await deps.prisma
+    .$transaction(async (tx) => {
+      const versioned = await routineSchedulerMode(tx);
+      if (preparedWatch?.recheck && !(await preparedWatch.recheck(tx)))
+        throw new Error("The selected account changed. Choose it again.");
+      if (versioned && active && existing.watch != null && timingChanged)
+        return { versioned, count: 0, watchUnavailable: true };
+      const { count } = await tx.routine.updateMany({
+        where: {
+          ...scope,
+          id: existing.id,
+          bot: { archivedAt: null },
+          ...(timingChanged ? { active: existing.active, nextRunAt: existing.nextRunAt } : {}),
+          ...(preparedWatch ? { watch: { equals: existing.watch as Prisma.InputJsonValue } } : {}),
+        },
+        data: {
+          ...(name === undefined ? {} : { name }),
+          ...(prompt === undefined ? {} : { prompt }),
+          ...(timingChanged ? { crons, timezone, active, nextRunAt } : {}),
+          ...(preparedWatch
+            ? {
+                watch: preparedWatch.watch as Prisma.InputJsonValue,
+                ...(watchChanged ? { watchState: Prisma.DbNull } : {}),
+              }
+            : {}),
+        },
+      });
+      return { versioned, count, watchUnavailable: false };
+    })
+    .catch((error: unknown) => {
+      if (isRoutineWatchUncertainError(error)) return null;
+      throw error;
+    });
+  if (!update) return { error: ROUTINE_WATCH_UNCERTAIN_MESSAGE };
+  const { count, versioned } = update;
+  if (update.watchUnavailable)
+    return { error: "Versioned routine watch execution is unavailable." };
   if (count === 0) {
     return {
       error: timingChanged
@@ -624,7 +725,7 @@ export async function updateScheduleFromTool(
     };
   }
 
-  if (timingChanged) {
+  if (timingChanged && !versioned) {
     if (active && nextRunAt) await deps.jobs.enqueue(routineWakeupJob(existing.id, nextRunAt));
     else if (existing.active) await deps.jobs.cancel(routineJobKey(existing.id));
   }
@@ -684,7 +785,17 @@ export async function cancelScheduleFromTool(
   if (!existing) return { error: "Schedule not found." };
 
   // The scope is part of the delete, so the routine cannot change hands between the read and it.
-  const { count } = await deps.prisma.routine.deleteMany({ where: { ...scope, id: existing.id } });
+  const deletion = await deps.prisma
+    .$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT set_config('app.scheduler_protocol', '2', true)`;
+      return tx.routine.deleteMany({ where: { ...scope, id: existing.id } });
+    })
+    .catch((error: unknown) => {
+      if (isRoutineWatchUncertainError(error)) return null;
+      throw error;
+    });
+  if (!deletion) return { error: ROUTINE_WATCH_UNCERTAIN_MESSAGE };
+  const { count } = deletion;
   if (count === 0) return { error: "Schedule not found." };
   await deps.jobs.cancel(routineJobKey(existing.id));
   return { ok: true as const, routineId: existing.id, name: existing.name };

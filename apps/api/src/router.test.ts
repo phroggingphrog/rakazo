@@ -2123,7 +2123,15 @@ describe("MCP server health", () => {
     ...overrides,
   });
 
-  function harness(options: { row?: Row | null; oauth?: McpOAuthSummary; probe?: unknown } = {}) {
+  function harness(
+    options: {
+      row?: Row | null;
+      oauth?: McpOAuthSummary;
+      probe?: unknown;
+      discover?: unknown;
+      bot?: Row | null;
+    } = {},
+  ) {
     let server: Row | null = options.row === undefined ? baseRow() : options.row;
     const probe = vi.fn<(...args: unknown[]) => Promise<unknown>>(
       (options.probe as (() => Promise<unknown>) | undefined) ??
@@ -2147,6 +2155,9 @@ describe("MCP server health", () => {
           : (server as Row)[key] === value,
       );
     const prisma = {
+      bot: {
+        findFirst: vi.fn(async () => (options.bot === undefined ? { id: "bot-1" } : options.bot)),
+      },
       mcpServer: {
         findMany: vi.fn(async () => []),
         findFirst: vi.fn(async ({ where }: { where: Row }) =>
@@ -2180,7 +2191,7 @@ describe("MCP server health", () => {
       secrets: { put: vi.fn(), load: vi.fn() },
       remoteConnectors: { resolveHostname: async () => [{ address: "203.0.113.10", family: 4 }] },
       mcpOAuth: { summaryFor, summaryForCiphertext: summaryFor },
-      mcp: { probe },
+      mcp: { probe, discoverMonitorTools: options.discover },
       env: {
         defaultProvider: "fake",
         defaultModel: "fake-model",
@@ -2225,6 +2236,47 @@ describe("MCP server health", () => {
         }),
     };
   }
+
+  it("lists declared monitor reads only for an owned bot and selected remote server", async () => {
+    const discover = vi.fn(async () => ({
+      status: "ok",
+      tools: [
+        {
+          name: "mcp__gmail__read",
+          description: "Read messages",
+          inputSchema: { type: "object" },
+          readOnly: true,
+          route: {
+            connectorId: "mcp",
+            resourceId: "server-1",
+            resourceRevision: 1,
+            toolName: "read",
+          },
+        },
+      ],
+    }));
+    const { client } = harness({ row: baseRow({ transport: "streamable_http" }), discover });
+    const result = await client.mcp.servers.monitorTools({ id: "server-1", botId: "bot-1" });
+    expect(result).toMatchObject({ status: "ok", revision: 1, tools: [{ name: "read" }] });
+    expect(discover).toHaveBeenCalledOnce();
+  });
+
+  it("does not discover tools for a local server or a bot outside the actor scope", async () => {
+    const discover = vi.fn();
+    const local = harness({ discover });
+    await expect(
+      local.client.mcp.servers.monitorTools({ id: "server-1", botId: "bot-1" }),
+    ).rejects.toThrow();
+    const foreign = harness({
+      row: baseRow({ transport: "streamable_http" }),
+      discover,
+      bot: null,
+    });
+    await expect(
+      foreign.client.mcp.servers.monitorTools({ id: "server-1", botId: "bot-1" }),
+    ).rejects.toThrow();
+    expect(discover).not.toHaveBeenCalled();
+  });
 
   const stdioInput = {
     transport: "stdio" as const,
@@ -7097,6 +7149,16 @@ describe("routine live Codex model validation", () => {
       const client = createRouterClient(
         createRouter({
           prisma: {
+            $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+              fn({
+                $queryRaw: async (parts: TemplateStringsArray) => {
+                  const query = parts.join(" ");
+                  if (query.includes("current_setting")) return [{ bypass: "off" }];
+                  if (query.includes("FROM routine_schedule_gate")) return [{ enabled: false }];
+                  return [];
+                },
+                routine: { create: save, update: save },
+              }),
             bot: { findFirst: vi.fn(async () => ({ id: "bot-1", computer: null })) },
             routine: { findFirst: vi.fn(async () => row), create: save, update: save },
             userModelPreference: { findMany: vi.fn(async () => []) },
@@ -7249,6 +7311,7 @@ describe("routines.update", () => {
     botArchived: boolean,
     archivedBeforeWrite = false,
     model: Record<string, unknown> = {},
+    schedulerVersioned = false,
   ) {
     const savedRoutine: Record<string, unknown> = { ...routine, ...model };
     const update = vi.fn(
@@ -7264,7 +7327,16 @@ describe("routines.update", () => {
     );
     const enqueue = vi.fn(async () => undefined);
     const cancel = vi.fn(async () => undefined);
+    const protocol = vi.fn(async (parts: TemplateStringsArray) => {
+      const query = parts.join(" ");
+      if (query.includes("current_setting")) return [{ bypass: "off" }];
+      if (query.includes("FROM routine_schedule_gate")) return [{ enabled: schedulerVersioned }];
+      return [];
+    });
     const prisma = {
+      $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({ $queryRaw: protocol, routine: { update } }),
+      ),
       secret: { findFirst: vi.fn(async () => null) },
       userModelPreference: {
         findMany: vi.fn(async () => []),
@@ -7317,7 +7389,7 @@ describe("routines.update", () => {
         }),
         { prefix: "/rpc", context: { actor } },
       );
-    return { update, enqueue, cancel, call, findFirst: prisma.routine.findFirst };
+    return { update, enqueue, cancel, call, protocol, findFirst: prisma.routine.findFirst };
   }
 
   it("refuses to re-arm a routine on an archived bot without writing", async () => {
@@ -7328,17 +7400,110 @@ describe("routines.update", () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
+  it("marks the owner update inside its transaction before changing the routine", async () => {
+    const { update, protocol, call } = fixture(false);
+    expect((await call()).status).toBe(200);
+    const marker = protocol.mock.calls.findIndex(([query]) =>
+      String(query).includes("app.scheduler_protocol"),
+    );
+    expect(marker).toBeGreaterThanOrEqual(0);
+    expect(protocol.mock.invocationCallOrder[marker]).toBeLessThan(
+      update.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not publish a legacy wake for a versioned update", async () => {
+    const { call, update, enqueue, cancel } = fixture(false, false, {}, true);
+    expect((await call()).status).toBe(200);
+    expect(update).toHaveBeenCalledOnce();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it("does not enable a watch while versioned watch execution is unavailable", async () => {
+    const { call, update, enqueue } = fixture(
+      false,
+      false,
+      { crons: [], watch: { kind: "files", paths: ["inbox"], everyMinutes: 5, loud: false } },
+      true,
+    );
+    expect((await call({ active: true, runAt: undefined })).status).toBe(409);
+    expect(update).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("reports protected execution as unavailable before changing activation", async () => {
+    const { update, enqueue, call } = fixture(false, false, { protected: true });
+    const response = await call();
+    expect(response.status).toBe(409);
+    expect(update).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it("re-arms a routine on an active bot", async () => {
     const { update, enqueue, call } = fixture(false);
     const response = await call();
     expect(response.status).toBe(200);
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "routine-1", bot: { archivedAt: null }, nextRunAt: null, active: false },
+        where: expect.objectContaining({
+          id: "routine-1",
+          bot: { archivedAt: null },
+          nextRunAt: null,
+          active: false,
+        }),
         data: expect.objectContaining({ active: true }),
       }),
     );
     expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("re-arms a completed one-shot only when a new future time is supplied", async () => {
+    const { call, update, enqueue } = fixture(false, false, {
+      lastRunAt: new Date("2026-09-01T09:00:00.000Z"),
+    });
+    const runAt = new Date(Date.now() + 120_000).toISOString();
+    expect((await call({ runAt })).status).toBe(200);
+    expect(update.mock.calls[0]![0]).toMatchObject({
+      where: { active: false, nextRunAt: null },
+      data: { active: true, nextRunAt: new Date(runAt) },
+    });
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("does not re-arm a completed one-shot for an unrelated edit", async () => {
+    const { call, update, enqueue } = fixture(false, false, {
+      lastRunAt: new Date("2026-09-01T09:00:00.000Z"),
+    });
+    expect((await call({ name: "Renamed", active: undefined, runAt: undefined })).status).toBe(200);
+    expect(update.mock.calls[0]![0].data).not.toHaveProperty("nextRunAt");
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("requires a new future time to reactivate a completed one-shot", async () => {
+    const { call, update, enqueue } = fixture(false, false, {
+      lastRunAt: new Date("2026-09-01T09:00:00.000Z"),
+    });
+    expect((await call({ runAt: undefined })).status).toBe(400);
+    expect((await call({ runAt: new Date(Date.now() - 60_000).toISOString() })).status).toBe(400);
+    expect(update).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does not rearm over a concurrently changed one-shot", async () => {
+    const lastRunAt = new Date("2026-09-01T09:00:00.000Z");
+    const { call, update, enqueue } = fixture(false, false, { lastRunAt });
+    update.mockImplementationOnce(async (args) => {
+      expect(args.where).toMatchObject({
+        active: false,
+        nextRunAt: null,
+        lastRunAt,
+        crons: { equals: ["@once"] },
+      });
+      throw Object.assign(new Error("not found"), { code: "P2025" });
+    });
+    expect((await call()).status).toBe(409);
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("does not re-arm when the bot is archived between the read and the write", async () => {
@@ -7531,8 +7696,11 @@ describe("routines.remove", () => {
     const routine = { id: "routine-1", botId: "bot-1", spaceId: "space-1", userId: "user-a" };
     const remove = vi.fn(async () => routine);
     const cancel = vi.fn(async () => undefined);
+    const protocol = vi.fn(async (_query: TemplateStringsArray) => []);
     const router = createRouter({
       prisma: {
+        $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+          fn({ $queryRaw: protocol, routine: { delete: remove } }),
         routine: {
           findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) =>
             Object.entries(where).every(
@@ -7551,7 +7719,7 @@ describe("routines.remove", () => {
       createRouterClient(router, {
         context: { actor: { spaceId: "space-1", userId } } as never,
       });
-    return { as, remove, cancel };
+    return { as, remove, cancel, protocol };
   }
 
   it("does not let another Space member delete a routine", async () => {
@@ -7562,11 +7730,14 @@ describe("routines.remove", () => {
   });
 
   it("deletes the owner's routine", async () => {
-    const { as, remove, cancel } = fixture();
+    const { as, remove, cancel, protocol } = fixture();
     await expect(as("user-a").routines.remove({ routineId: "routine-1" })).resolves.toEqual({
       ok: true,
     });
-    expect(remove).toHaveBeenCalledWith({ where: { id: "routine-1" } });
+    expect(remove).toHaveBeenCalledWith({
+      where: { id: "routine-1", spaceId: "space-1", userId: "user-a" },
+    });
+    expect(protocol).toHaveBeenCalledOnce();
     expect(cancel).toHaveBeenCalledOnce();
   });
 });

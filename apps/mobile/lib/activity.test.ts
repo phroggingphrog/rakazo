@@ -1,10 +1,22 @@
 import type { RunActivityRow } from "@rakazo/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activityPreview, formatActivityRelativeTime } from "./activity";
+import { activityPreview, activityStatusLabel, formatActivityRelativeTime } from "./activity";
 import { resetI18nForTests } from "./i18n";
 
 vi.mock("./api", () => ({ rpc: vi.fn() }));
 afterEach(() => resetI18nForTests());
+
+describe("lifecycle labels", () => {
+  it.each([
+    ["created", "Created"],
+    ["retrying", "Retrying"],
+    ["waiting_for_approval", "Needs approval"],
+    ["waiting_for_external_dependency", "Waiting for dependency"],
+    ["completed", "Done"],
+  ] as const)("labels %s", (status, expected) => {
+    expect(activityStatusLabel(status)).toBe(expected);
+  });
+});
 
 describe("formatActivityRelativeTime", () => {
   const now = new Date("2026-01-01T12:00:00.000Z");

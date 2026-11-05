@@ -1,4 +1,8 @@
 export const ZH_TW_MESSAGES: Record<string, string> = {
+  "Arguments are saved with this setup.": "參數會與此設定一同儲存。",
+  "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested.":
+    "請檢查所選操作需要的欄位。不要輸入密碼、權杖或其他機密資訊；請在整合服務中設定驗證。參數尚未針對操作驗證或測試。",
+  "Enter a valid JSON object up to 8 KB.": "請輸入不超過 8 KB 的有效 JSON 物件。",
   "How other bots see it": "其他機器人如何瞭解它",
   "Share to": "分享到",
   "{count} files": "{count} 個檔案",
@@ -1136,6 +1140,7 @@ export const ZH_TW_MESSAGES: Record<string, string> = {
   "Always open {site}": "一律開啟 {site}",
   "Trusted sites": "受信任的網站",
   "Run history": "執行紀錄",
+  "Actions need review": "有操作需要檢查",
   "No reply": "未回覆",
   "No runs yet": "還沒有執行紀錄",
   "Load older runs": "載入更早的執行紀錄",

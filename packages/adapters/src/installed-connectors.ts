@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type {
   AdapterContext,
@@ -5,9 +6,11 @@ import type {
   ConnectorEvent,
   ConnectorProvider,
   ConnectorTool,
+  InstalledMcpBinding,
   SecretStore,
 } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
+import { resolveEncryptionKey } from "@rakazo/core";
 import { availableInSpace, itemSecretIn } from "@rakazo/db";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -26,9 +29,11 @@ import {
 import {
   combineSignals,
   redactConnectorPayload,
+  redactConnectorPayloadStrict,
   sanitizeConnectorError,
 } from "./connector-safety.js";
 import { executeGraphqlOperation, GraphqlConfigSchema } from "./graphql-connectors.js";
+import { captureInstalledMcpBinding, installedMcpBinding, lockInstalledMcpBinding, sameInstalledMcpBinding } from "./installed-mcp-binding.js";
 import {
   CATALOG_EXECUTE,
   catalogEntries,
@@ -102,6 +107,7 @@ type InstalledRow = {
 
 export type RemoteConnectorDependencies = RemoteTransportDependencies;
 type RemoteRequestPolicy = RemoteConnectorDependencies & RemoteUrlPolicy;
+class InstalledMcpIdentityKeyError extends Error {}
 
 export class InstalledConnectorProvider implements ConnectorProvider {
   /** Run-scoped MCP sessions, so a stateful server sees one session per run. */
@@ -113,7 +119,44 @@ export class InstalledConnectorProvider implements ConnectorProvider {
     private readonly remote: RemoteConnectorDependencies = {},
     /** Instance flag letting every user reach loopback / LAN endpoints. */
     private readonly allowPrivateEndpoint = false,
+    private readonly identitySecret?: string,
   ) {}
+
+  private credentialFingerprint(context: AdapterContext, installId: string, credential?: string): string | null {
+    if (!credential) return null;
+    let key: string;
+    try {
+      key = this.identitySecret ?? resolveEncryptionKey();
+      if (!key.trim()) throw new Error("empty key");
+    } catch {
+      throw new InstalledMcpIdentityKeyError("A stable encryption key is required for installed MCP credential identity.");
+    }
+    return createHmac("sha256", key).update("rakazo:installed-mcp-credential:v1\0")
+      .update(JSON.stringify([context.userId, context.spaceId, installId, credential])).digest("hex");
+  }
+
+  private async prepareMcpSnapshot(installId: string, context: AdapterContext) {
+    const base = await captureInstalledMcpBinding(this.prisma, context, installId);
+    if (!base) return undefined;
+    const current = await this.prisma.capabilityInstall.findFirst({
+      where: { id: installId, ...availableInSpace(context), kind: "mcp" },
+    });
+    if (!current) return undefined;
+    const config = McpConfigSchema.parse(current.config);
+    const credential = config.auth.type === "none" ? undefined : await this.loadCredential(current, context);
+    const binding = { ...base, credentialFingerprint: this.credentialFingerprint(context, installId, credential) };
+    if (!(await this.prisma.$transaction((tx) => lockInstalledMcpBinding(tx, context, binding)))) return undefined;
+    return { binding, current, config, credential };
+  }
+
+  async prepareInstalledMcpBinding(installId: string, context: AdapterContext): Promise<InstalledMcpBinding | undefined> {
+    try {
+      return (await this.prepareMcpSnapshot(installId, context))?.binding;
+    } catch (error) {
+      if (error instanceof InstalledMcpIdentityKeyError) throw error;
+      throw new Error("The installed connection could not be verified. Try again.");
+    }
+  }
 
   /** Decided per request from the install owner's current standing, so an install saved
    * before an ownership change cannot keep reaching private endpoints. */
@@ -130,6 +173,7 @@ export class InstalledConnectorProvider implements ConnectorProvider {
   private mcpSessionOptions(
     context: AdapterContext,
     install: Pick<InstalledRow, "id">,
+    binding?: InstalledMcpBinding,
   ): {
     sessionScope?: string;
     sessionPool?: RemoteMcpSessionCache;
@@ -137,7 +181,7 @@ export class InstalledConnectorProvider implements ConnectorProvider {
   } {
     if (!context.runId) return {};
     return {
-      sessionScope: `${context.spaceId} ${context.userId} ${context.runId} ${install.id}`,
+      sessionScope: JSON.stringify([context.spaceId, context.userId, context.runId, install.id, binding ?? null]),
       sessionPool: this.mcpSessions,
       sessionRunId: context.runId,
     };
@@ -210,15 +254,17 @@ export class InstalledConnectorProvider implements ConnectorProvider {
     const catalogGroup = catalogGroupLabel(install.name, install.kind, install.id);
     try {
       if (install.kind === "mcp") {
-        const config = McpConfigSchema.parse(install.config);
-        const credential = await this.loadCredential(install, context);
+        const snapshot = await this.prepareMcpSnapshot(install.id, context);
+        if (!snapshot) return [];
+        const { binding, current, config, credential } = snapshot;
         const tools = await listRemoteMcpTools({
           ...remote,
-          endpoint: install.source,
+          endpoint: current.source,
           headers: connectorHeaders(config, credential),
           signal: context.signal,
-          ...this.mcpSessionOptions(context, install),
+          ...this.mcpSessionOptions(context, current, binding),
         });
+        if (!(await this.prisma.$transaction((tx) => lockInstalledMcpBinding(tx, context, binding)))) return [];
         return tools.map((tool) => ({
           ...tool,
           route: {
@@ -226,6 +272,8 @@ export class InstalledConnectorProvider implements ConnectorProvider {
             resourceId: install.id,
             toolName: tool.name,
             catalogGroup,
+            installedMcp: true,
+            installedMcpBinding: binding,
           },
         }));
       }
@@ -266,7 +314,8 @@ export class InstalledConnectorProvider implements ConnectorProvider {
           },
         }));
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof InstalledMcpIdentityKeyError) throw error;
       // One unavailable user-installed source must not hide the other tools.
     }
     return [];
@@ -302,28 +351,58 @@ export class InstalledConnectorProvider implements ConnectorProvider {
       return;
     }
     let credential: string | undefined;
+    let mcpDispatched = false;
     try {
-      credential = await this.loadCredential(install, context);
       const remote = await this.remoteFor(context);
+      if (call.route?.installedMcp !== undefined && call.route.installedMcp !== (install.kind === "mcp")) {
+        yield { type: "error", message: "The installed connector changed. Refresh the tool and try again." };
+        return;
+      }
       if (install.kind === "mcp") {
-        const config = McpConfigSchema.parse(install.config);
+        const supplied = call.route?.installedMcpBinding;
+        const parsed = installedMcpBinding(supplied);
+        if (supplied !== undefined && !parsed) {
+          yield { type: "error", message: "The installed connection could not be verified." };
+          return;
+        }
+        let snapshot: Awaited<ReturnType<InstalledConnectorProvider["prepareMcpSnapshot"]>>;
+        try {
+          snapshot = await this.prepareMcpSnapshot(install.id, context);
+        } catch (error) {
+          yield { type: "error", message: error instanceof InstalledMcpIdentityKeyError
+            ? error.message : "The installed connection could not be verified. Try again." };
+          return;
+        }
+        if (!snapshot || (parsed && !sameInstalledMcpBinding(parsed, snapshot.binding))) {
+          yield { type: "error", message: "The installed connection changed. Refresh the tool and review the request again." };
+          return;
+        }
+        const { binding, current, config } = snapshot;
+        credential = snapshot.credential;
         const result = await callRemoteMcpTool(
           {
             ...remote,
-            endpoint: install.source,
+            endpoint: current.source,
             headers: connectorHeaders(config, credential),
             signal: context.signal,
-            ...this.mcpSessionOptions(context, install),
+            ...this.mcpSessionOptions(context, current, binding),
+            onToolDispatch: () => { mcpDispatched = true; },
           },
           call.route?.toolName ?? call.tool,
           call.args,
         );
+        const redacted = redactConnectorPayloadStrict(result, credential ? [credential] : []);
+        const explicitFailure = result && typeof result === "object" && !Array.isArray(result) &&
+          "isError" in result && result.isError === true;
         yield {
           type: "result",
-          data: redactConnectorPayload(result, credential ? [credential] : []),
+          data: explicitFailure && redacted && typeof redacted === "object" && !Array.isArray(redacted)
+            ? { ...redacted, isError: true }
+            : redacted,
         };
         return;
       }
+      credential = await this.loadCredential(install, context);
       if (install.kind === "graphql") {
         const config = GraphqlConfigSchema.parse(install.config);
         const operation = config.operations.find(
@@ -366,7 +445,10 @@ export class InstalledConnectorProvider implements ConnectorProvider {
     } catch (error) {
       yield {
         type: "error",
-        message: sanitizeConnectorError(error, credential ? [credential] : []),
+        ...(mcpDispatched ? { outcome: "unknown" as const } : {}),
+        message: mcpDispatched
+          ? "The installed MCP operation may have run, but its outcome could not be verified."
+          : sanitizeConnectorError(error, credential ? [credential] : []),
       };
     }
   }

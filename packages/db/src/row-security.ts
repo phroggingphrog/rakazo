@@ -94,6 +94,7 @@ function within<T>(context: DbContext, fn: () => T | PromiseLike<T>): Promise<T>
 }
 
 export const ROW_SECURITY_MODELS: ReadonlySet<string> = new Set([
+  "DependencyRetry",
   "BillingAuditEvent",
   "PushToken",
   "EmailSend",
@@ -119,12 +120,16 @@ export const ROW_SECURITY_MODELS: ReadonlySet<string> = new Set([
   "CapabilityInstallSpace",
   "AgentImport",
   "Bot",
+  "SetupPlan",
+  "SetupTestAttempt",
+  "ProtectedExecutionContent",
   "BotRuntimeProfile",
   "BotRuntimeProfileRevision",
   "McpToolOutput",
   "Run",
   "Task",
   "Routine",
+  "RoutineNotificationIntent",
   "Connection",
   "McpServer",
   "McpServerSpace",

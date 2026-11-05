@@ -31,6 +31,19 @@ export const RoutineWatchSchema = z
     command: z.string().trim().min(1).max(2000).optional(),
     tool: z.string().trim().min(1).max(200).optional(),
     args: z.record(z.string(), z.unknown()).optional(),
+    pipedreamConnectionId: z.string().trim().min(1).max(200).optional(),
+    pipedreamBinding: z
+      .object({
+        version: z.literal(1),
+        connectionId: z.string().min(1),
+        generation: z.string().regex(/^[1-9][0-9]*$/),
+        namespace: z.string().regex(/^[a-f0-9]{64}$/),
+        providerEpoch: z.string().regex(/^[1-9][0-9]*$/),
+        app: z.string().min(1),
+        toolName: z.string().min(1),
+        catalog: z.boolean().optional(),
+      })
+      .optional(),
     track: z.array(z.string().trim().min(1).max(100)).min(1).max(5).optional(),
     everyMinutes: z
       .number()

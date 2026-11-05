@@ -1,4 +1,5 @@
 import type {
+  InstalledMcpBinding,
   AdapterContext,
   AdapterDescriptor,
   AgentRunRequest,
@@ -245,6 +246,10 @@ export interface ConnectorProvider {
     call: ConnectorCall,
     context: AdapterContext,
   ): Promise<{ call: ConnectorCall; tool: ConnectorTool } | undefined>;
+  /** A non-secret keyed identity for Pipedream's configured account namespace. */
+  pipedreamAccountNamespace?(context: AdapterContext): Promise<string>;
+  /** Owner-scoped, non-secret identity for a currently configured installed MCP. */
+  prepareInstalledMcpBinding?(installId: string, context: AdapterContext): Promise<InstalledMcpBinding | undefined>;
   execute(call: ConnectorCall, context: AdapterContext): AsyncIterable<ConnectorEvent>;
   /** Release run-scoped state (open sessions) of a run that ended for good on
    * this worker. A run that ended elsewhere is bounded by the provider itself. */

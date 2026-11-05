@@ -13,6 +13,25 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
+#: src/pages/RoutineRunHistory.tsx
+msgid "Actions need review"
+msgstr "確認が必要な操作があります"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Remove saved connected_account selector"
+msgstr "保存された connected_account の選択項目を削除"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Leave this off if connected_account is an argument the tool needs."
+msgstr "ツールが引数として connected_account を必要とする場合は、オフのままにしてください。"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "No Pipedream accounts are connected."
+msgstr "接続されている Pipedream アカウントはありません。"
+
 #: src/pages/shell/sidebar-roster.tsx
 msgid " (unread)"
 msgstr "（未読）"
@@ -6140,6 +6159,18 @@ msgstr "今日"
 #: src/pages/AccountSettingsOverlay.tsx
 msgid "Tokens"
 msgstr "トークン"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Arguments are saved with this setup."
+msgstr "引数はこの設定とともに保存されます。"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested."
+msgstr "選択した操作に必要な項目を確認してください。パスワード、トークン、その他の秘密情報は入力せず、連携の設定で認証を構成してください。引数はまだ操作に対して検証もテストもされていません。"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Enter a valid JSON object up to 8 KB."
+msgstr "8 KB以下の有効なJSONオブジェクトを入力してください。"
 
 #: src/pages/RoutineEditor.tsx
 msgid "Tool arguments (JSON)"

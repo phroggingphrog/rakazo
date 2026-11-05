@@ -1,4 +1,8 @@
 export const NL_MESSAGES: Record<string, string> = {
+  "Arguments are saved with this setup.": "Argumenten worden met deze instellingen opgeslagen.",
+  "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested.":
+    "Controleer de velden die de geselecteerde bewerking vereist. Voer geen wachtwoorden, tokens of andere geheimen in; stel authenticatie in bij de integratie. De argumenten zijn nog niet voor de bewerking gevalideerd of getest.",
+  "Enter a valid JSON object up to 8 KB.": "Voer een geldig JSON-object van maximaal 8 KB in.",
   "How other bots see it": "Hoe andere bots deze zien",
   "Share to": "Delen met",
   "{count} files": "{count} bestanden",
@@ -1120,6 +1124,7 @@ export const NL_MESSAGES: Record<string, string> = {
   "Always open {site}": "{site} altijd openen",
   "Trusted sites": "Vertrouwde sites",
   "Run history": "Rungeschiedenis",
+  "Actions need review": "Acties moeten worden gecontroleerd",
   "No reply": "Geen antwoord",
   "No runs yet": "Nog geen runs",
   "Load older runs": "Oudere runs laden",

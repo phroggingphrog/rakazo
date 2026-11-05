@@ -13,6 +13,25 @@ msgstr ""
 "Language-Team: Dutch\n"
 "Plural-Forms: \n"
 
+#: src/pages/RoutineRunHistory.tsx
+msgid "Actions need review"
+msgstr "Acties moeten worden gecontroleerd"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Remove saved connected_account selector"
+msgstr "Opgeslagen connected_account-selectie verwijderen"
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "Leave this off if connected_account is an argument the tool needs."
+msgstr "Laat dit uit als de tool connected_account als argument nodig heeft."
+
+#. js-lingui-explicit-id
+#: src/pages/RoutineEditor.tsx
+msgid "No Pipedream accounts are connected."
+msgstr "Er zijn geen Pipedream-accounts verbonden."
+
 #: src/pages/shell/sidebar-roster.tsx
 msgid " (unread)"
 msgstr " (ongelezen)"
@@ -6140,6 +6159,18 @@ msgstr "Vandaag"
 #: src/pages/AccountSettingsOverlay.tsx
 msgid "Tokens"
 msgstr "Tokens"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Arguments are saved with this setup."
+msgstr "Argumenten worden met deze instellingen opgeslagen."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested."
+msgstr "Controleer de velden die de geselecteerde bewerking vereist. Voer geen wachtwoorden, tokens of andere geheimen in; stel authenticatie in bij de integratie. De argumenten zijn nog niet voor de bewerking gevalideerd of getest."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Enter a valid JSON object up to 8 KB."
+msgstr "Voer een geldig JSON-object van maximaal 8 KB in."
 
 #: src/pages/RoutineEditor.tsx
 msgid "Tool arguments (JSON)"

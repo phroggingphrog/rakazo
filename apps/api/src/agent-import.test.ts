@@ -15,7 +15,7 @@ const actor: Actor = {
  * A Prisma stand-in: writes echo their data with an id and are kept; `findFirst` by id finds
  * a kept row, other reads find nothing.
  */
-function fakeDb(): never {
+function fakeDb(versioned = false): never {
   let next = 0;
   const rows = new Map<string, Record<string, unknown>>();
   const model = (name: string) =>
@@ -45,7 +45,20 @@ function fakeDb(): never {
           },
       },
     );
-  return new Proxy({}, { get: (_, name: string) => model(name) }) as never;
+  return new Proxy(
+    {},
+    {
+      get: (_, name: string) =>
+        name === "$queryRaw"
+          ? async (parts: TemplateStringsArray) => {
+              const query = parts.join(" ");
+              if (query.includes("current_setting")) return [{ bypass: "off" }];
+              if (query.includes("routine_schedule_gate")) return [{ enabled: versioned }];
+              return [];
+            }
+          : model(name),
+    },
+  ) as never;
 }
 
 const bot = { id: "bot-1", threadId: "thread-1", name: "Imported" } as Bot;
@@ -132,6 +145,19 @@ describe("after the import commits", () => {
     ).resolves.toBe(bot);
     expect(writeModelKey).toHaveBeenCalledTimes(1);
     expect(afterModelKey).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("announces imported routines with gate=%s", async (versioned) => {
+    const db = fakeDb(versioned);
+    const announceRoutine = vi.fn(async () => undefined);
+    const createBot: AgentImportServices["createBot"] = async (_actor, options) => {
+      await options.seed(db, bot.id);
+      return bot;
+    };
+    await createImportedBot(services({ prisma: db, createBot, announceRoutine }), actor, input);
+    expect(announceRoutine).toHaveBeenCalledWith(actor, expect.anything(), expect.anything(), {
+      versioned,
+    });
   });
 });
 

@@ -88,6 +88,38 @@ describe("readOwnBotSettings", () => {
   });
 });
 
+describe("readOwnBotSettings during discovery failures", () => {
+  it("still returns saved bot settings when the model catalog is unavailable", async () => {
+    const broken = deps();
+    vi.mocked(broken.prisma.userModelCredential.findMany).mockRejectedValue(
+      new Error("catalog unavailable"),
+    );
+    const settings = await readOwnBotSettings(broken, scope, bot);
+    expect(settings).toMatchObject({
+      name: "Scout",
+      instructions: "Cite sources.",
+      notifyOnFinish: true,
+      model: "Google: Gemini 3.8 Flash (default)",
+      models: [],
+      modelCatalogStatus: "unavailable",
+    });
+  });
+
+  it("does not claim a default model when its lookup fails", async () => {
+    const broken = deps();
+    broken.modelChange.defaultModel = async () => {
+      throw new Error("default model unavailable");
+    };
+    const settings = await readOwnBotSettings(broken, scope, bot);
+    expect(settings).toMatchObject({
+      name: "Scout",
+      model: "default (unavailable)",
+      thinkingLevels: [],
+      thinkingLevelsStatus: "unavailable",
+    });
+  });
+});
+
 describe("prepareOwnBotSettings", () => {
   it("resolves a loose model name and keeps a thinking level the new model supports", async () => {
     const result = await prepareOwnBotSettings(

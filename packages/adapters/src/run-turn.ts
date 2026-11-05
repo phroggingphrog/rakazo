@@ -37,6 +37,7 @@ import {
   clearRoutineBackoff,
   modelAccountRefusal,
 } from "./routine-backoff.js";
+import { assertNoUnresolvedEffects, UnverifiedExecutionError } from "./run-completion-evidence.js";
 import type { RunContext } from "./run-context.js";
 import { persistTurnCheckpoint } from "./run-context.js";
 import { renewRunLease, requeueComputerRun } from "./run-lifecycle.js";
@@ -796,6 +797,15 @@ export async function completeRun(ctx: RunContext) {
       ? botMessageOutcomeFromMidTurn(text, reply.midTurnUserTexts)
       : null;
   await ctx.settleRunningHelpers();
+  // Helpers may still be committing effects until settled; inspect the durable ledger last.
+  await assertNoUnresolvedEffects(deps.prisma, runId, run.routineId);
+  const durableRoutineNotice = Boolean(
+    deps.routineNotificationOutbox &&
+      run.trigger === "routine" &&
+      run.routineId &&
+      completionNotificationPreview(text) &&
+      completionNotificationPreview(completionNotificationBody("", blocks)),
+  );
   const completed = await deps.events.finalizeRun({
     spaceId: run.spaceId,
     threadId: thread.id,
@@ -807,6 +817,7 @@ export async function completeRun(ctx: RunContext) {
     leaseFence: ctx.fence,
     outcome: "completed",
     blocks,
+    ...(durableRoutineNotice ? { routineCompletionNotification: true } : {}),
     markUnread: completionMarksUnread(
       run.trigger,
       text,
@@ -839,7 +850,12 @@ export async function completeRun(ctx: RunContext) {
     ).catch((error) => getLogger().error("bot message result return", error));
   }
   const notifyBody = completionNotificationPreview(text);
-  if (runSendsFinishNotification(run.trigger) && notifyBody && !completed.continuationRunId) {
+  if (
+    runSendsFinishNotification(run.trigger) &&
+    notifyBody &&
+    !completed.continuationRunId &&
+    !durableRoutineNotice
+  ) {
     await notifyRun(deps, run, {
       kind: "completion",
       title: `${displayName(bot.name, "Bot")} finished`,
@@ -909,6 +925,7 @@ export async function failRun(
   recordExplicitNoResponse(reply, reply.assistantTurnText);
   const partialText =
     ctx.scripted ||
+    error instanceof UnverifiedExecutionError ||
     ctx.state.handedOff ||
     reply.explicitNoResponse ||
     !runPromotesMidTurnNarration(run.trigger)

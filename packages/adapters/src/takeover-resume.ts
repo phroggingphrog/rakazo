@@ -54,11 +54,16 @@ export function takeoverContinuePlan(run: {
   };
 }
 
-/** Observed status and checkpoint so a concurrent release cannot be claimed away. */
-export function continueRunClaimFence(run: { status: string; checkpoint: string | null }) {
+/** Pin the claim to the observed run generation as well as its takeover state. */
+export function continueRunClaimFence(run: {
+  status: string;
+  checkpoint: string | null;
+  leaseFence: number;
+}) {
   return {
     status: run.status,
     checkpoint: run.checkpoint,
+    leaseFence: run.leaseFence,
   };
 }
 

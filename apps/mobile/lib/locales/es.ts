@@ -1,4 +1,8 @@
 export const ES_MESSAGES: Record<string, string> = {
+  "Arguments are saved with this setup.": "Los argumentos se guardan con esta configuración.",
+  "Review the fields required by the selected operation. Do not enter passwords, tokens or other secrets; configure authentication in the integration. Arguments are not yet validated against the operation or tested.":
+    "Revisa los campos que requiere la operación seleccionada. No introduzcas contraseñas, tokens ni otros datos secretos; configura la autenticación en la integración. Los argumentos aún no se han validado con la operación ni se han probado.",
+  "Enter a valid JSON object up to 8 KB.": "Introduce un objeto JSON válido de hasta 8 KB.",
   "How other bots see it": "Cómo lo ven otros bots",
   "Share to": "Compartir en",
   "{count} files": "{count} archivos",
@@ -1067,6 +1071,7 @@ export const ES_MESSAGES: Record<string, string> = {
   "Always open {site}": "Abrir siempre {site}",
   "Trusted sites": "Sitios de confianza",
   "Run history": "Historial de ejecuciones",
+  "Actions need review": "Hay acciones que requieren revisión",
   "No reply": "Sin respuesta",
   "No runs yet": "Aún no hay ejecuciones",
   "Load older runs": "Cargar ejecuciones anteriores",

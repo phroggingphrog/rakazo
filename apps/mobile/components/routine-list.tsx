@@ -1,4 +1,5 @@
 import type { Routine } from "@rakazo/contracts";
+import type { ReactNode } from "react";
 import { ScrollView, StyleSheet } from "react-native";
 import { useI18n } from "../lib/i18n";
 import { native, useThemedStyles } from "../lib/native";
@@ -15,6 +16,7 @@ export type RoutineListProps = {
   onOpen: (routine: Routine) => void;
   onToggle: (routine: Routine, active: boolean) => void;
   onDelete: (routine: Routine) => void;
+  header?: ReactNode;
 };
 
 /** Settings-style rows; iOS adds the system swipe to delete. Here a long press deletes. */
@@ -25,6 +27,7 @@ export function RoutineList({
   onOpen,
   onToggle,
   onDelete,
+  header,
 }: RoutineListProps) {
   const { t } = useI18n();
   const styles = useThemedStyles(createStyles);
@@ -36,6 +39,7 @@ export function RoutineList({
       contentContainerStyle={[styles.content, stacked && styles.compactContent]}
       contentInsetAdjustmentBehavior="automatic"
     >
+      {header}
       <SettingsGroup>
         {routines.map((routine) => {
           const deletable = canDelete && routine.editable !== false;

@@ -123,6 +123,9 @@ export function needsOAuthProbe(parsed: {
   return !parsed.secret && Object.keys(env).length === 0 && Object.keys(headers).length === 0;
 }
 
+export const STDIO_MCP_FORBIDDEN_ERROR =
+  "Bots can't add local (stdio) MCP servers. Ask an admin to add it in Settings.";
+
 /** add_mcp_server: registers the server and, when asked, posts its approval card. */
 export async function addMcpServerFromTool(
   deps: ExecutorDeps,
@@ -134,7 +137,7 @@ export async function addMcpServerFromTool(
   // A local server runs on the deployment's own hosts, so only an admin adds one.
   if (args.transport === "stdio") {
     return {
-      error: "Bots can't add local (stdio) MCP servers. Ask an admin to add it in Settings.",
+      error: STDIO_MCP_FORBIDDEN_ERROR,
     };
   }
   const parsed = parseMcpServerToolArgs(args);

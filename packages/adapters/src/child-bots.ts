@@ -73,6 +73,7 @@ export async function spawnBot(
 ) {
   const name = input.name.trim();
   if (!name) return { error: "Bot name is required." };
+  const prompt = (input.prompt ?? "").trim();
 
   const actor: Actor = {
     userId: input.spawnedBy.userId,
@@ -97,6 +98,25 @@ export async function spawnBot(
         blocks: [{ kind: "meta", text: `Created by ${input.spawnedBy.name}` }],
         runId: input.runId,
       },
+      ...(prompt
+        ? {
+            seed: async (tx: Prisma.TransactionClient, botId: string) => {
+              const childThread = await tx.thread.findFirstOrThrow({
+                where: { botId, spaceId: actor.spaceId, userId: actor.userId },
+                select: { id: true },
+              });
+              await createSpawnRun(tx, {
+                spaceId: actor.spaceId,
+                userId: actor.userId,
+                botId,
+                threadId: childThread.id,
+                sourceRunId: input.runId,
+                spawnKey: input.spawnKey,
+                prompt,
+              });
+            },
+          }
+        : {}),
     });
   } catch (error) {
     const existing = await deps.prisma.bot.findUnique({
@@ -118,7 +138,14 @@ export async function spawnBot(
     };
   }
 
-  const prompt = (input.prompt ?? "").trim();
+  let initialRun:
+    | {
+        runId: string;
+        taskId: string;
+        wakeRequest: "returned" | "unknown";
+        note: string;
+      }
+    | undefined;
   if (prompt) {
     const run = await ensureSpawnRun(deps.prisma, {
       spaceId: input.spawnedBy.spaceId,
@@ -129,9 +156,22 @@ export async function spawnBot(
       spawnKey: input.spawnKey,
       prompt,
     });
-    await deps.jobs
-      .enqueue(runContinueJob(run.id))
-      .catch((error) => getLogger().error("spawned bot enqueue", error));
+    let wakeRequest: "returned" | "unknown" = "returned";
+    try {
+      await deps.jobs.enqueue(runContinueJob(run.id));
+    } catch (error) {
+      wakeRequest = "unknown";
+      getLogger().error("spawned bot enqueue", error);
+    }
+    initialRun = {
+      runId: run.id,
+      taskId: run.taskId,
+      wakeRequest,
+      note:
+        wakeRequest === "unknown"
+          ? "The task was created, but its wake request outcome is unknown. Check this run's status; do not create another bot or task for the same request."
+          : "The wake request returned; check this run's status for execution and completion.",
+    };
   }
 
   return {
@@ -140,21 +180,52 @@ export async function spawnBot(
     botId: created.id,
     name: created.name,
     threadId: created.threadId,
+    ...(initialRun ? { initialRun } : {}),
   };
 }
 
-async function ensureSpawnRun(
-  prisma: PrismaClient,
-  input: {
-    spaceId: string;
-    userId: string;
-    botId: string;
-    threadId: string;
-    sourceRunId: string;
-    spawnKey: string;
-    prompt: string;
-  },
-) {
+type SpawnRunInput = {
+  spaceId: string;
+  userId: string;
+  botId: string;
+  threadId: string;
+  sourceRunId: string;
+  spawnKey: string;
+  prompt: string;
+};
+
+async function createSpawnRun(tx: Prisma.TransactionClient, input: SpawnRunInput) {
+  await createThreadMessageInTransaction(tx, {
+    threadId: input.threadId,
+    role: "user",
+    blocks: [{ kind: "text", text: input.prompt }],
+    runId: input.sourceRunId,
+  });
+  const task = await tx.task.create({
+    data: {
+      spaceId: input.spaceId,
+      botId: input.botId,
+      threadId: input.threadId,
+      userId: input.userId,
+      prompt: input.prompt,
+      status: "queued",
+    },
+  });
+  return tx.run.create({
+    data: {
+      spaceId: input.spaceId,
+      botId: input.botId,
+      threadId: input.threadId,
+      taskId: task.id,
+      userId: input.userId,
+      status: "queued",
+      trigger: "spawn",
+      clientNonce: `spawn:${input.spawnKey}`,
+    },
+  });
+}
+
+async function ensureSpawnRun(prisma: PrismaClient, input: SpawnRunInput) {
   const clientNonce = `spawn:${input.spawnKey}`;
   const where = {
     spaceId_clientNonce: {
@@ -166,36 +237,7 @@ async function ensureSpawnRun(
   if (existing) return existing;
 
   try {
-    return await prisma.$transaction(async (tx) => {
-      await createThreadMessageInTransaction(tx, {
-        threadId: input.threadId,
-        role: "user",
-        blocks: [{ kind: "text", text: input.prompt }],
-        runId: input.sourceRunId,
-      });
-      const task = await tx.task.create({
-        data: {
-          spaceId: input.spaceId,
-          botId: input.botId,
-          threadId: input.threadId,
-          userId: input.userId,
-          prompt: input.prompt,
-          status: "queued",
-        },
-      });
-      return tx.run.create({
-        data: {
-          spaceId: input.spaceId,
-          botId: input.botId,
-          threadId: input.threadId,
-          taskId: task.id,
-          userId: input.userId,
-          status: "queued",
-          trigger: "spawn",
-          clientNonce,
-        },
-      });
-    });
+    return await prisma.$transaction((tx) => createSpawnRun(tx, input));
   } catch (error) {
     const winner = await prisma.run.findUnique({ where });
     if (winner) return winner;
@@ -318,6 +360,7 @@ export async function archiveBot(
   const runIds = activeRuns.map((run) => run.id);
   const now = new Date();
   await deps.prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT set_config('app.scheduler_protocol', '2', true)`;
     await tx.run.updateMany({
       where: { id: { in: runIds } },
       data: { status: "cancelled", completedAt: now },
@@ -422,6 +465,7 @@ export async function destroyBot(
   await removePiBotSessions(deps.dataDir, bot.userId, bot.id);
   const deletion = await withTransactionRetry(() =>
     deps.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT set_config('app.scheduler_protocol', '2', true)`;
       const locked = await tx.$queryRaw<Array<{ id: string; webhookSecretId: string | null }>>`
         SELECT id, "webhookSecretId"
         FROM bots

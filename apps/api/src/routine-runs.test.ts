@@ -24,6 +24,119 @@ function fixture() {
   return { prisma, routine, runs, messages };
 }
 describe("routine history", () => {
+  it.each([
+    ["pending", "pending"],
+    ["preparing", "pending"],
+    ["submitting", "submitting"],
+    ["uncertain", "uncertain"],
+    ["undeliverable", "undeliverable"],
+    ["cancelled", "cancelled"],
+    ["blocked", "blocked"],
+    ["unexpected", "unknown"],
+    [null, "unknown"],
+  ])("projects notification status %s for the owner", async (status, expected) => {
+    const { prisma, runs } = fixture();
+    runs.mockResolvedValue([
+      {
+        id: "run-1",
+        botId: "bot-1",
+        threadId: "thread-1",
+        thread: { groupId: null },
+        status: "completed",
+        routineNotification: status ? { status, receiptStatus: null } : null,
+        createdAt: at,
+        startedAt: at,
+        completedAt: at,
+      },
+    ]);
+    const result = RoutineHistorySchema.parse(await listRoutineRuns(prisma, actor, "routine-1"));
+    expect(result.runs[0]?.notification).toBe(expected);
+    expect(runs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: actor.userId, spaceId: actor.spaceId }),
+      }),
+    );
+  });
+  it.each([
+    ["ok", "expo_receipt_ok"],
+    ["device_not_registered", "expo_receipt_error"],
+    ["error", "expo_receipt_error"],
+    ["unavailable", "expo_receipt_unavailable"],
+    ["pending", "expo_accepted"],
+  ])("maps receipt %s without exposing provider references", async (receiptStatus, expected) => {
+    const { prisma, runs } = fixture();
+    runs.mockResolvedValue([
+      {
+        id: "run-1",
+        botId: "bot-1",
+        threadId: "thread-1",
+        thread: { groupId: null },
+        status: "completed",
+        routineNotification: { status: "accepted", receiptStatus },
+        createdAt: at,
+        startedAt: at,
+        completedAt: at,
+      },
+    ]);
+    expect((await listRoutineRuns(prisma, actor, "routine-1")).runs[0]?.notification).toBe(
+      expected,
+    );
+  });
+  it("exposes Expo acceptance only on the owner's scoped run without claiming a receipt", async () => {
+    const { prisma, runs } = fixture();
+    runs.mockResolvedValue([
+      {
+        id: "run-1",
+        botId: "bot-1",
+        threadId: "thread-1",
+        thread: { groupId: null },
+        status: "completed",
+        routineNotification: { status: "accepted" },
+        createdAt: at,
+        startedAt: at,
+        completedAt: at,
+      },
+    ]);
+    const history = await listRoutineRuns(prisma, actor, "routine-1");
+    expect(RoutineHistorySchema.parse(history).runs[0]?.notification).toBe("expo_accepted");
+    expect(runs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ spaceId: actor.spaceId, userId: actor.userId }),
+        select: expect.objectContaining({
+          routineNotification: {
+            select: { status: true, receiptStatus: true, preSubmitFailures: true },
+          },
+        }),
+      }),
+    );
+    expect(JSON.stringify(history)).not.toContain("ticket");
+  });
+
+  it.each([
+    ["blocked", 5, true],
+    ["blocked", 4, false],
+    ["accepted", 5, false],
+  ])(
+    "reports exhausted preparation only for a blocked intent",
+    async (status, failures, expected) => {
+      const { prisma, runs } = fixture();
+      runs.mockResolvedValue([
+        {
+          id: "run-1",
+          botId: "bot-1",
+          threadId: "thread-1",
+          thread: { groupId: null },
+          status: "completed",
+          routineNotification: { status, receiptStatus: null, preSubmitFailures: failures },
+          createdAt: at,
+          startedAt: at,
+          completedAt: at,
+        },
+      ]);
+      const result = RoutineHistorySchema.parse(await listRoutineRuns(prisma, actor, "routine-1"));
+      expect(result.runs[0]?.notificationRetryExhausted).toBe(expected);
+    },
+  );
   it("refuses missing, foreign or archived routines before reading runs", async () => {
     const { prisma, routine, runs, messages } = fixture();
     routine.mockResolvedValue(null);
@@ -47,6 +160,10 @@ describe("routine history", () => {
     runs.mockResolvedValue(
       ["completed", "failed", "queued"].map((status, i) => ({
         id: `run-${i}`,
+        taskId: `task-${i}`,
+        _count: { attempts: i + 1, effects: i === 1 ? 1 : 0 },
+        trigger: "routine",
+        wakeAt: status === "queued" ? at : null,
         botId: "bot-1",
         threadId: "thread-1",
         thread: { groupId: i === 1 ? "group-1" : null },
@@ -60,6 +177,12 @@ describe("routine history", () => {
     messages.mockResolvedValue([{ id: "reply-new", runId: "run-1", threadId: "thread-1" }]);
     const history = await listRoutineRuns(prisma, actor, "routine-1");
     expect(RoutineHistorySchema.parse(history)).toEqual(history);
+    expect(history.runs.map((row) => row.taskId)).toEqual(["task-0", "task-1", "task-2"]);
+    expect(history.runs.map((row) => row.nextAttemptAt)).toEqual([null, null, at.toISOString()]);
+    expect(history.runs.every((row) => row.trigger === "routine")).toBe(true);
+    expect(history.runs.map((row) => row.lifecycle)).toEqual(["completed", "failed", "retrying"]);
+    expect(history.runs.map((row) => row.attemptCount)).toEqual([1, 2, 3]);
+    expect(history.runs.map((row) => row.unresolvedEffectCount)).toEqual([0, 1, 0]);
     expect(history.runs.map((row) => row.messageId)).toEqual([null, "reply-new", null]);
     expect(history.runs.map((row) => row.groupId)).toEqual([null, "group-1", null]);
     expect(history.runs[2]?.startedAt).toBeNull();
