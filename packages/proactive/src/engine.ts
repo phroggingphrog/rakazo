@@ -154,20 +154,22 @@ export class ProactiveEngine {
   async policy(scope: string, events: ProactiveEvent[]): Promise<Decision> {
     events = events.filter((event) => event.kind !== "sent");
     if (!events.length) return { kind: "drop", reason: "heard" };
-    const policy = await this.scopePolicy?.(scope);
-    if ((policy?.fallbackMs ?? this.config.fallbackMs) <= 0) {
-      events = events.filter(event => !(event.source === "timer" && event.id.startsWith(`fallback:${scope}:`)));
-      if (!events.length) return { kind: "drop", reason: "heard" };
+    let policy: Awaited<ReturnType<NonNullable<typeof this.scopePolicy>>> | undefined;
+    if (events.some((event) => event.source === "timer" && event.id.startsWith(`fallback:${scope}:`))) {
+      policy = await this.scopePolicy?.(scope);
+      if ((policy?.fallbackMs ?? this.config.fallbackMs) <= 0) {
+        events = events.filter((event) => !(event.source === "timer" && event.id.startsWith(`fallback:${scope}:`)));
+        if (!events.length) return { kind: "drop", reason: "heard" };
+      }
     }
-    for (const stage of policy?.order ?? ["steer", "dm", "mention", "timer", "rules", "judge"]) {
-      if (stage === "steer" && (await this.target.isWorking(scope)))
-        return { kind: "wake", reason: "steer" };
-      if (stage === "dm" && events.some((e) => e.addressed === "dm"))
-        return { kind: "wake", reason: "dm" };
-      if (stage === "mention" && events.some((e) => e.addressed === "mention"))
-        return { kind: "wake", reason: "mention" };
-      if (stage === "timer" && events.some((e) => e.kind === "timer"))
-        return { kind: "wake", reason: "timer" };
+    // Direct requests and due timers are commitments, not discretionary signals.
+    // Keep their precedence stable even when a persisted policy puts judge first.
+    if (await this.target.isWorking(scope)) return { kind: "wake", reason: "steer" };
+    if (events.some((e) => e.addressed === "dm")) return { kind: "wake", reason: "dm" };
+    if (events.some((e) => e.addressed === "mention")) return { kind: "wake", reason: "mention" };
+    if (events.some((e) => e.kind === "timer")) return { kind: "wake", reason: "timer" };
+    policy ??= await this.scopePolicy?.(scope);
+    for (const stage of policy?.order ?? ["rules", "judge"]) {
       if (stage === "rules")
         for (const rule of [...this.rules, ...(policy?.rules ?? [])]) {
           const hit = rule(events);
