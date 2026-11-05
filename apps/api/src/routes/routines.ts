@@ -10,7 +10,7 @@ import {
 import { IsolationError, Prisma } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import { assertRoutineModel } from "../model-pins.js";
-import { listRoutineRuns } from "../routine-runs.js";
+import { listRoutineRuns, retryRoutineNotification } from "../routine-runs.js";
 import {
   assertRoutineSchedule,
   createRoutineTestRun,
@@ -53,6 +53,9 @@ export function routinesRoutes(ctx: RouterContext) {
       }),
       history: authed.routines.history.handler(async ({ context, input }) =>
         listRoutineRuns(deps.prisma, context.actor, input.routineId, input.before, input.limit),
+      ),
+      retryNotification: authed.routines.retryNotification.handler(async ({ context, input }) =>
+        retryRoutineNotification(deps.prisma, context.actor, input.routineId, input.runId),
       ),
       list: authed.routines.list.handler(async ({ context, input }) => {
         await repos.getBot(context.actor, input.botId);

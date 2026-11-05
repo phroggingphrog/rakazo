@@ -20,8 +20,12 @@ vi.mock("@rakazo/ui-web", () => ({
   Button: ({ variant: _variant, ...props }: ComponentProps<"button"> & { variant?: string }) => (
     <button type="button" {...props} />
   ),
-  NativeSelect: (props: ComponentProps<"select">) => <select {...props} />,
+  NativeSelect: ({
+    size: _size,
+    ...props
+  }: Omit<ComponentProps<"select">, "size"> & { size?: "sm" | "default" }) => <select {...props} />,
   NativeSelectOption: (props: ComponentProps<"option">) => <option {...props} />,
+  Input: (props: ComponentProps<"input">) => <input {...props} />,
   Textarea: (props: ComponentProps<"textarea">) => <textarea {...props} />,
 }));
 vi.mock("../RoutineSchedule", () => ({ RoutineSchedule: () => <div>Schedule controls</div> }));
@@ -106,11 +110,16 @@ async function click(text: string) {
     button(text).click();
   });
 }
-function change(element: HTMLTextAreaElement | HTMLSelectElement, value: string) {
+function change(
+  element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+  value: string,
+) {
   const proto =
     element instanceof HTMLSelectElement
       ? HTMLSelectElement.prototype
-      : HTMLTextAreaElement.prototype;
+      : element instanceof HTMLInputElement
+        ? HTMLInputElement.prototype
+        : HTMLTextAreaElement.prototype;
   Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(element, value);
   element.dispatchEvent(
     new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }),
@@ -158,6 +167,59 @@ afterEach(() => {
 });
 
 describe("source monitor setup", () => {
+  it("edits declared fields and preserves complex JSON when saving a draft", async () => {
+    rpc.setupPlans.previewReads.mockResolvedValue({
+      ...catalog,
+      tools: [
+        {
+          name: "read_mail",
+          description: "Read",
+          inputSchema: {
+            type: "object",
+            required: ["start"],
+            properties: {
+              start: { type: "string", description: "Start time" },
+              calendar: { type: "string", enum: ["", "primary"] },
+              includeCancelled: { type: "boolean" },
+              options: { type: "object" },
+            },
+          },
+        },
+      ],
+    });
+    await click("Set up source monitor");
+    await act(async () => change(container.querySelector("textarea")!, "Find appointments"));
+    await act(async () => change(container.querySelector("select")!, "server-1"));
+    await click("Find read operations");
+    await act(async () => change(container.querySelectorAll("select")[1]!, "read_mail"));
+    const json = container.querySelector<HTMLTextAreaElement>('textarea[id$="-arguments"]')!;
+    await act(async () => change(json, '{"options":{"limit":5},"other":"keep"}'));
+    const field = (name: string) => {
+      const label = [...container.querySelectorAll("label")].find((item) =>
+        item.textContent?.startsWith(name),
+      );
+      if (!label?.control) throw new Error(`Missing ${name}`);
+      return label.control as HTMLInputElement | HTMLSelectElement;
+    };
+    await act(async () => change(field("start"), "2026-11-05T09:00:00+11:00"));
+    await act(async () => change(field("calendar"), "2"));
+    await act(async () => change(field("includeCancelled"), "false"));
+    await click("Save draft");
+    expect(rpc.setupPlans.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: expect.objectContaining({
+          arguments: {
+            options: { limit: 5 },
+            other: "keep",
+            start: "2026-11-05T09:00:00+11:00",
+            calendar: "primary",
+            includeCancelled: false,
+          },
+        }),
+      }),
+    );
+  });
+
   it("saves a calendar read using the existing draft format", async () => {
     rpc.mcp.servers.list.mockResolvedValue([{ ...server, name: "Calendar" }]);
     rpc.setupPlans.previewReads.mockResolvedValue({

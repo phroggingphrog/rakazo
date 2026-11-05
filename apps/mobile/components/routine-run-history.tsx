@@ -1,7 +1,7 @@
 import type { RoutineRun } from "@rakazo/contracts";
 import { formatRoutineRunAt } from "@rakazo/core";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { ActivityIndicator } from "react-native";
 import { activityStatusLabel } from "../lib/activity";
 import { dateLocaleForUi, useI18n } from "../lib/i18n";
@@ -22,6 +22,9 @@ export function RoutineRunHistory({
   const router = useRouter();
   const history = useRoutineRuns(routineId);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
+  const retryPending = useRef(false);
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
   if (!history.runs) {
     if (!history.failed) return <ActivityIndicator color={native.secondaryLabel} />;
     return (
@@ -48,18 +51,50 @@ export function RoutineRunHistory({
             const destination = routineRunDestination(run, botName);
             const error = run.status === "failed" ? run.error : null;
             return (
-              <RunRow
-                key={run.id}
-                run={run}
-                error={error}
-                onPress={
-                  destination
-                    ? () => router.push(destination)
-                    : error
-                      ? () => setErrorDetails(error)
-                      : undefined
-                }
-              />
+              <Fragment key={run.id}>
+                <RunRow
+                  run={run}
+                  error={error}
+                  onPress={
+                    destination
+                      ? () => router.push(destination)
+                      : error
+                        ? () => setErrorDetails(error)
+                        : undefined
+                  }
+                />
+                {run.notificationCanRetry ? (
+                  <SettingsRow
+                    accessibilityRole="button"
+                    title={t("Retry notification")}
+                    disabled={retrying !== null}
+                    onPress={() => {
+                      if (retryPending.current) return;
+                      retryPending.current = true;
+                      setRetrying(run.id);
+                      setRetryError(null);
+                      void history
+                        .retryNotification(run.id)
+                        .catch(() => {
+                          setRetryError(run.id);
+                          history.retry();
+                        })
+                        .finally(() => {
+                          retryPending.current = false;
+                          setRetrying(null);
+                        });
+                    }}
+                  />
+                ) : null}
+                {retryError === run.id ? (
+                  <SettingsRow
+                    title={t(
+                      "Could not confirm the notification was queued. Check history before trying again.",
+                    )}
+                    dimmed
+                  />
+                ) : null}
+              </Fragment>
             );
           })
         )}
@@ -99,9 +134,13 @@ function RunRow({
       : run.notification === "submitting"
         ? t("Notification submission started; outcome pending")
         : run.notification === "uncertain"
-          ? t("Notification delivery unknown")
+          ? t(
+              "Notification delivery unknown. It will not be resent automatically because it may have arrived.",
+            )
           : run.notification === "undeliverable"
-            ? t("No available push recipient")
+            ? t(
+                "No available push recipient. Check phone notification permissions and reopen Rakazo on your phone.",
+              )
             : run.notification === "cancelled"
               ? t("Notification cancelled")
               : run.notification === "blocked"

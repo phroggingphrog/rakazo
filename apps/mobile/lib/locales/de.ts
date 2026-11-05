@@ -1,4 +1,121 @@
 export const DE_MESSAGES: Record<string, string> = {
+  "A test may read the selected source and send a notification.":
+    "Ein Test kann die ausgewählte Quelle lesen und eine Benachrichtigung senden.",
+  "Activate routine": "Routine aktivieren",
+  "Allow selected read": "Ausgewählten Lesezugriff erlauben",
+  "Allow the selected read operation without changing other bot access.":
+    "Den ausgewählten Lesezugriff erlauben, ohne andere Zugriffsrechte des Bots zu ändern.",
+  "Allowed in bot settings": "In den Bot-Einstellungen erlaubt",
+  "Assign this integration to the bot first.": "Weise diese Integration zuerst dem Bot zu.",
+  "Assignment:": "Zuweisung:",
+  Available: "Verfügbar",
+  "Bot:": "Bot:",
+  "Changed; choose it again": "Geändert; bitte erneut auswählen",
+  "Check setup": "Einrichtung prüfen",
+  "Choose a new time": "Neue Uhrzeit auswählen",
+  "Choose a proposal": "Vorschlag auswählen",
+  "Choose an integration": "Integration auswählen",
+  "Choose an integration and a read operation.":
+    "Wähle eine Integration und eine Leseoperation aus.",
+  "Choose an operation": "Operation auswählen",
+  Configured: "Konfiguriert",
+  "Could not load routine status. Open Routines to activate it.":
+    "Der Routinestatus konnte nicht geladen werden. Öffne „Routinen“, um sie zu aktivieren.",
+  "Could not open setup": "Einrichtung konnte nicht geöffnet werden",
+  "Could not update setup": "Einrichtung konnte nicht aktualisiert werden",
+  "Create paused routine": "Pausierte Routine erstellen",
+  "Custom schedule": "Benutzerdefinierter Zeitplan",
+  "Custom schedule is preserved. Choose another frequency to replace it.":
+    "Der benutzerdefinierte Zeitplan bleibt erhalten. Wähle eine andere Häufigkeit, um ihn zu ersetzen.",
+  "Declared as read-only": "Als schreibgeschützt deklariert",
+  "Declared fields:": "Deklarierte Felder:",
+  "Describe what the agent should watch.": "Beschreibe, worauf der Agent achten soll.",
+  Discard: "Verwerfen",
+  "Discard unsaved changes?": "Nicht gespeicherte Änderungen verwerfen?",
+  "Draft saved": "Entwurf gespeichert",
+  "Expo receipt unavailable; device delivery not confirmed":
+    "Expo-Empfangsbestätigung nicht verfügbar; Zustellung an das Gerät nicht bestätigt",
+  "Expo receipt was successful; device display not confirmed":
+    "Expo-Empfangsbestätigung erfolgreich; Anzeige auf dem Gerät nicht bestätigt",
+  "Expo reported a push delivery error": "Expo hat einen Fehler bei der Push-Zustellung gemeldet",
+  "Find read operations": "Leseoperationen suchen",
+  "How often": "Wie oft",
+  "If the integration changed, choose New proposal and set it up again.":
+    "Wenn sich die Integration geändert hat, wähle „Neuer Vorschlag“ und richte sie erneut ein.",
+  Integration: "Integration",
+  "Integration:": "Integration:",
+  "Load more proposals": "Weitere Vorschläge laden",
+  "Manage integrations": "Integrationen verwalten",
+  "Most recent source test for this routine. It reflects the setup when that test ran.":
+    "Letzter Quellentest für diese Routine. Er zeigt die Einrichtung zum Zeitpunkt des Tests.",
+  "New proposal": "Neuer Vorschlag",
+  "No declared read operations were found.":
+    "Es wurden keine deklarierten Leseoperationen gefunden.",
+  "Not allowed in bot settings": "In den Bot-Einstellungen nicht erlaubt",
+  "Not checked": "Nicht geprüft",
+  "Not configured": "Nicht konfiguriert",
+  "Not found": "Nicht gefunden",
+  "Not started": "Nicht gestartet",
+  "Notification blocked before sending": "Benachrichtigung vor dem Senden blockiert",
+  "Notification cancelled": "Benachrichtigung abgebrochen",
+  "Notification not sent; preparation retries exhausted":
+    "Benachrichtigung nicht gesendet; Vorbereitungsversuche ausgeschöpft",
+  "Notification queued": "Benachrichtigung in der Warteschlange",
+  "Notification status unknown": "Benachrichtigungsstatus unbekannt",
+  "Notification submission started; outcome pending":
+    "Übermittlung der Benachrichtigung begonnen; Ergebnis steht aus",
+  "Open integrations?": "Integrationen öffnen?",
+  "Open routine history for the result and notification status.":
+    "Öffne den Routineverlauf für das Ergebnis und den Benachrichtigungsstatus.",
+  "Open the routine editor to choose a new time.":
+    "Öffne den Routine-Editor, um eine neue Uhrzeit auszuwählen.",
+  "Operation arguments (JSON object)": "Operationsargumente (JSON-Objekt)",
+  "Operation:": "Operation:",
+  "Pause routine": "Routine pausieren",
+  "Proposal saved": "Vorschlag gespeichert",
+  "Push accepted by Expo; device delivery not confirmed":
+    "Push von Expo angenommen; Zustellung an das Gerät nicht bestätigt",
+  "Read operation": "Leseoperation",
+  "Refresh integrations": "Integrationen aktualisieren",
+  "Refresh status": "Status aktualisieren",
+  "Routine no longer exists": "Routine existiert nicht mehr",
+  "Run at": "Ausführen um",
+  "Run status:": "Ausführungsstatus:",
+  "Run test": "Test ausführen",
+  "Save changes before checking this proposal.":
+    "Speichere die Änderungen, bevor du diesen Vorschlag prüfst.",
+  "Save draft": "Entwurf speichern",
+  "Save proposal": "Vorschlag speichern",
+  "Saved proposals": "Gespeicherte Vorschläge",
+  "Selected operation permission:": "Berechtigung für ausgewählte Operation:",
+  "Selected read is allowed in bot settings.":
+    "Der ausgewählte Lesezugriff ist in den Bot-Einstellungen erlaubt.",
+  "Setup changed; source not verified": "Einrichtung geändert; Quelle nicht verifiziert",
+  "Source test:": "Quellentest:",
+  Succeeded: "Erfolgreich",
+  "The routine is unavailable, so a test cannot run.":
+    "Die Routine ist nicht verfügbar; der Test kann nicht ausgeführt werden.",
+  "This creates a paused routine that you can test and activate.":
+    "Dadurch wird eine pausierte Routine erstellt, die du testen und aktivieren kannst.",
+  "This integration is unavailable.": "Diese Integration ist nicht verfügbar.",
+  "This setup is saved. Its routine status and available actions appear below.":
+    "Diese Einrichtung ist gespeichert. Routinestatus und verfügbare Aktionen stehen unten.",
+  Unavailable: "Nicht verfügbar",
+  "Unavailable for this run": "Für diesen Lauf nicht verfügbar",
+  "Unavailable integration": "Nicht verfügbare Integration",
+  Uncertain: "Ungewiss",
+  "Unsaved changes will be lost.": "Nicht gespeicherte Änderungen gehen verloren.",
+  "What should {name} watch for?": "Worauf soll {name} achten?",
+  "When should it check?": "Wann soll geprüft werden?",
+  "Your saved proposals will remain available.": "Deine gespeicherten Vorschläge bleiben erhalten.",
+  "Not set": "Nicht festgelegt",
+  "Retry notification": "Benachrichtigung erneut senden",
+  "Notification delivery unknown. It will not be resent automatically because it may have arrived.":
+    "Unklar, ob die Benachrichtigung zugestellt wurde. Sie wird nicht automatisch erneut gesendet, da sie möglicherweise bereits angekommen ist.",
+  "Could not confirm the notification was queued. Check history before trying again.":
+    "Es konnte nicht bestätigt werden, dass die Benachrichtigung in die Warteschlange gestellt wurde. Prüfe den Verlauf, bevor du es erneut versuchst.",
+  "No available push recipient. Check phone notification permissions and reopen Rakazo on your phone.":
+    "Kein Push-Empfänger verfügbar. Prüfe die Benachrichtigungsberechtigungen auf deinem Telefon und öffne Rakazo dort erneut.",
   "Set up source monitor": "Quellenmonitor einrichten",
   "Source monitor": "Quellenmonitor",
   "Saving a proposal does not start a routine or read the source.":

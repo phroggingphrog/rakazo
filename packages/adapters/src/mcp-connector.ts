@@ -35,6 +35,7 @@ import { composioToolBatch } from "./composio-batch.js";
 import {
   combineSignals,
   redactConnectorPayload,
+  redactConnectorPayloadStrict,
   sanitizeConnectorError,
 } from "./connector-safety.js";
 import { credentialDigest } from "./credential-digest.js";
@@ -71,6 +72,7 @@ import { McpSession, mcpStdioRefusal } from "./mcp-transport.js";
 import type { RemoteTransportDependencies } from "./remote-mcp.js";
 import { ConnectorRedirectError, isMcpSessionGoneError } from "./remote-mcp.js";
 import { appendToolCompletionAudit } from "./tool-completion-audit.js";
+import { toolResultError } from "./tool-result-error.js";
 
 type SessionEntry = {
   session: McpSession;
@@ -832,7 +834,19 @@ export class McpConnector implements ConnectorProvider {
         return session.callTool(toolName, call.args, { signal: context.signal });
       });
       const secrets = [...(material ? oauthMaterialSecrets(material) : []), ...launchSecrets];
-      const redacted = redactConnectorPayload(result, secrets);
+      const failed = toolResultError(result) !== undefined;
+      let safeResult: unknown;
+      if (call.enforceResourceRevision) {
+        try {
+          safeResult = redactConnectorPayloadStrict(result, secrets);
+        } catch {
+          throw new Error("MCP source result could not be safely processed");
+        }
+      } else safeResult = redactConnectorPayload(result, secrets);
+      const redacted =
+        failed && safeResult && typeof safeResult === "object" && !Array.isArray(safeResult)
+          ? { ...safeResult, isError: true }
+          : safeResult;
       const serialized = JSON.stringify(redacted);
       const inline = context.inlineLargeOutput === true && serialized !== undefined;
       if (inline && Buffer.byteLength(serialized) > MCP_OUTPUT_LIMITS.inlineWatchBytes)
@@ -847,6 +861,7 @@ export class McpConnector implements ConnectorProvider {
           type: "result",
           data: {
             ...retained,
+            ...(failed ? { isError: true } : {}),
             truncated: true,
             retrievalTool: `mcp__${assignment.server.slug}__read_output`,
             nextOffset: Buffer.byteLength(retained.preview),

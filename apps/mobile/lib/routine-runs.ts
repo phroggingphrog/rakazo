@@ -3,6 +3,7 @@ import { mergeRoutineRunPages, routineHistoryPage } from "@rakazo/core";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useFocusEffect } from "expo-router";
 import { useCallback } from "react";
+import { rpc } from "./api";
 import { queryClient, rpcQuery } from "./query";
 
 /** A shown history asks again this often, so a running routine's status settles. */
@@ -40,6 +41,10 @@ export function useRoutineRuns(routineId: string) {
     loadingOlder: query.isFetchingNextPage,
     loadOlder: () => void query.fetchNextPage(),
     retry: () => void refetch(),
+    retryNotification: async (runId: string) => {
+      await rpc("routines/retryNotification", { routineId, runId });
+      await refetch();
+    },
   };
 }
 

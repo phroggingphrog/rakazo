@@ -19,6 +19,85 @@ def row(identity="container-one"):
 
 
 class RunnerTests(unittest.TestCase):
+    def test_startup_failures_report_and_notify_without_docker(self):
+        cases = (
+            ("directory", "recovery_state_directory_unavailable"),
+            ("lock_open", "recovery_lock_open_failed"),
+            ("lock_busy", "recovery_lock_busy"),
+            ("lock_error", "recovery_lock_acquire_failed"),
+        )
+        for stage, reason in cases:
+            for enabled in (False, True):
+                with self.subTest(stage=stage, notify=enabled), tempfile.TemporaryDirectory() as directory:
+                    argv = ["runner", "--project", "test-stack", "--state", str(Path(directory) / "state.json"), "--recover"]
+                    if enabled:
+                        argv.append("--notify")
+                    error = BlockingIOError("private lock data") if stage == "lock_busy" else OSError("private data")
+                    target = ("pathlib.Path.mkdir" if stage == "directory" else
+                              "pathlib.Path.open" if stage == "lock_open" else "fcntl.flock")
+                    output = io.StringIO()
+                    with patch("sys.argv", argv), patch(target, side_effect=error), patch.object(runner, "docker") as docker, \
+                            patch.object(runner, "record_history") as history, patch.object(runner, "alert") as notify, \
+                            contextlib.redirect_stdout(output):
+                        self.assertEqual(runner.main(), 1)
+                    docker.assert_not_called()
+                    history.assert_not_called()
+                    if enabled:
+                        notify.assert_called_once_with("test-stack", reason)
+                    else:
+                        notify.assert_not_called()
+                    self.assertEqual(json.loads(output.getvalue())["reason"], reason)
+                    self.assertNotIn("private", output.getvalue())
+
+    def test_history_and_state_write_failures_escalate_without_restart(self):
+        for failure in ("history", "state"):
+            for enabled in (False, True):
+                with self.subTest(failure=failure, notify=enabled), tempfile.TemporaryDirectory() as directory:
+                    argv = ["runner", "--project", "test-stack", "--state", str(Path(directory) / "state.json"), "--recover"]
+                    if enabled:
+                        argv.append("--notify")
+                    def docker(*args):
+                        if args[0] == "ps": return "container-one"
+                        if args[0] == "inspect": return json.dumps(row())
+                        self.fail("Persistence failure must prevent restart")
+                    reason = "observation_history_unavailable" if failure == "history" else "recovery_state_write_failed"
+                    with patch("sys.argv", argv), patch.object(runner, "docker", side_effect=docker), \
+                            patch.object(runner, "record_history", return_value=failure != "history"), \
+                            patch.object(runner, "save", side_effect=OSError("private data")) as save, \
+                            patch.object(runner, "alert") as notify, contextlib.redirect_stdout(io.StringIO()) as output:
+                        self.assertEqual(runner.main(), 1)
+                    if failure == "history":
+                        save.assert_not_called()
+                    else:
+                        save.assert_called_once()
+                        self.assertEqual(json.loads(output.getvalue().splitlines()[-1])["reason"], reason)
+                    if enabled:
+                        notify.assert_called_once_with("test-stack", reason)
+                    else:
+                        notify.assert_not_called()
+                    self.assertNotIn("private", output.getvalue())
+
+    def test_alert_transport_failure_does_not_print_credentials(self):
+        class Transport:
+            def notify(self, *_args):
+                raise RuntimeError("https://secret.example/private-token")
+
+        class Loader:
+            def exec_module(self, _module):
+                pass
+
+        class Spec:
+            loader = Loader()
+
+        output = io.StringIO()
+        with patch.object(runner.importlib.util, "spec_from_file_location", return_value=Spec()), \
+                patch.object(runner.importlib.util, "module_from_spec", return_value=Transport()), \
+                contextlib.redirect_stdout(output):
+            runner.alert("test-stack", "observation_history_unavailable")
+        self.assertEqual(json.loads(output.getvalue())["reason"], "alert_transport_failed")
+        self.assertNotIn("secret", output.getvalue())
+        self.assertNotIn("private-token", output.getvalue())
+
     def invoke(self, state, docker, recover=False):
         argv = ["runner", "--project", "test-stack", "--state", str(state)] + (["--recover"] if recover else [])
         with patch("sys.argv", argv), patch.object(runner, "docker", side_effect=docker), contextlib.redirect_stdout(io.StringIO()):
@@ -333,6 +412,72 @@ class RunnerTests(unittest.TestCase):
                 runner.append_observation(path, {name: "healthy" for name in runner.policy.OBSERVATION_SERVICES})
             self.assertEqual(path.read_bytes(), original)
             self.assertFalse(Path(str(path) + "-journal").exists())
+
+
+def streak_row(service, health='healthy', identity=None, runtime='running'):
+    return {'Id': identity or service, 'State': {'Status': runtime, 'Health': {'Status': health}},
+            'Config': {'Labels': {'com.docker.compose.project': 'test-stack', 'com.docker.compose.service': service}}}
+
+
+class StreakTests(unittest.TestCase):
+    def test_intervening_non_unhealthy_observation_requires_two_new_failures(self):
+        for interruption in ('starting', 'no_health', 'stopped', 'missing', 'ambiguous', 'unknown', 'inspection', 'stack_missing', 'history_failure'):
+            with self.subTest(interruption=interruption):
+                directory = Path(tempfile.mkdtemp(prefix='retained-streak-'))
+                state = directory / 'state.json'
+                state.write_text(json.dumps({'test-stack:worker': {'lastContainerId': 'worker', 'consecutiveFailures': 0, 'restartAttempts': [600]}}))
+                restarts = []
+                def invoke(phase, at):
+                    rows = [streak_row(name) for name in ('api', 'supervisor', 'web')]
+                    if phase == 'unhealthy': rows.append(streak_row('worker', health='unhealthy'))
+                    elif phase == 'starting': rows.append(streak_row('worker', health='starting'))
+                    elif phase == 'no_health': rows.append(streak_row('worker', health=None))
+                    elif phase == 'stopped': rows.append(streak_row('worker', health='unhealthy', runtime='exited'))
+                    elif phase == 'ambiguous': rows.extend([streak_row('worker', health='unhealthy'), streak_row('worker', health='unhealthy', identity='worker-two')])
+                    elif phase == 'unknown':
+                        invalid = streak_row('worker', health='unhealthy'); invalid['Id'] = ''; rows.append(invalid)
+                    elif phase == 'history_failure': rows.append(streak_row('worker', health='unhealthy'))
+                    def docker(*args):
+                        if args[0] == 'restart': restarts.append(args[1]); return ''
+                        if phase == 'inspection': raise OSError('synthetic inspection failure')
+                        if args[0] == 'ps': return '' if phase == 'stack_missing' else ' '.join('id'+str(i) for i in range(len(rows)))
+                        if args[0] == 'inspect': return '\n'.join(json.dumps(item) for item in rows)
+                        self.fail('Unexpected Docker action')
+                    argv = ['runner', '--project', 'test-stack', '--state', str(state), '--recover', '--quiet-healthy']
+                    with patch('sys.argv', argv), patch.object(runner, 'docker', side_effect=docker), \
+                            patch.object(runner, 'record_history', return_value=phase != 'history_failure'), \
+                            patch.object(runner.time, 'time', return_value=at), patch.object(runner, 'alert') as alert, \
+                            contextlib.redirect_stdout(io.StringIO()):
+                        runner.main()
+                        alert.assert_not_called()
+                invoke('unhealthy', 1000)
+                invoke(interruption, 1060)
+                invoke('unhealthy', 1120)
+                self.assertEqual(restarts, [], 'non-consecutive unhealthy observations must not restart')
+                self.assertEqual(json.loads(state.read_text())['test-stack:worker']['restartAttempts'], [600])
+                invoke('unhealthy', 1180)
+                self.assertEqual(restarts, ['worker'])
+                self.assertEqual(json.loads(state.read_text())['test-stack:worker']['restartAttempts'], [600, 1180])
+
+    def test_failed_invalidation_persistence_prevents_any_other_restart(self):
+        directory = Path(tempfile.mkdtemp(prefix='retained-reset-write-'))
+        state = directory / 'state.json'
+        state.write_text(json.dumps({'test-stack:worker': {'lastContainerId': 'worker', 'consecutiveFailures': 1, 'restartAttempts': []},
+                                     'test-stack:api': {'lastContainerId': 'api', 'consecutiveFailures': 1, 'restartAttempts': []}}))
+        rows = [streak_row('api', health='unhealthy'), streak_row('web'), streak_row('supervisor')]
+        restarts = []
+        def docker(*args):
+            if args[0] == 'ps': return 'api web supervisor'
+            if args[0] == 'inspect': return '\n'.join(json.dumps(item) for item in rows)
+            if args[0] == 'restart': restarts.append(args[1]); return ''
+            self.fail('Unexpected Docker action')
+        argv = ['runner', '--project', 'test-stack', '--state', str(state), '--recover']
+        with patch('sys.argv', argv), patch.object(runner, 'docker', side_effect=docker), \
+                patch.object(runner, 'record_history', return_value=True), patch.object(runner, 'save', side_effect=OSError('synthetic')), \
+                patch.object(runner, 'alert') as alert, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(runner.main(), 1)
+            alert.assert_not_called()
+        self.assertEqual(restarts, [])
 
 
 if __name__ == "__main__":

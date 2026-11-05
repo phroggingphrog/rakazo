@@ -1,4 +1,119 @@
 export const NL_MESSAGES: Record<string, string> = {
+  "A test may read the selected source and send a notification.":
+    "Een test kan de geselecteerde bron lezen en een melding versturen.",
+  "Activate routine": "Routine activeren",
+  "Allow selected read": "Geselecteerde leesactie toestaan",
+  "Allow the selected read operation without changing other bot access.":
+    "Sta de geselecteerde leesactie toe zonder andere bottoegang te wijzigen.",
+  "Allowed in bot settings": "Toegestaan in botinstellingen",
+  "Assign this integration to the bot first.": "Wijs deze integratie eerst toe aan de bot.",
+  "Assignment:": "Toewijzing:",
+  Available: "Beschikbaar",
+  "Bot:": "Bot:",
+  "Changed; choose it again": "Gewijzigd; kies opnieuw",
+  "Check setup": "Instelling controleren",
+  "Choose a new time": "Nieuwe tijd kiezen",
+  "Choose a proposal": "Voorstel kiezen",
+  "Choose an integration": "Integratie kiezen",
+  "Choose an integration and a read operation.": "Kies een integratie en een leesactie.",
+  "Choose an operation": "Een actie kiezen",
+  Configured: "Geconfigureerd",
+  "Could not load routine status. Open Routines to activate it.":
+    "Routinestatus kon niet worden geladen. Open Routines om deze te activeren.",
+  "Could not open setup": "Instelling kon niet worden geopend",
+  "Could not update setup": "Instelling kon niet worden bijgewerkt",
+  "Create paused routine": "Gepauzeerde routine maken",
+  "Custom schedule": "Aangepast schema",
+  "Custom schedule is preserved. Choose another frequency to replace it.":
+    "Het aangepaste schema blijft behouden. Kies een andere frequentie om het te vervangen.",
+  "Declared as read-only": "Aangegeven als alleen-lezen",
+  "Declared fields:": "Opgegeven velden:",
+  "Describe what the agent should watch.": "Beschrijf waar de agent op moet letten.",
+  Discard: "Verwerpen",
+  "Discard unsaved changes?": "Niet-opgeslagen wijzigingen verwerpen?",
+  "Draft saved": "Concept opgeslagen",
+  "Expo receipt unavailable; device delivery not confirmed":
+    "Expo-ontvangstbewijs niet beschikbaar; aflevering op het apparaat is niet bevestigd",
+  "Expo receipt was successful; device display not confirmed":
+    "Expo-ontvangstbewijs geslaagd; weergave op het apparaat is niet bevestigd",
+  "Expo reported a push delivery error": "Expo meldde een fout bij de bezorging van de pushmelding",
+  "Find read operations": "Leesacties zoeken",
+  "How often": "Hoe vaak",
+  "If the integration changed, choose New proposal and set it up again.":
+    "Als de integratie is gewijzigd, kies Nieuw voorstel en stel deze opnieuw in.",
+  Integration: "Integratie",
+  "Integration:": "Integratie:",
+  "Load more proposals": "Meer voorstellen laden",
+  "Manage integrations": "Integraties beheren",
+  "Most recent source test for this routine. It reflects the setup when that test ran.":
+    "Meest recente brontest voor deze routine. Deze toont de instelling tijdens die test.",
+  "New proposal": "Nieuw voorstel",
+  "No declared read operations were found.": "Geen opgegeven leesacties gevonden.",
+  "Not allowed in bot settings": "Niet toegestaan in botinstellingen",
+  "Not checked": "Niet gecontroleerd",
+  "Not configured": "Niet geconfigureerd",
+  "Not found": "Niet gevonden",
+  "Not started": "Niet gestart",
+  "Notification blocked before sending": "Melding geblokkeerd vóór verzending",
+  "Notification cancelled": "Melding geannuleerd",
+  "Notification not sent; preparation retries exhausted":
+    "Melding niet verzonden; voorbereidingspogingen zijn opgebruikt",
+  "Notification queued": "Melding in wachtrij",
+  "Notification status unknown": "Meldingstatus onbekend",
+  "Notification submission started; outcome pending":
+    "Verzending van melding gestart; resultaat nog niet bekend",
+  "Open integrations?": "Integraties openen?",
+  "Open routine history for the result and notification status.":
+    "Open de routinegeschiedenis voor het resultaat en de meldingstatus.",
+  "Open the routine editor to choose a new time.":
+    "Open de routine-editor om een nieuwe tijd te kiezen.",
+  "Operation arguments (JSON object)": "Actieargumenten (JSON-object)",
+  "Operation:": "Actie:",
+  "Pause routine": "Routine pauzeren",
+  "Proposal saved": "Voorstel opgeslagen",
+  "Push accepted by Expo; device delivery not confirmed":
+    "Pushmelding door Expo geaccepteerd; aflevering op het apparaat is niet bevestigd",
+  "Read operation": "Leesactie",
+  "Refresh integrations": "Integraties vernieuwen",
+  "Refresh status": "Status vernieuwen",
+  "Routine no longer exists": "Routine bestaat niet meer",
+  "Run at": "Uitvoeren om",
+  "Run status:": "Uitvoeringsstatus:",
+  "Run test": "Test uitvoeren",
+  "Save changes before checking this proposal.":
+    "Sla wijzigingen op voordat je dit voorstel controleert.",
+  "Save draft": "Concept opslaan",
+  "Save proposal": "Voorstel opslaan",
+  "Saved proposals": "Opgeslagen voorstellen",
+  "Selected operation permission:": "Toestemming voor geselecteerde actie:",
+  "Selected read is allowed in bot settings.":
+    "De geselecteerde leesactie is toegestaan in de botinstellingen.",
+  "Setup changed; source not verified": "Instelling gewijzigd; bron niet geverifieerd",
+  "Source test:": "Brontest:",
+  Succeeded: "Geslaagd",
+  "The routine is unavailable, so a test cannot run.":
+    "De routine is niet beschikbaar, dus de test kan niet worden uitgevoerd.",
+  "This creates a paused routine that you can test and activate.":
+    "Hiermee maak je een gepauzeerde routine die je kunt testen en activeren.",
+  "This integration is unavailable.": "Deze integratie is niet beschikbaar.",
+  "This setup is saved. Its routine status and available actions appear below.":
+    "Deze instelling is opgeslagen. De routinestatus en beschikbare acties staan hieronder.",
+  Unavailable: "Niet beschikbaar",
+  "Unavailable for this run": "Niet beschikbaar voor deze uitvoering",
+  "Unavailable integration": "Niet-beschikbare integratie",
+  Uncertain: "Onzeker",
+  "Unsaved changes will be lost.": "Niet-opgeslagen wijzigingen gaan verloren.",
+  "What should {name} watch for?": "Waarop moet {name} letten?",
+  "When should it check?": "Wanneer moet er worden gecontroleerd?",
+  "Your saved proposals will remain available.": "Je opgeslagen voorstellen blijven beschikbaar.",
+  "Not set": "Niet ingesteld",
+  "Retry notification": "Melding opnieuw versturen",
+  "Notification delivery unknown. It will not be resent automatically because it may have arrived.":
+    "Het is onbekend of de melding is afgeleverd. Deze wordt niet automatisch opnieuw verstuurd, omdat ze mogelijk al is aangekomen.",
+  "Could not confirm the notification was queued. Check history before trying again.":
+    "Het is niet bevestigd dat de melding in de wachtrij staat. Controleer de geschiedenis voordat je het opnieuw probeert.",
+  "No available push recipient. Check phone notification permissions and reopen Rakazo on your phone.":
+    "Er is geen ontvanger voor pushmeldingen beschikbaar. Controleer de meldingsrechten op je telefoon en open Rakazo opnieuw.",
   "Set up source monitor": "Bronmonitor instellen",
   "Source monitor": "Bronmonitor",
   "Saving a proposal does not start a routine or read the source.":

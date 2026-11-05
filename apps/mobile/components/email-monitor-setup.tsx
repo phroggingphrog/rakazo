@@ -4,6 +4,8 @@ import {
   type RoutineRun,
   type RpcOutput,
   SetupOperationArgumentsSchema,
+  setupArgumentFields,
+  updateSetupArgumentText,
 } from "@rakazo/contracts";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -294,7 +296,17 @@ export function EmailMonitorSetup({
       invalidArguments = true;
     }
   }
+  const argumentValues = parsedArguments as Record<string, unknown> | undefined;
   const argumentSchema = catalog?.tools.find((tool) => tool.name === toolName)?.inputSchema;
+  const guidedFields = setupArgumentFields(argumentSchema).filter((field) => {
+    const value = argumentValues?.[field.name];
+    return (
+      value === undefined ||
+      (field.kind === "boolean"
+        ? typeof value === "boolean"
+        : typeof value === "string" && (field.kind !== "choice" || field.choices.includes(value)))
+    );
+  });
   const argumentFields = argumentSchema?.properties;
   const requiredFields = Array.isArray(argumentSchema?.required)
     ? argumentSchema.required
@@ -327,6 +339,11 @@ export function EmailMonitorSetup({
     candidates?.status === "ok" &&
     candidates.selectedOperation === "declared_read";
   const editable = !busy && plan?.status !== "configured";
+
+  function changeArgument(name: string, value: string | boolean | undefined) {
+    setArgumentText((current) => updateSetupArgumentText(current, name, value) ?? current);
+    clearCheck();
+  }
 
   async function discover() {
     if (!session || !serverId) return;
@@ -611,6 +628,86 @@ export function EmailMonitorSetup({
           ) : null}
           {toolName ? (
             <View>
+              {guidedFields.length ? (
+                <View style={styles.guidedFields}>
+                  {guidedFields.map((field) => {
+                    const value = argumentValues?.[field.name];
+                    return (
+                      <View key={field.name} style={styles.guidedField}>
+                        {field.kind === "string" ? (
+                          <>
+                            <Text style={styles.label}>
+                              {field.name}
+                              {field.required ? " *" : ""}
+                            </Text>
+                            {field.description ? (
+                              <Text style={styles.secondary}>{field.description}</Text>
+                            ) : null}
+                            <TextInput
+                              accessibilityLabel={field.name}
+                              accessibilityState={{ disabled: !editable || invalidArguments }}
+                              value={typeof value === "string" ? value : ""}
+                              maxLength={2048}
+                              editable={editable && !invalidArguments}
+                              onChangeText={(text) => changeArgument(field.name, text)}
+                              style={styles.input}
+                            />
+                            {value !== undefined ? (
+                              <NativeActionButton
+                                label={`${t("Remove")} ${field.name}`}
+                                disabled={!editable || invalidArguments}
+                                prominence="secondary"
+                                onPress={() => changeArgument(field.name, undefined)}
+                              />
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
+                            {field.description ? (
+                              <Text style={styles.secondary}>{field.description}</Text>
+                            ) : null}
+                            <MenuPicker
+                              label={`${field.name}${field.required ? " *" : ""}`}
+                              disabled={!editable || invalidArguments}
+                              value={
+                                field.kind === "boolean"
+                                  ? typeof value === "boolean"
+                                    ? String(value)
+                                    : ""
+                                  : typeof value === "string"
+                                    ? String(field.choices.indexOf(value) + 1)
+                                    : ""
+                              }
+                              choices={[
+                                { key: "", label: t("Not set") },
+                                ...(field.kind === "boolean"
+                                  ? [
+                                      { key: "true", label: "true" },
+                                      { key: "false", label: "false" },
+                                    ]
+                                  : field.choices.map((choice, index) => ({
+                                      key: String(index + 1),
+                                      label: choice || '""',
+                                    }))),
+                              ]}
+                              onChange={(selected) =>
+                                changeArgument(
+                                  field.name,
+                                  !selected
+                                    ? undefined
+                                    : field.kind === "boolean"
+                                      ? selected === "true"
+                                      : field.choices[Number(selected) - 1],
+                                )
+                              }
+                            />
+                          </>
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null}
               <Text style={styles.label}>{t("Operation arguments (JSON object)")}</Text>
               <Text style={styles.secondary}>
                 {t(
@@ -924,6 +1021,8 @@ function createStyles() {
       fontSize: 16,
     },
     picker: { width: "100%", minHeight: 44 },
+    guidedFields: { gap: 12, marginBottom: 12 },
+    guidedField: { gap: 6 },
     review: {
       gap: 12,
       borderTopWidth: StyleSheet.hairlineWidth,

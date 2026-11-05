@@ -9,8 +9,7 @@ export function isFailedToolResult(value: unknown): value is { error: unknown } 
  * result in `details` without populating `completion.error`. Read the failure for auditing
  * without changing the result that reaches the model and lets it react to the failure.
  */
-export function toolResultError(result: unknown): unknown {
-  const payload = (result as { details?: unknown } | null)?.details ?? result;
+function directToolResultError(payload: unknown): unknown {
   if (isFailedToolResult(payload)) {
     const message = (payload.error as { message?: unknown })?.message;
     return typeof message === "string" ? message : payload.error;
@@ -26,4 +25,10 @@ export function toolResultError(result: unknown): unknown {
         .trim()
     : "";
   return text || "tool reported an error result";
+}
+
+export function toolResultError(result: unknown): unknown {
+  const payload = (result as { details?: unknown } | null)?.details ?? result;
+  const error = directToolResultError(payload);
+  return error === undefined && payload !== result ? directToolResultError(result) : error;
 }

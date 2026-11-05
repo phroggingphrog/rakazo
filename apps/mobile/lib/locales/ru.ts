@@ -1,4 +1,119 @@
 export const RU_MESSAGES: Record<string, string> = {
+  "A test may read the selected source and send a notification.":
+    "Тест может прочитать выбранный источник и отправить уведомление.",
+  "Activate routine": "Включить задачу",
+  "Allow selected read": "Разрешить выбранное чтение",
+  "Allow the selected read operation without changing other bot access.":
+    "Разрешить выбранную операцию чтения, не меняя другие права бота.",
+  "Allowed in bot settings": "Разрешено в настройках бота",
+  "Assign this integration to the bot first.": "Сначала назначьте эту интеграцию боту.",
+  "Assignment:": "Назначение:",
+  Available: "Доступно",
+  "Bot:": "Бот:",
+  "Changed; choose it again": "Изменено; выберите снова",
+  "Check setup": "Проверить настройку",
+  "Choose a new time": "Выбрать другое время",
+  "Choose a proposal": "Выбрать предложение",
+  "Choose an integration": "Выбрать интеграцию",
+  "Choose an integration and a read operation.": "Выберите интеграцию и операцию чтения.",
+  "Choose an operation": "Выбрать операцию",
+  Configured: "Настроено",
+  "Could not load routine status. Open Routines to activate it.":
+    "Не удалось загрузить состояние задачи. Откройте «Задачи», чтобы включить её.",
+  "Could not open setup": "Не удалось открыть настройку",
+  "Could not update setup": "Не удалось обновить настройку",
+  "Create paused routine": "Создать приостановленную задачу",
+  "Custom schedule": "Пользовательское расписание",
+  "Custom schedule is preserved. Choose another frequency to replace it.":
+    "Пользовательское расписание сохранено. Выберите другую частоту, чтобы заменить его.",
+  "Declared as read-only": "Объявлено только для чтения",
+  "Declared fields:": "Объявленные поля:",
+  "Describe what the agent should watch.": "Опишите, что должен отслеживать агент.",
+  Discard: "Отменить изменения",
+  "Discard unsaved changes?": "Отменить несохранённые изменения?",
+  "Draft saved": "Черновик сохранён",
+  "Expo receipt unavailable; device delivery not confirmed":
+    "Квитанция Expo недоступна; доставка на устройство не подтверждена",
+  "Expo receipt was successful; device display not confirmed":
+    "Квитанция Expo успешна; отображение на устройстве не подтверждено",
+  "Expo reported a push delivery error": "Expo сообщил об ошибке доставки push-уведомления",
+  "Find read operations": "Найти операции чтения",
+  "How often": "Как часто",
+  "If the integration changed, choose New proposal and set it up again.":
+    "Если интеграция изменилась, выберите «Новое предложение» и настройте её заново.",
+  Integration: "Интеграция",
+  "Integration:": "Интеграция:",
+  "Load more proposals": "Загрузить ещё предложения",
+  "Manage integrations": "Управление интеграциями",
+  "Most recent source test for this routine. It reflects the setup when that test ran.":
+    "Последний тест источника для этой задачи. Он отражает настройку на момент выполнения теста.",
+  "New proposal": "Новое предложение",
+  "No declared read operations were found.": "Объявленные операции чтения не найдены.",
+  "Not allowed in bot settings": "Не разрешено в настройках бота",
+  "Not checked": "Не проверено",
+  "Not configured": "Не настроено",
+  "Not found": "Не найдено",
+  "Not started": "Не начато",
+  "Notification blocked before sending": "Уведомление заблокировано до отправки",
+  "Notification cancelled": "Уведомление отменено",
+  "Notification not sent; preparation retries exhausted":
+    "Уведомление не отправлено; попытки подготовки исчерпаны",
+  "Notification queued": "Уведомление в очереди",
+  "Notification status unknown": "Состояние уведомления неизвестно",
+  "Notification submission started; outcome pending":
+    "Отправка уведомления начата; результат ожидается",
+  "Open integrations?": "Открыть интеграции?",
+  "Open routine history for the result and notification status.":
+    "Откройте историю задачи, чтобы посмотреть результат и состояние уведомления.",
+  "Open the routine editor to choose a new time.":
+    "Откройте редактор задачи, чтобы выбрать другое время.",
+  "Operation arguments (JSON object)": "Аргументы операции (объект JSON)",
+  "Operation:": "Операция:",
+  "Pause routine": "Приостановить задачу",
+  "Proposal saved": "Предложение сохранено",
+  "Push accepted by Expo; device delivery not confirmed":
+    "Expo принял push-уведомление; доставка на устройство не подтверждена",
+  "Read operation": "Операция чтения",
+  "Refresh integrations": "Обновить интеграции",
+  "Refresh status": "Обновить состояние",
+  "Routine no longer exists": "Задача больше не существует",
+  "Run at": "Время запуска",
+  "Run status:": "Состояние выполнения:",
+  "Run test": "Запустить тест",
+  "Save changes before checking this proposal.":
+    "Сохраните изменения перед проверкой этого предложения.",
+  "Save draft": "Сохранить черновик",
+  "Save proposal": "Сохранить предложение",
+  "Saved proposals": "Сохранённые предложения",
+  "Selected operation permission:": "Разрешение выбранной операции:",
+  "Selected read is allowed in bot settings.": "Выбранное чтение разрешено в настройках бота.",
+  "Setup changed; source not verified": "Настройка изменилась; источник не проверен",
+  "Source test:": "Тест источника:",
+  Succeeded: "Успешно",
+  "The routine is unavailable, so a test cannot run.":
+    "Задача недоступна, поэтому тест нельзя запустить.",
+  "This creates a paused routine that you can test and activate.":
+    "Будет создана приостановленная задача, которую можно протестировать и включить.",
+  "This integration is unavailable.": "Эта интеграция недоступна.",
+  "This setup is saved. Its routine status and available actions appear below.":
+    "Настройка сохранена. Состояние задачи и доступные действия показаны ниже.",
+  Unavailable: "Недоступно",
+  "Unavailable for this run": "Недоступно для этого запуска",
+  "Unavailable integration": "Недоступная интеграция",
+  Uncertain: "Неопределённо",
+  "Unsaved changes will be lost.": "Несохранённые изменения будут потеряны.",
+  "What should {name} watch for?": "Что должен отслеживать {name}?",
+  "When should it check?": "Когда выполнять проверку?",
+  "Your saved proposals will remain available.":
+    "Ваши сохранённые предложения останутся доступными.",
+  "Not set": "Не задано",
+  "Retry notification": "Повторно отправить уведомление",
+  "Notification delivery unknown. It will not be resent automatically because it may have arrived.":
+    "Неизвестно, доставлено ли уведомление. Оно не будет отправлено повторно автоматически, поскольку уже могло прийти.",
+  "Could not confirm the notification was queued. Check history before trying again.":
+    "Не удалось подтвердить, что уведомление поставлено в очередь. Проверьте историю, прежде чем повторить попытку.",
+  "No available push recipient. Check phone notification permissions and reopen Rakazo on your phone.":
+    "Нет доступного получателя push-уведомлений. Проверьте разрешения на уведомления и снова откройте Rakazo на телефоне.",
   "Set up source monitor": "Настроить монитор источника",
   "Source monitor": "Монитор источника",
   "Saving a proposal does not start a routine or read the source.":

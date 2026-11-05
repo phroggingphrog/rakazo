@@ -137,11 +137,46 @@ def save(path, state):
 
 def alert(project, reason):
     """Reuse the existing deduplicated host notification transport."""
-    spec = importlib.util.spec_from_file_location("host_alert", Path(__file__).with_name("host-alert.py"))
-    transport = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(transport)
-    transport.notify("service-recovery:" + project + ":" + reason,
-                     "Application service recovery requires intervention: " + reason)
+    try:
+        spec = importlib.util.spec_from_file_location("host_alert", Path(__file__).with_name("host-alert.py"))
+        transport = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(transport)
+        transport.notify("service-recovery:" + project + ":" + reason,
+                         "Application service recovery requires intervention: " + reason)
+    except Exception:
+        # Transport exceptions can contain webhook credentials; keep the failure visible
+        # without reporting the exception or implying that an owner received an alert.
+        print(json.dumps({"status": "intervention_required", "reason": "alert_transport_failed"}))
+
+
+def startup_failure(project, notify, reason):
+    print(json.dumps({"status": "intervention_required", "reason": reason}))
+    if notify:
+        alert(project, reason)
+    return 1
+
+
+def invalidate_observations(state, project, services, state_path, notify):
+    """Forget interrupted health streaks without erasing reserved restart budget."""
+    changed = False
+    for service in services:
+        record = state.get(project + ":" + service)
+        if record is None:
+            continue
+        if record.get("consecutiveFailures", 0):
+            record["consecutiveFailures"] = 0
+            changed = True
+        if "unverifiedSince" in record:
+            del record["unverifiedSince"]
+            changed = True
+    if not changed:
+        return True
+    try:
+        save(state_path, state)
+        return True
+    except (OSError, ValueError):
+        startup_failure(project, notify, "recovery_state_write_failed")
+        return False
 
 
 def validate_state(state):
@@ -178,9 +213,21 @@ def main():
         except (OSError, ValueError, sqlite3.Error):
             print(json.dumps({"status": "intervention_required", "reason": "observation_history_unavailable"}))
             return 1
-    args.state.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with args.state.with_suffix(".lock").open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        args.state.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError:
+        return startup_failure(args.project, args.notify, "recovery_state_directory_unavailable")
+    try:
+        lock = args.state.with_suffix(".lock").open("w")
+    except OSError:
+        return startup_failure(args.project, args.notify, "recovery_lock_open_failed")
+    with lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return startup_failure(args.project, args.notify, "recovery_lock_busy")
+        except OSError:
+            return startup_failure(args.project, args.notify, "recovery_lock_acquire_failed")
         try:
             state = json.loads(args.state.read_text()) if args.state.exists() else {}
             validate_state(state)
@@ -197,12 +244,16 @@ def main():
                 raise ValueError("Invalid inspection output")
         except (OSError, ValueError, subprocess.SubprocessError):
             record_history(history, {service: "inspection_failed" for service in policy.OBSERVATION_SERVICES})
+            if not invalidate_observations(state, args.project, policy.OBSERVATION_SERVICES, args.state, args.notify):
+                return 1
             print(json.dumps({"status": "intervention_required", "reason": "health_inspection_failed"}))
             if args.notify:
                 alert(args.project, "health_inspection_failed")
             return 1
         if not ids:
             record_history(history, {service: "missing" for service in policy.OBSERVATION_SERVICES})
+            if not invalidate_observations(state, args.project, policy.OBSERVATION_SERVICES, args.state, args.notify):
+                return 1
             print(json.dumps({"status": "intervention_required", "reason": "stack_missing"}))
             if args.notify:
                 alert(args.project, "stack_missing")
@@ -223,6 +274,14 @@ def main():
             for service, matches in grouped.items()
         }
         if not record_history(history, outcomes):
+            if not invalidate_observations(state, args.project, policy.OBSERVATION_SERVICES, args.state, args.notify):
+                return 1
+            if args.notify:
+                alert(args.project, "observation_history_unavailable")
+            return 1
+        uncertain = [service for service, outcome in outcomes.items()
+                     if outcome in ("missing", "ambiguous", "unknown")]
+        if not invalidate_observations(state, args.project, uncertain, args.state, args.notify):
             return 1
         failed = False
         for service in sorted(expected):
@@ -251,7 +310,13 @@ def main():
             action, record = policy.recovery_decision(row, prior, time.time(), args.recover, args.project)
             state[key] = record
             # Persist reserved restart budget before dispatching any effect.
-            save(args.state, state)
+            try:
+                save(args.state, state)
+            except (OSError, ValueError):
+                print(json.dumps({"status": "intervention_required", "reason": "recovery_state_write_failed"}))
+                if args.notify:
+                    alert(args.project, "recovery_state_write_failed")
+                return 1
             if action == "restart":
                 try:
                     docker("restart", container_id)

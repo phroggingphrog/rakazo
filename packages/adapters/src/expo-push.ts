@@ -179,9 +179,13 @@ export class ExpoPushProvider implements NotificationProvider {
     message: NotificationMessage,
     context: AdapterContext,
     onAccepted?: (ticketId: string, tokenDigest: string) => Promise<void>,
+    onDefinitelyUnsent?: (reason: "no_recipient" | "device_rejected") => void,
   ): Promise<ExpoPushDelivery> {
     const token = await this.deliverableToken(context.userId);
-    if (!token) return "undeliverable";
+    if (!token) {
+      onDefinitelyUnsent?.("no_recipient");
+      return "undeliverable";
+    }
     const payload = {
       to: token,
       title: capped(message.title, MAX_PUSH_TITLE_CHARS),
@@ -197,12 +201,25 @@ export class ExpoPushProvider implements NotificationProvider {
       context.signal,
       true,
     );
-    const [ticket] = expoPushTickets(body);
+    const tickets = expoPushTickets(body);
+    const [ticket] = tickets;
     if (status < 300 && body === undefined) {
       throw new ExpoPushUncertainError("invalid response");
     }
     if (ticket?.details?.error === "DeviceNotRegistered") {
+      const rawData = body && typeof body === "object" ? (body as { data?: unknown }).data : null;
+      if (
+        status < 200 ||
+        status >= 300 ||
+        tickets.length !== 1 ||
+        (Array.isArray(rawData) && rawData.length !== 1) ||
+        ticket.status !== "error" ||
+        ticket.id ||
+        expoRequestErrorList(body).length
+      )
+        throw new ExpoPushUncertainError("contradictory rejection response");
       await this.tokens.remove(context.userId, credentialDigest(token));
+      onDefinitelyUnsent?.("device_rejected");
       return "undeliverable";
     }
     const failure =

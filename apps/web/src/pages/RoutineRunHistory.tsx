@@ -11,14 +11,20 @@ import {
 import { Button, SectionHeading, Spinner } from "@rakazo/ui-web";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useSpaceQueries } from "../lib/query";
 import { translateRunError } from "../lib/run-error";
+import { useSpaceRpc } from "../lib/space-rpc";
 import { statusLabel, statusTone } from "./ActivityList";
 
 export function RoutineRunHistory({ routineId }: { routineId: string }) {
   const { t } = useLingui();
   const queries = useSpaceQueries();
+  const rpc = useSpaceRpc();
+  const pendingRetry = useRef(false);
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const history = useInfiniteQuery(
     queries.routines.history.infiniteOptions({
       input: (before: RoutineRunCursor | null) => routineHistoryPage(routineId, before),
@@ -54,7 +60,33 @@ export function RoutineRunHistory({ routineId }: { routineId: string }) {
       ) : (
         <ul className="mt-2 divide-y divide-border">
           {runs.map((run) => (
-            <RunRow key={run.id} run={run} />
+            <RunRow
+              key={run.id}
+              run={run}
+              retrying={retrying !== null}
+              retryError={retryError === run.id}
+              onRetry={() => {
+                if (pendingRetry.current) return;
+                pendingRetry.current = true;
+                setRetrying(run.id);
+                setRetryError(null);
+                void Promise.resolve()
+                  .then(() => rpc.routines.retryNotification({ routineId, runId: run.id }))
+                  .then(
+                    async () => {
+                      await history.refetch();
+                    },
+                    () => {
+                      setRetryError(run.id);
+                      void history.refetch();
+                    },
+                  )
+                  .finally(() => {
+                    pendingRetry.current = false;
+                    setRetrying(null);
+                  });
+              }}
+            />
           ))}
         </ul>
       )}
@@ -72,7 +104,17 @@ export function RoutineRunHistory({ routineId }: { routineId: string }) {
   );
 }
 
-function RunRow({ run }: { run: RoutineRun }) {
+function RunRow({
+  run,
+  retrying,
+  retryError,
+  onRetry,
+}: {
+  run: RoutineRun;
+  retrying: boolean;
+  retryError: boolean;
+  onRetry: () => void;
+}) {
   const { i18n, t } = useLingui();
   const locale = i18n.locale || "en";
   const at = routineRunAt(run);
@@ -126,10 +168,10 @@ function RunRow({ run }: { run: RoutineRun }) {
         <p className="pb-2">{t`Notification submission started; outcome pending`}</p>
       ) : null}
       {run.notification === "uncertain" ? (
-        <p className="pb-2">{t`Notification delivery unknown`}</p>
+        <p className="pb-2">{t`Notification delivery unknown. It will not be resent automatically because it may have arrived.`}</p>
       ) : null}
       {run.notification === "undeliverable" ? (
-        <p className="pb-2">{t`No available push recipient`}</p>
+        <p className="pb-2">{t`No available push recipient. Check phone notification permissions and reopen Rakazo on your phone.`}</p>
       ) : null}
       {run.notification === "cancelled" ? (
         <p className="pb-2">{t`Notification cancelled`}</p>
@@ -152,6 +194,18 @@ function RunRow({ run }: { run: RoutineRun }) {
       ) : null}
       {run.notification === "expo_receipt_unavailable" ? (
         <p className="pb-2">{t`Expo receipt unavailable; device delivery not confirmed`}</p>
+      ) : null}
+      {run.notificationCanRetry ? (
+        <Button variant="secondary" disabled={retrying} className="mb-2 min-h-11" onClick={onRetry}>
+          <Trans>Retry notification</Trans>
+        </Button>
+      ) : null}
+      {retryError ? (
+        <p role="alert" className="pb-2 text-destructive">
+          <Trans>
+            Could not confirm the notification was queued. Check history before trying again.
+          </Trans>
+        </p>
       ) : null}
     </li>
   );

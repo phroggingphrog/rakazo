@@ -30,12 +30,17 @@ export function sanitizeConnectorError(error: unknown, secrets: string[] = []): 
 }
 
 export function redactConnectorPayload(value: unknown, secrets: string[]): unknown {
-  if (secrets.length === 0) return value;
   try {
-    return redactPayloadValue(JSON.parse(JSON.stringify(value)), secrets);
+    return redactConnectorPayloadStrict(value, secrets);
   } catch {
     return { ok: true };
   }
+}
+
+/** Source checks must not turn a failed redaction into successful evidence. */
+export function redactConnectorPayloadStrict(value: unknown, secrets: string[]): unknown {
+  if (secrets.length === 0) return value;
+  return redactPayloadValue(JSON.parse(JSON.stringify(value)), secrets);
 }
 
 function redactPayloadValue(value: unknown, secrets: string[]): unknown {

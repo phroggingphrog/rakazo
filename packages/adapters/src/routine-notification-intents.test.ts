@@ -27,6 +27,7 @@ function fixture(options: { noMessage?: boolean; initialStatus?: string } = {}) 
       status: "completed",
       trigger: "routine",
       routineId: "routine",
+      routineNotify: true,
       spaceId: "space",
       userId: "owner",
       botId: "bot",
@@ -119,7 +120,10 @@ function fixture(options: { noMessage?: boolean; initialStatus?: string } = {}) 
     $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
       fn({
         routineNotificationIntent: table,
-        $queryRaw: async () => [{ notifyOnFinish: row.run.bot.notifyOnFinish }],
+        $queryRaw: async (strings: TemplateStringsArray) =>
+          strings.join("").includes("FROM bots")
+            ? [{ notifyOnFinish: row.run.bot.notifyOnFinish }]
+            : [{ notify: row.run.routineNotify }],
       }),
     ),
   } as unknown as PrismaClient;
@@ -236,6 +240,27 @@ describe("routine notification intent recovery", () => {
     expect(f.row.status).toBe("cancelled");
     expect(f.deliver).not.toHaveBeenCalled();
   });
+  it("honors a disabled routine notification preference before submission", async () => {
+    const f = fixture();
+    f.row.run.routineNotify = false;
+    await reconcileRoutineNotificationIntents(f);
+    expect(f.row.status).toBe("cancelled");
+    expect(f.deliver).not.toHaveBeenCalled();
+  });
+  it.each(["no_recipient", "device_rejected"] as const)(
+    "persists definite non-delivery evidence %s",
+    async (reason) => {
+      const f = fixture();
+      f.deliver.mockImplementationOnce(async (_message, _context, _accepted, unsent) => {
+        unsent?.(reason);
+        return "undeliverable";
+      });
+      await reconcileRoutineNotificationIntents(f);
+      expect(f.row.status).toBe(reason);
+      await reconcileRoutineNotificationIntents(f);
+      expect(f.deliver).toHaveBeenCalledOnce();
+    },
+  );
   it("honors a preference disabled after preparation but before submission", async () => {
     const f = fixture();
     f.table.findFirst.mockImplementationOnce(async () => structuredClone(f.row));

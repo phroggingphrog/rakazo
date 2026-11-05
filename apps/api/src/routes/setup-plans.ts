@@ -1,9 +1,12 @@
 import { ORPCError } from "@orpc/server";
-import { CreateRoutineInput, SetupPlanDraftSchema, setupRoutinePrompt } from "@rakazo/contracts";
+import { runContinueJob } from "@rakazo/adapter-kit";
+import { CreateRoutineInput, SETUP_SOURCE_TEST_KIND, SetupPlanDraftSchema, setupRoutinePrompt, setupSourceTestKey } from "@rakazo/contracts";
+import { expandSkillReferencesInPrompt } from "@rakazo/core";
 import type { Prisma } from "@rakazo/db";
 import { availableInSpace } from "@rakazo/db";
+import { getLogger } from "@rakazo/logging";
 import { discoverMonitorTools } from "../monitor-tool-discovery.js";
-import { nextRoutineDate, routineNextRunAt, routineRowData } from "../routines.js";
+import { createRoutineTestRun, nextRoutineDate, routineNextRunAt, routineRowData, routineTestTarget } from "../routines.js";
 import type { RouterContext } from "./context.js";
 
 async function lockSetupReferences(
@@ -72,7 +75,7 @@ function dto(row: {
   };
 }
 
-export function setupPlansRoutes({ deps, authed }: RouterContext) {
+export function setupPlansRoutes({ deps, authed, repos, agentSkills }: RouterContext) {
   return {
     setupPlans: {
       previewReads: authed.setupPlans.previewReads.handler(async ({ context, input }) => {
@@ -190,6 +193,20 @@ export function setupPlansRoutes({ deps, authed }: RouterContext) {
         });
         if (!row) throw new ORPCError("NOT_FOUND");
         return dto(row);
+      }),
+      latestTest: authed.setupPlans.latestTest.handler(async ({ context, input }) => {
+        const scope = { spaceId: context.actor.spaceId, userId: context.actor.userId };
+        const plan = await deps.prisma.setupPlan.findFirst({
+          where: { ...scope, id: input.id },
+          select: { id: true },
+        });
+        if (!plan) throw new ORPCError("NOT_FOUND");
+        const test = await deps.prisma.setupPlanTest.findFirst({
+          where: { ...scope, planId: plan.id },
+          orderBy: [{ createdAt: "desc" }, { runId: "desc" }],
+          select: { runId: true, planRevision: true, configuredFromRevision: true, createdAt: true },
+        });
+        return test ? { ...test, createdAt: test.createdAt.toISOString() } : null;
       }),
       prerequisites: authed.setupPlans.prerequisites.handler(async ({ context, input }) => {
         const scope = { spaceId: context.actor.spaceId, userId: context.actor.userId };
@@ -470,6 +487,70 @@ export function setupPlansRoutes({ deps, authed }: RouterContext) {
             throw new ORPCError("CONFLICT", { message: "Setup plan changed; review it again." });
           return dto(await tx.setupPlan.findFirstOrThrow({ where: scope }));
         });
+      }),
+      testRun: authed.setupPlans.testRun.handler(async ({ context, input }) => {
+        const scope = { spaceId: context.actor.spaceId, userId: context.actor.userId };
+        const key = { ...scope, requestKey: input.requestKey };
+        const replay = async () => {
+          const prior = await deps.prisma.setupPlanTest.findFirst({ where: key });
+          if (!prior) return null;
+          if (prior.planId !== input.id || prior.planRevision !== input.expectedRevision)
+            throw new ORPCError("CONFLICT", { message: "Request key already used for another test." });
+          return { runId: prior.runId };
+        };
+        const prior = await replay();
+        if (prior) return prior;
+        const initial = await deps.prisma.setupPlan.findFirst({ where: { ...scope, id: input.id } });
+        if (!initial) throw new ORPCError("NOT_FOUND");
+        if (initial.status !== "configured" || !initial.routineId || initial.revision !== input.expectedRevision)
+          throw new ORPCError("CONFLICT", { message: "Setup plan changed; reload it." });
+        const target = await routineTestTarget(deps.prisma, repos, context.actor, initial.routineId);
+        const skills = await agentSkills.listWithContent(context.actor);
+        const prompt = expandSkillReferencesInPrompt(target.routine.prompt, skills);
+        if (context.stillAuthorized && !(await context.stillAuthorized()))
+          throw new ORPCError("UNAUTHORIZED");
+        let result: { runId: string; created: boolean };
+        try {
+          result = await deps.prisma.$transaction(async (tx) => {
+            const locked = await tx.$queryRaw<Array<{ id: string }>>`
+              SELECT id FROM setup_plans WHERE id = ${input.id}
+                AND "spaceId" = ${scope.spaceId} AND "userId" = ${scope.userId} FOR UPDATE`;
+            if (!locked.length) throw new ORPCError("NOT_FOUND");
+            const existing = await tx.setupPlanTest.findFirst({ where: key });
+            if (existing) {
+              if (existing.planId !== input.id || existing.planRevision !== input.expectedRevision)
+                throw new ORPCError("CONFLICT", { message: "Request key already used for another test." });
+              return { runId: existing.runId, created: false };
+            }
+            const plan = await tx.setupPlan.findFirstOrThrow({ where: { ...scope, id: input.id } });
+            if (plan.status !== "configured" || plan.revision !== input.expectedRevision ||
+                plan.routineId !== target.routine.id || plan.configuredFromRevision === null)
+              throw new ORPCError("CONFLICT", { message: "Setup plan changed; reload it." });
+            const run = await createRoutineTestRun(
+              tx, context.actor, target, prompt, `setup-test:${scope.userId}:${input.requestKey}`,
+            );
+            const effect = await tx.externalEffect.findFirst({
+              where: { runId: run.id, spaceId: scope.spaceId, kind: SETUP_SOURCE_TEST_KIND,
+                idempotencyKey: setupSourceTestKey(run.id) },
+              select: { id: true },
+            });
+            if (!effect) throw new ORPCError("CONFLICT", { message: "Routine changed; review the setup." });
+            await tx.setupPlanTest.create({ data: {
+              ...key, runId: run.id, planId: plan.id, planRevision: plan.revision,
+              configuredFromRevision: plan.configuredFromRevision,
+            } });
+            return { runId: run.id, created: true };
+          });
+        } catch (error) {
+          const existing = await replay();
+          if (existing) return existing;
+          throw error;
+        }
+        if (result.created)
+          await deps.jobs.enqueue(runContinueJob(result.runId)).catch((error) => {
+            getLogger().error("setup testRun enqueue", error);
+          });
+        return { runId: result.runId };
       }),
       propose: authed.setupPlans.propose.handler(async ({ context, input }) => {
         const scope = {

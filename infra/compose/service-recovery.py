@@ -16,6 +16,8 @@ def recovery_decision(container, previous, now, enabled=False, project=None):
     if labels.get("com.docker.compose.service") not in ("api", "worker", "web", "supervisor"):
         return "ignore", state
     if runtime.get("Status") != "running":
+        state["consecutiveFailures"] = 0
+        state.pop("unverifiedSince", None)
         return "alert", state
     health = runtime.get("Health", {}).get("Status")
     if health == "healthy":
@@ -24,6 +26,7 @@ def recovery_decision(container, previous, now, enabled=False, project=None):
         state["verifiedHealthyAt"] = now
         return "healthy", state
     if health != "unhealthy":
+        state["consecutiveFailures"] = 0
         # Missing or stuck-starting probes cannot establish recovery indefinitely.
         since = state.setdefault("unverifiedSince", now)
         return ("alert" if now - since >= 600 else "observe"), state

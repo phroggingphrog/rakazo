@@ -1,9 +1,9 @@
-import type { AdapterContext, ConnectorEvent } from "@rakazo/adapter-kit";
+import type { AdapterContext, ConnectorEvent, ConnectorProvider } from "@rakazo/adapter-kit";
 import { SETUP_SOURCE_TEST_KIND } from "@rakazo/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { executeSetupSourceTest, setupSourceTestInstruction } from "./setup-source-test.js";
 
-function fixture() {
+function fixture(connectorOverride?: ConnectorProvider) {
   const effect = {
     id: "effect",
     runId: "run",
@@ -73,7 +73,7 @@ function fixture() {
   const run = () =>
     executeSetupSourceTest({
       prisma: prisma as never,
-      connector: connector as never,
+      connector: connectorOverride ?? (connector as never),
       context,
       runId: "run",
       workerId: "worker",
@@ -84,7 +84,82 @@ function fixture() {
   return { state, effect, prisma, calls, run, authorize, finish };
 }
 
+function deeplyNestedSourceResult() {
+  let value: Record<string, unknown> = { label: "synthetic" };
+  for (let index = 0; index < 3000; index += 1) value = { child: value };
+  return { isError: false, content: [], structuredContent: value };
+}
+
 describe("setup source execution", () => {
+  it.each([
+    {
+      label: "an oversized MCP failure",
+      result: { isError: true, content: [{ type: "text", text: "x".repeat(5000) }] },
+      expected: "failed",
+    },
+    {
+      label: "an MCP failure with details",
+      result: { isError: true, details: { metadata: "synthetic" }, content: [] },
+      expected: "failed",
+    },
+    {
+      label: "an oversized successful read",
+      result: { isError: false, content: [{ type: "text", text: "x".repeat(5000) }] },
+      expected: "succeeded",
+    },
+    {
+      label: "an MCP failure whose protocol flag is redacted",
+      result: { isError: true, content: [] },
+      secret: "true",
+      expected: "failed",
+    },
+    {
+      label: "a source result that cannot be redacted safely",
+      result: deeplyNestedSourceResult(),
+      secret: "synthetic-secret",
+      expected: "uncertain",
+    },
+  ])(
+    "classifies $label through the connector and persisted source test",
+    async ({ result, expected, ...options }) => {
+      const { McpConnector } = await import("./mcp-connector.js");
+      const server = { id: "server", slug: "calendar", revision: 1 };
+      const connector = new McpConnector(
+        {
+          botMcpServer: {
+            findFirst: vi.fn(async () => ({
+              server,
+              serverId: "server",
+              allowAllTools: true,
+              allowedTools: [],
+            })),
+          },
+        } as never,
+        {} as never,
+        {
+          outputStore: {
+            store: vi.fn(async () => ({ receipt: "synthetic", preview: "synthetic" })),
+          } as never,
+        },
+      );
+      const internal = connector as unknown as {
+        withSession: (...args: unknown[]) => Promise<unknown>;
+        sessions: Map<string, unknown>;
+      };
+      vi.spyOn(internal, "withSession").mockImplementation(async (_server, context, run) => {
+        if ("secret" in options)
+          internal.sessions.set(
+            `server ${(context as AdapterContext).spaceId} ${(context as AdapterContext).userId}`,
+            { material: { secret: options.secret }, session: { close: async () => undefined } },
+          );
+        return (run as (session: unknown) => Promise<unknown>)({ callTool: async () => result });
+      });
+      const f = fixture(connector);
+      expect((await f.run())?.state).toBe(expected);
+      expect(f.effect.result).toMatchObject({ state: expected });
+    },
+  );
+
   it("separates returned source data from the instruction with a newline", () => {
     expect(setupSourceTestInstruction({ state: "succeeded", data: { value: 1 } })).toContain(
       'instructions:\n{"value":1}',
