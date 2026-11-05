@@ -37,6 +37,7 @@ import {
   clearRoutineBackoff,
   modelAccountRefusal,
 } from "./routine-backoff.js";
+import { assertNoUnresolvedEffects, UnverifiedExecutionError } from "./run-completion-evidence.js";
 import type { RunContext } from "./run-context.js";
 import { persistTurnCheckpoint } from "./run-context.js";
 import { renewRunLease, requeueComputerRun } from "./run-lifecycle.js";
@@ -796,6 +797,8 @@ export async function completeRun(ctx: RunContext) {
       ? botMessageOutcomeFromMidTurn(text, reply.midTurnUserTexts)
       : null;
   await ctx.settleRunningHelpers();
+  // Helpers may still be committing effects until settled; inspect the durable ledger last.
+  await assertNoUnresolvedEffects(deps.prisma, runId, run.routineId);
   const durableRoutineNotice = Boolean(
     deps.routineNotificationOutbox &&
       run.trigger === "routine" &&
@@ -922,6 +925,7 @@ export async function failRun(
   recordExplicitNoResponse(reply, reply.assistantTurnText);
   const partialText =
     ctx.scripted ||
+    error instanceof UnverifiedExecutionError ||
     ctx.state.handedOff ||
     reply.explicitNoResponse ||
     !runPromotesMidTurnNarration(run.trigger)
