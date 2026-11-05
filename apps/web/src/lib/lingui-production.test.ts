@@ -99,6 +99,7 @@ describe("production Lingui fallback", () => {
         return found!;
       };
       const heading = descriptor("Set up source monitor");
+      const notSet = descriptor("Not set");
       const state = descriptor("Setup changed; source not verified");
       const assignment = descriptor("Assignment saved");
       const name = descriptor("Assign MCP server “{name}”");
@@ -124,6 +125,7 @@ describe("production Lingui fallback", () => {
         "ja",
       ]) {
         i18n.loadAndActivate({ locale, messages: english });
+        expect(i18n._({ id: notSet.id })).toBe("Not set");
         expect(i18n._({ id: assignment.id })).toBe("Assignment saved");
         expect(i18n._({ id: state.id })).toBe("Setup changed; source not verified");
         expect(i18n._({ id: name.id, values: { name: "Mail" } })).toBe("Assign MCP server “Mail”");

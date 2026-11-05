@@ -11,7 +11,7 @@ vi.mock("@rakazo/db", async (original) => ({
 }));
 
 describe("existing integration approval RPC", () => {
-  it("preserves a restricted assignment and tells the continuation provider access is unverified", async () => {
+  it("preserves a restricted assignment and creates a durable assignment-only intent", async () => {
     const now = new Date();
     const assignment = {
       id: "assignment",
@@ -23,6 +23,7 @@ describe("existing integration approval RPC", () => {
       updatedAt: now,
     };
     const tx = {
+      $queryRaw: vi.fn(async () => [{ id: "thread" }]),
       message: {
         findMany: vi.fn(async () => [
           {
@@ -44,6 +45,10 @@ describe("existing integration approval RPC", () => {
       bot: { findFirst: vi.fn(async () => ({ id: "bot" })) },
       mcpServer: { findFirst: vi.fn(async () => ({ id: "server", name: "Mail" })) },
       botMcpServer: { upsert: vi.fn(async () => assignment) },
+      mcpApprovalContinuation: {
+        findFirst: vi.fn(async () => null),
+        upsert: vi.fn(async () => ({})),
+      },
       thread: { findFirst: vi.fn(async () => ({ id: "thread" })) },
       run: { findFirst: vi.fn(async () => null), create: vi.fn(async () => ({ id: "run" })) },
       task: { create: vi.fn(async (_arg: { data: { prompt: string } }) => ({ id: "task" })) },
@@ -73,9 +78,19 @@ describe("existing integration approval RPC", () => {
     });
     expect(result).toMatchObject({ allowAllTools: false, allowedTools: ["read"] });
     expect(tx.botMcpServer.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: {} }));
-    const prompt = tx.task.create.mock.calls[0]![0].data.prompt;
-    expect(prompt).toContain("restricted to its allowed tools");
-    expect(prompt).toContain("provider sign-in and tool availability have not been verified");
-    expect(prompt).not.toContain("tools are available now");
+    expect(tx.mcpApprovalContinuation.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          messageId: "message",
+          botId: "bot",
+          serverId: "server",
+          assignmentOnly: true,
+          decisionSeq: 1,
+        }),
+        update: {},
+      }),
+    );
+    expect(tx.task.create).not.toHaveBeenCalled();
+    expect(deps.jobs.enqueue).not.toHaveBeenCalled();
   });
 });

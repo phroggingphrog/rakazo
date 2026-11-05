@@ -13,6 +13,7 @@ import { phoneCallSettings } from "@rakazo/core";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 import { stopOnShutdownSignals } from "@rakazo/core/node/shutdown-signals";
 import { startWorkerHealth, watchEventLoopStalls } from "./health.js";
+import { workerReconcilerOptions } from "./reconciler-config.js";
 import { workerRoutineNotifications } from "./routine-notifications.js";
 import { createWorkerSecretStore } from "./secret-store.js";
 
@@ -387,47 +388,50 @@ async function main() {
     paymentWallet,
     notifications,
   });
-  const reconciler = createJobReconciler({
-    ...routineNotifications.reconciler,
-    prisma,
-    jobs,
-    events,
-    notifications,
-    leadership: createPostgresReconciliationLeadership(pool),
-    reconcileModelCredits: createModelCreditReconciler({
+  const reconciler = createJobReconciler(
+    {
+      ...routineNotifications.reconciler,
       prisma,
-      lookup: deploymentModelUsageLookup(),
-    }),
-    reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
-    reconcilePurchases: () => reconcilePurchases({ prisma, jobs, paymentWallet }),
-    reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
-    reconcileRoutineRetryNotices: inMemoryJobs
-      ? undefined
-      : createRoutineRetryNoticeReconciler(pool, (runId) =>
-          executor.notifyRoutineRetryAttemptsExhausted(runId),
-        ),
-    reconcileSecurityEventRetention: createSecurityEventPruner(
-      prisma,
-      securityEventRetentionDays(),
-    ),
-    reconcileAuditLog: createAuditLogReconciler(prisma, auditLogConfig()),
-    reconcileHomeStorage: async () => {
-      await homeStorageSweeper(home)?.();
-      await outputStore.sweepExpired({
-        operationId: "mcp-output-expiry",
-        traceId: "mcp-output-expiry",
-        spaceId: "system",
-        userId: "system",
-        signal: AbortSignal.timeout(30000),
-      });
+      jobs,
+      events,
+      notifications,
+      leadership: createPostgresReconciliationLeadership(pool),
+      reconcileModelCredits: createModelCreditReconciler({
+        prisma,
+        lookup: deploymentModelUsageLookup(),
+      }),
+      reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
+      reconcilePurchases: () => reconcilePurchases({ prisma, jobs, paymentWallet }),
+      reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
+      reconcileRoutineRetryNotices: inMemoryJobs
+        ? undefined
+        : createRoutineRetryNoticeReconciler(pool, (runId) =>
+            executor.notifyRoutineRetryAttemptsExhausted(runId),
+          ),
+      reconcileSecurityEventRetention: createSecurityEventPruner(
+        prisma,
+        securityEventRetentionDays(),
+      ),
+      reconcileAuditLog: createAuditLogReconciler(prisma, auditLogConfig()),
+      reconcileHomeStorage: async () => {
+        await homeStorageSweeper(home)?.();
+        await outputStore.sweepExpired({
+          operationId: "mcp-output-expiry",
+          traceId: "mcp-output-expiry",
+          spaceId: "system",
+          userId: "system",
+          signal: AbortSignal.timeout(30000),
+        });
+      },
+      reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
+      reconcileDeadJobs: inMemoryJobs ? undefined : createDeadJobPruner(pool),
+      reconcileLearningReviews: async () => {
+        await enqueueLearningReviewJobs({ prisma, jobs });
+      },
+      reconcileProactive: () => proactive.reconcile(),
     },
-    reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
-    reconcileDeadJobs: inMemoryJobs ? undefined : createDeadJobPruner(pool),
-    reconcileLearningReviews: async () => {
-      await enqueueLearningReviewJobs({ prisma, jobs });
-    },
-    reconcileProactive: () => proactive.reconcile(),
-  });
+    workerReconcilerOptions(process.env),
+  );
   let stopHealth: (() => Promise<void>) | undefined;
   let stopping = false;
   const stop = async () => {

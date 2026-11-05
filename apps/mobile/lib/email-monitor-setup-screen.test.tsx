@@ -242,6 +242,57 @@ afterEach(() => {
 });
 
 describe("native source monitor proposal", () => {
+  it("edits declared fields without losing complex arguments", async () => {
+    session.discover.mockResolvedValue({
+      status: "ok",
+      revision: 3,
+      tools: [
+        {
+          name: "read_mail",
+          inputSchema: {
+            type: "object",
+            required: ["start"],
+            properties: {
+              start: { type: "string" },
+              calendar: { type: "string", enum: ["", "primary"] },
+              includeCancelled: { type: "boolean" },
+              options: { type: "object" },
+            },
+          },
+        },
+      ],
+    });
+    await act(async () => input(container.querySelector("textarea")!, "Find appointments"));
+    await select("Integration", "server-1");
+    await click("Find read operations");
+    await select("Read operation", "read_mail");
+    const json = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Operation arguments (JSON object)"]',
+    )!;
+    await act(async () => input(json, '{"options":{"limit":5},"other":"keep"}'));
+    await act(async () =>
+      input(
+        container.querySelector<HTMLTextAreaElement>('textarea[aria-label="start"]')!,
+        "2026-11-05T09:00:00+11:00",
+      ),
+    );
+    await select("calendar", "2");
+    await select("includeCancelled", "false");
+    await click("Save draft");
+    expect(session.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        arguments: {
+          options: { limit: 5 },
+          other: "keep",
+          start: "2026-11-05T09:00:00+11:00",
+          calendar: "primary",
+          includeCancelled: false,
+        },
+      }),
+      null,
+    );
+  });
+
   it("lets the owner grant only the selected read after preview", async () => {
     await select("Integration", "server-1");
     await click("Find read operations");

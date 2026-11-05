@@ -78,6 +78,27 @@ describe("mobile i18n", () => {
     }
   });
 
+  it("translates notification retry and delivery guidance in every mobile locale", async () => {
+    const { resetI18nForTests, t } = await import("./i18n");
+    const { UI_LOCALES } = await import("./ui-locale");
+    const messages = [
+      "Retry notification",
+      "Notification delivery unknown. It will not be resent automatically because it may have arrived.",
+      "Could not confirm the notification was queued. Check history before trying again.",
+      "No available push recipient. Check phone notification permissions and reopen Rakazo on your phone.",
+    ];
+    for (const locale of UI_LOCALES) {
+      resetI18nForTests(locale);
+      for (const message of messages) {
+        const translated = t(message);
+        expect(translated.trim()).toBeTruthy();
+        expect(translated).not.toContain("\uFFFD");
+        if (locale === "en") expect(translated).toBe(message);
+        else expect(translated).not.toBe(message);
+      }
+    }
+  });
+
   it("translates seeded Chinese chrome and keeps interpolations", async () => {
     const { resetI18nForTests, t } = await import("./i18n");
     resetI18nForTests("zh-CN");

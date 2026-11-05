@@ -568,6 +568,7 @@ describe("thread cards", () => {
         <McpApprovalCard
           botId="bot-1"
           threadId="thread-1"
+          messageId="message-1"
           block={{
             kind: "mcp_approval",
             serverId: "server-1",
@@ -591,6 +592,7 @@ describe("thread cards", () => {
       botId: "bot-1",
       serverId: "server-1",
       threadId: "thread-1",
+      messageId: "message-1",
     });
     expect(container.textContent).toContain(
       "Assignment saved. Sign-in and provider access have not been verified.",

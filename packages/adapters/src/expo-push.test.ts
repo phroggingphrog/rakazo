@@ -52,6 +52,66 @@ describe("expo push tickets", () => {
 });
 
 describe("expo push", () => {
+  it("records no-recipient evidence without contacting Expo", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const evidence = vi.fn();
+    const result = await new ExpoPushProvider(new MemoryPushTokenStore()).deliver(
+      { kind: "completion", title: "done", body: "ok", botId: "b", threadId: "t" },
+      notifyContext,
+      undefined,
+      evidence,
+    );
+    expect(result).toBe("undeliverable");
+    expect(evidence).toHaveBeenCalledWith("no_recipient");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("records a definite device rejection only for an unambiguous single error ticket", async () => {
+    const tokens = new MemoryPushTokenStore();
+    await tokens.save("user-1", "ExponentPushToken[test]");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({ data: { status: "error", details: { error: "DeviceNotRegistered" } } }),
+      ),
+    );
+    const evidence = vi.fn();
+    const result = await new ExpoPushProvider(tokens).deliver(
+      { kind: "completion", title: "done", body: "ok", botId: "b", threadId: "t" },
+      notifyContext,
+      undefined,
+      evidence,
+    );
+    expect(result).toBe("undeliverable");
+    expect(evidence).toHaveBeenCalledWith("device_rejected");
+  });
+  it.each([
+    { data: { status: "ok", id: "accepted", details: { error: "DeviceNotRegistered" } } },
+    { data: [{ status: "error", details: { error: "DeviceNotRegistered" } }, null] },
+    { data: { status: "error", id: "accepted", details: { error: "DeviceNotRegistered" } } },
+    {
+      data: { status: "error", details: { error: "DeviceNotRegistered" } },
+      errors: [{ message: "ambiguous" }],
+    },
+  ])("does not classify a contradictory rejection as definitely unsent", async (body) => {
+    const tokens = new MemoryPushTokenStore();
+    await tokens.save("user-1", "ExponentPushToken[test]");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(body)),
+    );
+    const evidence = vi.fn();
+    await expect(
+      new ExpoPushProvider(tokens).deliver(
+        { kind: "completion", title: "done", body: "ok", botId: "b", threadId: "t" },
+        notifyContext,
+        undefined,
+        evidence,
+      ),
+    ).rejects.toThrow("uncertain");
+    expect(evidence).not.toHaveBeenCalled();
+    expect(await loadPushToken(tokens, "user-1")).toBe("ExponentPushToken[test]");
+  });
   it("does not call Expo when the user has no token", async () => {
     const tokens = new MemoryPushTokenStore();
     const fetchMock = vi.fn();

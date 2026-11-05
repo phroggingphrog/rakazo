@@ -5,7 +5,7 @@ import {
   setupSourceTestKey,
 } from "@rakazo/contracts";
 import { availableInSpace, type PrismaClient } from "@rakazo/db";
-import { redactConnectorPayload } from "./connector-safety.js";
+import { redactConnectorPayloadStrict } from "./connector-safety.js";
 import { MCP_OUTPUT_LIMITS } from "./mcp-output-store.js";
 import { toolResultError } from "./tool-result-error.js";
 
@@ -153,7 +153,7 @@ export async function executeSetupSourceTest(input: {
           outcome = { state: "failed" };
           break;
         }
-        const serialized = JSON.stringify(redactConnectorPayload(event.data, secrets));
+        const serialized = JSON.stringify(redactConnectorPayloadStrict(event.data, secrets));
         if (serialized === undefined) break;
         const bytes = Buffer.from(serialized);
         const data =

@@ -10,6 +10,8 @@ import type { PoolClient } from "pg";
 import { returnBotMessageOutcome } from "./bot-messages.js";
 import { reconcileCallRequests } from "./call-request.js";
 import { scheduleComputerControlExpiry } from "./computer-control.js";
+import type { McpContinuationCursor } from "./mcp-approval-continuations.js";
+import { reconcileMcpApprovalContinuations } from "./mcp-approval-continuations.js";
 import { findRunRecoveryBlockers } from "./run-recovery.js";
 import { reconcileStuckWork } from "./stuck-work.js";
 import { isLoopGuardStopText } from "./tool-loop.js";
@@ -19,6 +21,14 @@ const DEFAULT_INTERVAL_MS = 30_000;
 const DEFAULT_BATCH_SIZE = 100;
 const ROUTINE_LOOKAHEAD_MS = 60_000;
 const CONTROL_LOOKAHEAD_MS = 60_000;
+
+/** Hold new approval continuations while retaining the approval-aware API and schema. */
+export function mcpContinuationScanEnabledFromEnv(env: NodeJS.ProcessEnv): boolean {
+  const value = env.MCP_APPROVAL_CONTINUATION_SCAN_ENABLED?.trim();
+  if (!value || value === "true") return true;
+  if (value === "false") return false;
+  throw new Error("MCP_APPROVAL_CONTINUATION_SCAN_ENABLED must be true or false");
+}
 /**
  * A queued run's job lock older than a run lease is abandoned. A live worker
  * finishing a failed attempt holds it for seconds before Graphile unlocks it.
@@ -127,7 +137,12 @@ export function createJobReconciler(
     reconcileProactive?: () => Promise<void>;
     reconcileLearningReviews?: () => Promise<void>;
   },
-  options: { intervalMs?: number; batchSize?: number; maxPagesPerPass?: number } = {},
+  options: {
+    intervalMs?: number;
+    batchSize?: number;
+    maxPagesPerPass?: number;
+    mcpContinuationScanEnabled?: boolean;
+  } = {},
 ) {
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
@@ -141,6 +156,7 @@ export function createJobReconciler(
   let reconciling: Promise<void> | undefined;
   let lastCompletedAt = Date.now();
   let stuckCursor: Cursor | undefined;
+  let mcpContinuationCursor: McpContinuationCursor | undefined;
   let runCursor: Cursor | undefined;
   let routineCursor: Cursor | undefined;
   let controlCursor: ControlCursor | undefined;
@@ -174,6 +190,17 @@ export function createJobReconciler(
       for (const result of auxiliary) {
         if (result.status === "rejected")
           getLogger().error("auxiliary reconciliation", result.reason);
+      }
+
+      try {
+        mcpContinuationCursor = await reconcileMcpApprovalContinuations(
+          deps.prisma,
+          batchSize,
+          mcpContinuationCursor,
+          options.mcpContinuationScanEnabled ?? true,
+        );
+      } catch (error) {
+        getLogger().error("MCP approval continuation scan", error);
       }
 
       const now = new Date();

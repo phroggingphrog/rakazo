@@ -24,6 +24,7 @@ model AiDataConsent {
 model User {
   aiDataConsents AiDataConsent[]
   setupPlans SetupPlan[]
+  setupPlanTests SetupPlanTest[]
   id                          String                       @id
   name                        String
   email                       String
@@ -375,6 +376,7 @@ model Member {
 model Space {
   aiDataConsents              AiDataConsent[]
   setupPlans                  SetupPlan[]
+  setupPlanTests              SetupPlanTest[]
   id                          String                       @id
   organizationId              String
   organization                Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -898,6 +900,7 @@ model Message {
   externalTranscriptFor  ExternalMessage?
   steeringMessages SteeringMessage[]
   routineNotification RoutineNotificationIntent?
+  mcpApprovalContinuations McpApprovalContinuation[]
   createdAt        DateTime  @default(now())
 
   @@unique([threadId, seq])
@@ -994,6 +997,8 @@ model Run {
   steeringMessages     SteeringMessage[]
   externalMessage      ExternalMessage?
   routineNotification  RoutineNotificationIntent?
+  mcpApprovalContinuation McpApprovalContinuation?
+  setupPlanTest        SetupPlanTest?
 
   @@unique([spaceId, clientNonce])
   @@index([status, wakeAt])
@@ -1039,6 +1044,33 @@ model RoutineNotificationIntent {
   @@index([spaceId, userId])
   @@index([receiptStatus, receiptCheckAt])
   @@map("routine_notification_intents")
+}
+
+/// An approved connection waiting for its chat's current work to finish.
+model McpApprovalContinuation {
+  id             String   @id @default(cuid())
+  spaceId        String
+  userId         String
+  threadId       String
+  botId          String
+  serverId       String
+  messageId      String
+  message        Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  assignmentOnly Boolean  @default(false)
+  decisionSeq    Int      @default(0)
+  status         String   @default("pending")
+  runId          String?  @unique
+  run            Run?     @relation(fields: [runId], references: [id], onDelete: SetNull)
+  materializedAt DateTime?
+  cancelledAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([messageId, botId, serverId, decisionSeq], map: "mcp_approval_continuations_occurrence_key")
+  @@index([status, createdAt, id], map: "mcp_approval_continuations_status_created_id_idx")
+  @@index([spaceId, userId, threadId, botId, status], map: "mcp_approval_continuations_owner_thread_bot_status_idx")
+  @@index([threadId, botId, status, decisionSeq, id], map: "mcp_approval_continuations_thread_order_idx")
+  @@map("mcp_approval_continuations")
 }
 
 model SteeringMessage {
@@ -1247,6 +1279,7 @@ model SetupPlan {
   draft                  Json
   routineId              String?  @unique
   routine                Routine? @relation(fields: [routineId], references: [id], onDelete: SetNull)
+  tests                  SetupPlanTest[]
   configureRequestKey    String?
   configuredFromRevision Int?
   configuredPrompt       String?
@@ -1256,6 +1289,26 @@ model SetupPlan {
   @@unique([spaceId, userId, requestKey])
   @@index([spaceId, userId, updatedAt])
   @@map("setup_plans")
+}
+
+/// Historical association only; no current access or activation verification is implied.
+model SetupPlanTest {
+  runId                  String    @id
+  run                    Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  planId                 String
+  plan                   SetupPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  spaceId                String
+  space                  Space     @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId                 String
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestKey             String
+  planRevision           Int
+  configuredFromRevision Int
+  createdAt              DateTime  @default(now())
+
+  @@unique([spaceId, userId, requestKey])
+  @@index([planId, createdAt])
+  @@map("setup_plan_tests")
 }
 
 model ScratchpadItem {

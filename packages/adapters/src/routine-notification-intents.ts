@@ -102,7 +102,14 @@ export async function reconcileRoutineNotificationIntents(deps: {
       });
       if (claimed.count !== 1) return;
       const settle = (
-        status: "accepted" | "undeliverable" | "uncertain" | "cancelled" | "blocked",
+        status:
+          | "accepted"
+          | "undeliverable"
+          | "no_recipient"
+          | "device_rejected"
+          | "uncertain"
+          | "cancelled"
+          | "blocked",
         phase: "preparing" | "submitting" = "preparing",
       ) =>
         prisma.routineNotificationIntent.updateMany({
@@ -235,6 +242,7 @@ export async function reconcileRoutineNotificationIntents(deps: {
         if (!dispatched) return;
         submissionStarted = true;
         if (notifications instanceof ExpoPushProvider) {
+          let definitelyUnsent: "no_recipient" | "device_rejected" | undefined;
           const result = await notifications.deliver(
             message,
             context,
@@ -263,8 +271,12 @@ export async function reconcileRoutineNotificationIntents(deps: {
               if (saved.count !== 1)
                 throw new Error("Notification claim expired after acceptance.");
             },
+            (reason) => {
+              definitelyUnsent = reason;
+            },
           );
-          if (result === "undeliverable") await settle("undeliverable", "submitting");
+          if (result === "undeliverable")
+            await settle(definitelyUnsent ?? "undeliverable", "submitting");
         } else {
           await notifications.send(message, context);
           // The generic provider exposes no acceptance or receipt evidence.

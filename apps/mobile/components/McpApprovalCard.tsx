@@ -31,12 +31,14 @@ const styles = StyleSheet.create({
 export function McpApprovalCard({
   botId,
   threadId,
+  messageId,
   block,
   accessibilityActions,
   onAccessibilityAction,
 }: {
   botId: string;
   threadId?: string;
+  messageId?: string;
   block: Extract<MessageBlock, { kind: "mcp_approval" }>;
   accessibilityActions?: ViewProps["accessibilityActions"];
   onAccessibilityAction?: ViewProps["onAccessibilityAction"];
@@ -60,9 +62,19 @@ export function McpApprovalCard({
     setPendingAction(action);
     try {
       if (action === "approve") {
-        await rpc("mcp/assignments/approve", { botId, serverId: block.serverId, threadId });
+        await rpc("mcp/assignments/approve", {
+          botId,
+          serverId: block.serverId,
+          threadId,
+          messageId,
+        });
       } else {
-        await rpc("mcp/assignments/dismiss", { botId, serverId: block.serverId, threadId });
+        await rpc("mcp/assignments/dismiss", {
+          botId,
+          serverId: block.serverId,
+          threadId,
+          messageId,
+        });
       }
       setLocalStatus(action === "approve" ? "connected" : "dismissed");
     } catch (reason) {

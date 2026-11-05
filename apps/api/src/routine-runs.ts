@@ -19,10 +19,15 @@ function notificationStatus(
     case "pending":
     case "submitting":
     case "uncertain":
-    case "undeliverable":
     case "cancelled":
     case "blocked":
       return intent.status;
+    case "undeliverable":
+      // Older workers did not retain enough evidence to rule out acceptance.
+      return "uncertain";
+    case "no_recipient":
+    case "device_rejected":
+      return "undeliverable";
     case "accepted":
       if (intent.receiptStatus === "ok") return "expo_receipt_ok";
       if (intent.receiptStatus === "error" || intent.receiptStatus === "device_not_registered")
@@ -57,6 +62,55 @@ function sourceTestStatus(
   return "uncertain";
 }
 
+/** Requeue only an owner-selected intent with evidence that no push was accepted. */
+export async function retryRoutineNotification(
+  prisma: PrismaClient,
+  actor: Actor,
+  routineId: string,
+  runId: string,
+): Promise<{ ok: true }> {
+  const result = await prisma.routineNotificationIntent.updateMany({
+    where: {
+      runId,
+      spaceId: actor.spaceId,
+      userId: actor.userId,
+      messageId: { not: null },
+      claimToken: null,
+      receiptTicketId: null,
+      receiptStatus: null,
+      OR: [
+        { status: "no_recipient" },
+        { status: "device_rejected" },
+        {
+          status: "blocked",
+          preSubmitFailures: { gte: ROUTINE_NOTIFICATION_PRE_SUBMIT_MAX_FAILURES },
+        },
+      ],
+      run: {
+        is: {
+          routineId,
+          spaceId: actor.spaceId,
+          userId: actor.userId,
+          trigger: "routine",
+          status: "completed",
+          routine: { is: { notify: true } },
+          bot: { is: { archivedAt: null } },
+          OR: [
+            { bot: { is: { notifyOnFinish: true } } },
+            { thread: { is: { groupId: { not: null } } } },
+          ],
+        },
+      },
+    },
+    data: { status: "pending", preSubmitFailures: 0, nextPreSubmitAttemptAt: null },
+  });
+  if (result.count !== 1)
+    throw new ORPCError("CONFLICT", {
+      message: "This notification cannot be retried. Refresh its history.",
+    });
+  return { ok: true };
+}
+
 export async function listRoutineRuns(
   prisma: PrismaClient,
   actor: Actor,
@@ -71,7 +125,7 @@ export async function listRoutineRuns(
       userId: actor.userId,
       bot: { archivedAt: null },
     },
-    select: { botId: true },
+    select: { botId: true, notify: true, bot: { select: { notifyOnFinish: true } } },
   });
   if (!routine) throw new ORPCError("NOT_FOUND");
 
@@ -96,12 +150,20 @@ export async function listRoutineRuns(
       threadId: true,
       thread: { select: { groupId: true } },
       status: true,
+      trigger: true,
       error: true,
       createdAt: true,
       startedAt: true,
       completedAt: true,
       routineNotification: {
-        select: { status: true, receiptStatus: true, preSubmitFailures: true },
+        select: {
+          status: true,
+          receiptStatus: true,
+          receiptTicketId: true,
+          claimToken: true,
+          preSubmitFailures: true,
+          messageId: true,
+        },
       },
       effects: {
         where: { kind: { in: [SETUP_SOURCE_TEST_KIND, SETUP_SOURCE_UNBOUND_KIND] } },
@@ -145,6 +207,21 @@ export async function listRoutineRuns(
       notificationRetryExhausted:
         run.routineNotification?.status === "blocked" &&
         run.routineNotification.preSubmitFailures >= ROUTINE_NOTIFICATION_PRE_SUBMIT_MAX_FAILURES,
+      notificationCanRetry: Boolean(
+        routine.notify &&
+          (routine.bot.notifyOnFinish || run.thread.groupId) &&
+          run.status === "completed" &&
+          run.trigger === "routine" &&
+          run.routineNotification?.messageId &&
+          !run.routineNotification.claimToken &&
+          !run.routineNotification.receiptStatus &&
+          !run.routineNotification.receiptTicketId &&
+          (run.routineNotification.status === "no_recipient" ||
+            run.routineNotification.status === "device_rejected" ||
+            (run.routineNotification.status === "blocked" &&
+              run.routineNotification.preSubmitFailures >=
+                ROUTINE_NOTIFICATION_PRE_SUBMIT_MAX_FAILURES)),
+      ),
       botId: run.botId,
       groupId: run.thread.groupId,
       status: run.status as RoutineRun["status"],

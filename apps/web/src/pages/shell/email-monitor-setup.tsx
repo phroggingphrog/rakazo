@@ -1,8 +1,14 @@
 import { Trans, useLingui } from "@lingui/react/macro";
-import { type McpServer, type RoutineRun, SetupOperationArgumentsSchema } from "@rakazo/contracts";
+import {
+  type McpServer,
+  type RoutineRun,
+  SetupOperationArgumentsSchema,
+  setupArgumentFields,
+  updateSetupArgumentText,
+} from "@rakazo/contracts";
 import type { CronPreset } from "@rakazo/core";
 import { cronFromPreset, defaultCronPreset, presetFromCron } from "@rakazo/core";
-import { Button, NativeSelect, NativeSelectOption, Textarea } from "@rakazo/ui-web";
+import { Button, Input, NativeSelect, NativeSelectOption, Textarea } from "@rakazo/ui-web";
 import { useEffect, useId, useRef, useState } from "react";
 import { localTimezone } from "../../lib/local-timezone";
 import type { createSpaceRpc } from "../../lib/rpc";
@@ -286,6 +292,15 @@ export function EmailMonitorSetup({
     }
   }
   const argumentSchema = catalog?.tools.find((tool) => tool.name === toolName)?.inputSchema;
+  const guidedFields = setupArgumentFields(argumentSchema).filter((field) => {
+    const value = parsedArguments?.[field.name];
+    return (
+      value === undefined ||
+      (field.kind === "boolean"
+        ? typeof value === "boolean"
+        : typeof value === "string" && (field.kind !== "choice" || field.choices.includes(value)))
+    );
+  });
   const argumentFields = argumentSchema?.properties;
   const requiredFields = Array.isArray(argumentSchema?.required)
     ? argumentSchema.required
@@ -317,6 +332,11 @@ export function EmailMonitorSetup({
     prerequisites.selectedTool === "allowed" &&
     candidates?.status === "ok" &&
     candidates.selectedOperation === "declared_read";
+
+  function changeArgument(name: string, value: string | boolean | undefined) {
+    setArgumentText((current) => updateSetupArgumentText(current, name, value) ?? current);
+    clearCheck();
+  }
 
   async function findOperations() {
     if (!serverId) return;
@@ -690,6 +710,104 @@ export function EmailMonitorSetup({
         ) : null}
         {toolName ? (
           <div className="text-sm">
+            {guidedFields.length ? (
+              <div className="mb-3 space-y-3">
+                {guidedFields.map((field, index) => {
+                  const value = parsedArguments?.[field.name];
+                  const fieldId = `${id}-argument-${index}`;
+                  const hasValue = value !== undefined;
+                  return (
+                    <div key={field.name} className="space-y-1">
+                      <label htmlFor={fieldId} className="break-all">
+                        {field.name}
+                        {field.required ? " *" : ""}
+                      </label>
+                      {field.description ? (
+                        <p
+                          id={`${fieldId}-description`}
+                          className="break-words text-muted-foreground"
+                        >
+                          {field.description}
+                        </p>
+                      ) : null}
+                      {field.kind === "string" ? (
+                        <div className="flex gap-2">
+                          <Input
+                            id={fieldId}
+                            className="min-h-11 min-w-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                            value={typeof value === "string" ? value : ""}
+                            maxLength={2048}
+                            aria-required={field.required}
+                            aria-describedby={
+                              field.description ? `${fieldId}-description` : undefined
+                            }
+                            disabled={invalidArguments}
+                            onChange={(event) => changeArgument(field.name, event.target.value)}
+                          />
+                          {hasValue ? (
+                            <Button
+                              variant="ghost"
+                              className="min-h-11 shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                              aria-label={`${t`Remove`} ${field.name}`}
+                              disabled={invalidArguments}
+                              onClick={() => changeArgument(field.name, undefined)}
+                            >
+                              <Trans>Remove</Trans>
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <NativeSelect
+                          id={fieldId}
+                          size="sm"
+                          className="w-full [&_select[data-size=sm]]:h-11"
+                          aria-required={field.required}
+                          aria-describedby={
+                            field.description ? `${fieldId}-description` : undefined
+                          }
+                          disabled={invalidArguments}
+                          value={
+                            field.kind === "boolean"
+                              ? typeof value === "boolean"
+                                ? String(value)
+                                : ""
+                              : typeof value === "string"
+                                ? String(field.choices.indexOf(value) + 1)
+                                : ""
+                          }
+                          onChange={(event) =>
+                            changeArgument(
+                              field.name,
+                              !event.target.value
+                                ? undefined
+                                : field.kind === "boolean"
+                                  ? event.target.value === "true"
+                                  : field.choices[Number(event.target.value) - 1],
+                            )
+                          }
+                        >
+                          <NativeSelectOption value="">
+                            <Trans>Not set</Trans>
+                          </NativeSelectOption>
+                          {field.kind === "boolean" ? (
+                            <>
+                              <NativeSelectOption value="true">true</NativeSelectOption>
+                              <NativeSelectOption value="false">false</NativeSelectOption>
+                            </>
+                          ) : (
+                            field.choices.map((choice, choiceIndex) => (
+                              <NativeSelectOption key={choice} value={String(choiceIndex + 1)}>
+                                {choice || '""'}
+                              </NativeSelectOption>
+                            ))
+                          )}
+                        </NativeSelect>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
             <label htmlFor={`${id}-arguments`}>
               <Trans>Operation arguments (JSON object)</Trans>
             </label>

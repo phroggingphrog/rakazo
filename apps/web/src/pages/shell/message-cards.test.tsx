@@ -66,6 +66,7 @@ it("approves the bot after OAuth completes while a COOP popup keeps focus", asyn
         <McpApprovalCard
           botId="bot"
           threadId="thread"
+          messageId="message"
           block={{
             kind: "mcp_approval",
             name: "Example",
@@ -90,6 +91,7 @@ it("approves the bot after OAuth completes while a COOP popup keeps focus", asyn
       botId: "bot",
       serverId: "server",
       threadId: "thread",
+      messageId: "message",
     });
     expect(host.textContent).toContain("Connected");
     expect(vi.getTimerCount()).toBe(0);
@@ -109,6 +111,7 @@ it("labels an existing server assignment without claiming provider access", asyn
         <McpApprovalCard
           botId="bot"
           threadId="thread"
+          messageId="message"
           block={{
             kind: "mcp_approval",
             name: "Example",
@@ -129,6 +132,7 @@ it("labels an existing server assignment without claiming provider access", asyn
       botId: "bot",
       serverId: "server",
       threadId: "thread",
+      messageId: "message",
     });
     expect(calls.oauthBegin).not.toHaveBeenCalled();
     expect(host.textContent).toContain("Assignment saved");

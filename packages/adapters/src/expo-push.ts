@@ -179,9 +179,13 @@ export class ExpoPushProvider implements NotificationProvider {
     message: NotificationMessage,
     context: AdapterContext,
     onAccepted?: (ticketId: string, tokenDigest: string) => Promise<void>,
+    onDefinitelyUnsent?: (reason: "no_recipient" | "device_rejected") => void,
   ): Promise<ExpoPushDelivery> {
     const token = await this.deliverableToken(context.userId);
-    if (!token) return "undeliverable";
+    if (!token) {
+      onDefinitelyUnsent?.("no_recipient");
+      return "undeliverable";
+    }
     const payload = {
       to: token,
       title: capped(message.title, MAX_PUSH_TITLE_CHARS),
@@ -215,6 +219,7 @@ export class ExpoPushProvider implements NotificationProvider {
       )
         throw new ExpoPushUncertainError("contradictory rejection response");
       await this.tokens.remove(context.userId, credentialDigest(token));
+      onDefinitelyUnsent?.("device_rejected");
       return "undeliverable";
     }
     const failure =

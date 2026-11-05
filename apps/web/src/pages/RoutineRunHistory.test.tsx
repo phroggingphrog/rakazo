@@ -9,7 +9,7 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
 
-const routines = vi.hoisted(() => ({ history: vi.fn() }));
+const routines = vi.hoisted(() => ({ history: vi.fn(), retryNotification: vi.fn() }));
 const threads = vi.hoisted(() => ({ get: () => new Promise(() => {}) }));
 vi.mock("../lib/rpc", () => ({
   rpc: { routines, threads },
@@ -64,6 +64,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   routines.history.mockReset();
+  routines.retryNotification.mockReset();
 });
 
 async function mounted({
@@ -126,6 +127,81 @@ it("explains when notification preparation retries are exhausted", async () => {
     await view.close();
   }
 });
+
+it("requeues only when the owner clicks an eligible notification", async () => {
+  routines.history.mockResolvedValue(
+    page([{ ...run, notification: "undeliverable", notificationCanRetry: true }]),
+  );
+  routines.retryNotification.mockResolvedValue({ ok: true });
+  const view = await mounted();
+  try {
+    await view.settled(() => expect(view.button("Retry notification")).toBeDefined());
+    expect(routines.retryNotification).not.toHaveBeenCalled();
+    await act(async () => view.button("Retry notification")!.click());
+    expect(routines.retryNotification).toHaveBeenCalledOnce();
+    expect(routines.retryNotification).toHaveBeenCalledWith({
+      routineId: "routine-1",
+      runId: "run-1",
+    });
+  } finally {
+    await view.close();
+  }
+});
+
+it("does not claim a retry failed when its response is lost", async () => {
+  routines.history.mockResolvedValue(
+    page([{ ...run, notification: "undeliverable", notificationCanRetry: true }]),
+  );
+  routines.retryNotification.mockRejectedValue(new Error("connection lost"));
+  const view = await mounted();
+  try {
+    await view.settled(() => expect(view.button("Retry notification")).toBeDefined());
+    await act(async () => view.button("Retry notification")!.click());
+    expect(view.container.textContent).toContain(
+      "Could not confirm the notification was queued. Check history before trying again.",
+    );
+  } finally {
+    await view.close();
+  }
+});
+
+it("handles a synchronous retry failure and refreshes history", async () => {
+  routines.history.mockResolvedValue(
+    page([{ ...run, notification: "undeliverable", notificationCanRetry: true }]),
+  );
+  routines.retryNotification.mockImplementation(() => {
+    throw new Error("not connected");
+  });
+  const view = await mounted();
+  try {
+    await view.settled(() => expect(view.button("Retry notification")).toBeDefined());
+    await act(async () => view.button("Retry notification")!.click());
+    expect(view.container.textContent).toContain(
+      "Could not confirm the notification was queued. Check history before trying again.",
+    );
+    expect(routines.history.mock.calls.length).toBeGreaterThan(1);
+    expect(view.button("Retry notification")?.disabled).toBe(false);
+  } finally {
+    await view.close();
+  }
+});
+
+it.each(["uncertain", "undeliverable"] as const)(
+  "does not offer retry for %s without proof",
+  async (notification) => {
+    routines.history.mockResolvedValue(
+      page([{ ...run, notification, notificationCanRetry: false }]),
+    );
+    const view = await mounted();
+    try {
+      await view.settled(() => expect(view.rows()).toHaveLength(1));
+      expect(view.button("Retry notification")).toBeUndefined();
+      expect(routines.retryNotification).not.toHaveBeenCalled();
+    } finally {
+      await view.close();
+    }
+  },
+);
 
 it.each([
   ["unknown", "Notification status unknown"],

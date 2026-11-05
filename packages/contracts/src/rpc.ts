@@ -507,6 +507,15 @@ export const appContract = {
       .input(z.object({ requestKey: z.uuid(), draft: SetupPlanDraftSchema }).strict())
       .output(SetupPlanSchema),
     get: oc.input(z.object({ id: Id }).strict()).output(SetupPlanSchema),
+    /** Historical request metadata only; it does not establish current access or success. */
+    latestTest: oc.input(z.object({ id: Id }).strict()).output(
+      z.object({
+        runId: Id,
+        planRevision: SetupPlanRevisionSchema,
+        configuredFromRevision: SetupPlanRevisionSchema,
+        createdAt: z.string(),
+      }).strict().nullable(),
+    ),
     prerequisites: oc
       .input(z.object({ id: Id, expectedRevision: SetupPlanRevisionSchema }).strict())
       .output(SetupPlanPrerequisitesSchema),
@@ -541,6 +550,11 @@ export const appContract = {
           .strict(),
       )
       .output(SetupPlanSchema),
+    testRun: oc
+      .input(
+        z.object({ id: Id, expectedRevision: SetupPlanRevisionSchema, requestKey: z.uuid() }).strict(),
+      )
+      .output(z.object({ runId: Id })),
   },
   bots: {
     proactiveConfigure: oc
@@ -878,6 +892,9 @@ export const appContract = {
         }),
       )
       .output(RoutineHistorySchema),
+    retryNotification: oc
+      .input(z.object({ routineId: Id, runId: Id }).strict())
+      .output(z.object({ ok: z.literal(true) })),
     create: oc.input(CreateRoutineInput).output(RoutineSchema),
     update: oc
       .input(
@@ -1133,10 +1150,14 @@ export const appContract = {
       list: oc.input(botId).output(z.array(BotMcpServerSchema)),
       all: oc.output(z.array(BotMcpServerSchema)),
       approve: oc
-        .input(z.object({ botId: Id, serverId: Id, threadId: Id.optional() }))
+        .input(
+          z.object({ botId: Id, serverId: Id, threadId: Id.optional(), messageId: Id.optional() }),
+        )
         .output(BotMcpServerSchema),
       dismiss: oc
-        .input(z.object({ botId: Id, serverId: Id, threadId: Id.optional() }))
+        .input(
+          z.object({ botId: Id, serverId: Id, threadId: Id.optional(), messageId: Id.optional() }),
+        )
         .output(z.object({ ok: z.literal(true) })),
       replace: oc
         .input(

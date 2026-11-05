@@ -7091,6 +7091,18 @@ msgstr "Allow selected read"
 msgid "Selected read is allowed in bot settings."
 msgstr "Selected read is allowed in bot settings."
 
+#: src/pages/RoutineRunHistory.tsx
+msgid "Retry notification"
+msgstr "Retry notification"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Notification delivery unknown. It will not be resent automatically because it may have arrived."
+msgstr "Notification delivery unknown. It will not be resent automatically because it may have arrived."
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Could not confirm the notification was queued. Check history before trying again."
+msgstr "Could not confirm the notification was queued. Check history before trying again."
+
 #: src/pages/shell/email-monitor-setup.tsx
 msgid "Set up source monitor"
 msgstr "Set up source monitor"
@@ -7106,3 +7118,11 @@ msgstr "Saving a proposal does not start a routine or read the source."
 #: src/pages/shell/email-monitor-setup.tsx
 msgid "Source access and permissions have not been verified. No read was performed."
 msgstr "Source access and permissions have not been verified. No read was performed."
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "No available push recipient. Check phone notification permissions and reopen Rakazo on your phone."
+msgstr "No available push recipient. Check phone notification permissions and reopen Rakazo on your phone."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Not set"
+msgstr "Not set"

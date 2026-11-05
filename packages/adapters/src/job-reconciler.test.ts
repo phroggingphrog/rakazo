@@ -4,7 +4,11 @@ import type { Pool, PrismaClient, ThreadEvents } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
 import { returnBotMessageOutcome } from "./bot-messages.js";
 import type { ReconciliationLeadership } from "./job-reconciler.js";
-import { createJobReconciler, createPostgresReconciliationLeadership } from "./job-reconciler.js";
+import {
+  createJobReconciler,
+  createPostgresReconciliationLeadership,
+  mcpContinuationScanEnabledFromEnv,
+} from "./job-reconciler.js";
 import { loopGuardStopText } from "./tool-loop.js";
 
 vi.mock("./bot-messages.js", () => ({ returnBotMessageOutcome: vi.fn() }));
@@ -39,6 +43,7 @@ function fakePrisma(
 ) {
   return {
     computerExecutionLease: { findMany: vi.fn(async () => []) },
+    mcpApprovalContinuation: { findMany: vi.fn(async () => []) },
     message: { findMany: vi.fn(async () => []) },
     run: { findMany: vi.fn(async () => runs) },
     routine: { findMany: vi.fn(async () => routines) },
@@ -56,6 +61,38 @@ function deferred() {
 }
 
 describe("createJobReconciler", () => {
+  it("holds approval continuations without stopping ordinary run recovery", async () => {
+    const prisma = fakePrisma([{ id: "run-1", status: "queued", updatedAt: new Date() }]);
+    const { jobs, enqueue } = publisher();
+    await createJobReconciler(
+      { prisma, jobs },
+      { mcpContinuationScanEnabled: false },
+    ).reconcileOnce();
+    expect(prisma.mcpApprovalContinuation.findMany).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "run.continue",
+        payload: { runId: "run-1" },
+      }),
+    );
+  });
+
+  it("parses the startup hold explicitly and rejects an invalid setting", () => {
+    expect(mcpContinuationScanEnabledFromEnv({})).toBe(true);
+    expect(mcpContinuationScanEnabledFromEnv({ MCP_APPROVAL_CONTINUATION_SCAN_ENABLED: "" })).toBe(
+      true,
+    );
+    expect(
+      mcpContinuationScanEnabledFromEnv({ MCP_APPROVAL_CONTINUATION_SCAN_ENABLED: "true" }),
+    ).toBe(true);
+    expect(
+      mcpContinuationScanEnabledFromEnv({ MCP_APPROVAL_CONTINUATION_SCAN_ENABLED: "false" }),
+    ).toBe(false);
+    expect(() =>
+      mcpContinuationScanEnabledFromEnv({ MCP_APPROVAL_CONTINUATION_SCAN_ENABLED: "off" }),
+    ).toThrow("MCP_APPROVAL_CONTINUATION_SCAN_ENABLED");
+  });
+
   it("continues the main scans when an auxiliary reconciler fails", async () => {
     const prisma = fakePrisma();
     const { jobs } = publisher();
@@ -77,6 +114,7 @@ describe("createJobReconciler", () => {
     expect(reconcileCloudAgents).toHaveBeenCalledOnce();
     expect(reconcileComputerUpdates).toHaveBeenCalledOnce();
     expect(prisma.run.findMany).toHaveBeenCalled();
+    expect(prisma.mcpApprovalContinuation.findMany).toHaveBeenCalledOnce();
     expect(prisma.routine.findMany).toHaveBeenCalled();
     expect(prisma.computer.findMany).toHaveBeenCalled();
     expect(prisma.messagingOutbound.findFirst).toHaveBeenCalled();

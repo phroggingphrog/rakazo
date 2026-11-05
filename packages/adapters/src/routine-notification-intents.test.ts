@@ -247,6 +247,20 @@ describe("routine notification intent recovery", () => {
     expect(f.row.status).toBe("cancelled");
     expect(f.deliver).not.toHaveBeenCalled();
   });
+  it.each(["no_recipient", "device_rejected"] as const)(
+    "persists definite non-delivery evidence %s",
+    async (reason) => {
+      const f = fixture();
+      f.deliver.mockImplementationOnce(async (_message, _context, _accepted, unsent) => {
+        unsent?.(reason);
+        return "undeliverable";
+      });
+      await reconcileRoutineNotificationIntents(f);
+      expect(f.row.status).toBe(reason);
+      await reconcileRoutineNotificationIntents(f);
+      expect(f.deliver).toHaveBeenCalledOnce();
+    },
+  );
   it("honors a preference disabled after preparation but before submission", async () => {
     const f = fixture();
     f.table.findFirst.mockImplementationOnce(async () => structuredClone(f.row));
