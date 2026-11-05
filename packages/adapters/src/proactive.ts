@@ -65,8 +65,8 @@ export function routineWake(events: Wake["events"]): RoutineEventRaw | null {
 }
 
 /**
- * Reads the routine-source switch. Off unless explicitly on: the routine runner starts
- * every routine today and stays the path unless an operator turns the source on.
+ * Reads the routine-source switch: the global flag, or any bot opted in through the per-bot
+ * self-config switch (on for every bot when RAKAZO_SELF_CONFIG_BOTS is unset).
  */
 export function routineSourceFromEnv(env: Record<string, string | undefined>): boolean {
   return routineSourceGlobal(env) || selfConfigBots(env).size > 0;

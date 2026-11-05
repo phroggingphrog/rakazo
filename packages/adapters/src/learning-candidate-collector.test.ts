@@ -36,10 +36,14 @@ const correction = {
 };
 
 describe("learning candidate collector", () => {
-  it("collects nothing unless its flag is set", async () => {
+  it("collects nothing when its flag and the per-bot switch are off", async () => {
     const { prisma, createMany } = harness({ corrections: [correction] });
 
-    const result = await collectLearningCandidates({ prisma, now, env: {} });
+    const result = await collectLearningCandidates({
+      prisma,
+      now,
+      env: { RAKAZO_SELF_CONFIG_BOTS: "none" } as NodeJS.ProcessEnv,
+    });
 
     expect(result).toEqual({ enabled: false, examined: 0, created: 0, skipped: "disabled" });
     expect(createMany).not.toHaveBeenCalled();
@@ -53,10 +57,14 @@ describe("learning candidate collector", () => {
     }
     for (const raw of ["", "0", "false", "off", "enabled"]) {
       expect(
-        learningCollectorEnabled({ RAKAZO_LEARNING_CANDIDATES: raw } as NodeJS.ProcessEnv),
+        learningCollectorEnabled({
+          RAKAZO_LEARNING_CANDIDATES: raw,
+          RAKAZO_SELF_CONFIG_BOTS: "none",
+        } as NodeJS.ProcessEnv),
       ).toBe(false);
     }
-    expect(learningCollectorEnabled({} as NodeJS.ProcessEnv)).toBe(false);
+    // Unset everything: the per-bot switch defaults to every bot.
+    expect(learningCollectorEnabled({} as NodeJS.ProcessEnv)).toBe(true);
   });
 
   it("turns a correction into a memory candidate carrying the replaced fact as evidence", async () => {
