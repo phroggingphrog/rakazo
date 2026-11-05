@@ -31,8 +31,13 @@ describe("memory fact planning", () => {
   });
 
   it("treats a rewrite that drops one fact and adds one as a correction", () => {
-    const plan = planMemoryFacts(live, "Deploy runs on Thursdays.\nReview happens on Fridays.");
-    expect(plan.invalidated).toEqual([{ id: "fact-1", text: "Deploy runs on Wednesdays." }]);
+    const plan = planMemoryFacts(
+      live,
+      "Deploy runs on Thursdays.\nReview happens on Fridays.",
+    );
+    expect(plan.invalidated).toEqual([
+      { id: "fact-1", text: "Deploy runs on Wednesdays." },
+    ]);
     expect(plan.added).toEqual(["Deploy runs on Thursdays."]);
     expect(plan.supersedes.get("Deploy runs on Thursdays.")).toBe("fact-1");
   });
@@ -54,12 +59,15 @@ describe("memory fact planning", () => {
   });
 
   it("plans nothing when the saved content asserts the same facts", () => {
-    expect(planMemoryFacts(live, "Deploy runs on Wednesdays.\nReview happens on Fridays.")).toEqual(
-      {
-        added: [],
-        invalidated: [],
-        supersedes: new Map(),
-      },
-    );
+    expect(
+      planMemoryFacts(
+        live,
+        "Deploy runs on Wednesdays.\nReview happens on Fridays.",
+      ),
+    ).toEqual({
+      added: [],
+      invalidated: [],
+      supersedes: new Map(),
+    });
   });
 });

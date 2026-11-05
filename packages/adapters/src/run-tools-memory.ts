@@ -1,10 +1,15 @@
 import { MEMORY_REVISION_CONFLICT_ERROR } from "@rakazo/adapter-kit";
-import { HistoryReadInputSchema, HistorySearchInputSchema } from "@rakazo/contracts";
+import type { MemoryFactProvenance } from "@rakazo/adapter-kit";
+import {
+  HistoryReadInputSchema,
+  HistorySearchInputSchema,
+} from "@rakazo/contracts";
 import { readHistory, searchHistory } from "@rakazo/db";
 import { sharedMemorySaveError } from "./builtin-tools.js";
 import { redactConnectorPayload } from "./connector-safety.js";
 import { MAX_RECALLED_MEMORIES } from "./history-compaction.js";
-import { appendMemoryFact } from "./memory-tools.js";
+import { appendMemoryFact, replaceFactLine } from "./memory-tools.js";
+import { selfConfigEnabledForBot } from "./self-config-bots.js";
 import type { RunContext } from "./run-context.js";
 import type { ToolCall, ToolHandlers } from "./run-tool-gate.js";
 
@@ -31,7 +36,9 @@ async function readHistoryTool(ctx: RunContext, call: ToolCall) {
       : typeof args.threadId === "string" && args.threadId !== run.threadId;
   // Channel or webhook text claimed mid-turn revokes the grant for the rest of the run.
   const allowMyChats =
-    crossChat && ctx.source.myChatsAllowed && !(await ctx.trust.receivedOutsideMessage());
+    crossChat &&
+    ctx.source.myChatsAllowed &&
+    !(await ctx.trust.receivedOutsideMessage());
   const scope = {
     spaceId: run.spaceId,
     userId: run.userId,
@@ -44,8 +51,16 @@ async function readHistoryTool(ctx: RunContext, call: ToolCall) {
   };
   const response =
     name === "search_history"
-      ? await searchHistory(deps.prisma, scope, HistorySearchInputSchema.parse(args))
-      : await readHistory(deps.prisma, scope, HistoryReadInputSchema.parse(args));
+      ? await searchHistory(
+          deps.prisma,
+          scope,
+          HistorySearchInputSchema.parse(args),
+        )
+      : await readHistory(
+          deps.prisma,
+          scope,
+          HistoryReadInputSchema.parse(args),
+        );
   const redacted = redactConnectorPayload(response, ctx.secrets);
   // Redaction can expand short synthetic credentials; never let Pi clip the JSON.
   if (Buffer.byteLength(JSON.stringify(redacted), "utf8") > 11_000) {
@@ -67,10 +82,26 @@ export const memoryTools: ToolHandlers = {
     // A fact is added to the document, never replaces it. A concurrent save
     // changes the revision, so re-read and append again.
     for (let attempt = 1; ; attempt += 1) {
-      const snapshot = await deps.memory.read({ scope: "bot", botId: bot.id, path }, context);
+      const snapshot = await deps.memory.read(
+        { scope: "bot", botId: bot.id, path },
+        context,
+      );
       const existing = snapshot.documents[0];
-      const content = appendMemoryFact(existing?.content ?? "", String(args.content ?? ""));
-      if (content === (existing?.content ?? "")) return call.finish({ ok: true });
+      const replaces = String(args.replaces ?? "").trim();
+      const correcting = replaces !== "" && selfConfigEnabledForBot(bot.id);
+      const content = correcting
+        ? replaceFactLine(
+            existing?.content ?? "",
+            replaces,
+            String(args.content ?? ""),
+          )
+        : appendMemoryFact(existing?.content ?? "", String(args.content ?? ""));
+      if (content === null)
+        return call.finish({
+          error: "The fact to replace is not in memory. Quote it exactly.",
+        });
+      if (content === (existing?.content ?? ""))
+        return call.finish({ ok: true });
       try {
         await deps.memory.commit(
           {
@@ -81,13 +112,17 @@ export const memoryTools: ToolHandlers = {
             expectedRevision: existing?.revision ?? 0,
             sourceRunId: runId,
             sourceThreadId: thread.id,
+            provenance: rememberProvenance(args),
           },
           context,
         );
-        return call.finish({ ok: true });
+        return call.finish(
+          correcting ? { ok: true, superseded: true } : { ok: true },
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
-        if (message !== MEMORY_REVISION_CONFLICT_ERROR || attempt >= 3) throw error;
+        if (message !== MEMORY_REVISION_CONFLICT_ERROR || attempt >= 3)
+          throw error;
       }
     }
   },
@@ -113,10 +148,18 @@ export const memoryTools: ToolHandlers = {
         },
         context,
       );
-      return call.finish({ ok: true, path: saved.path, revision: saved.revision });
+      return call.finish({
+        ok: true,
+        path: saved.path,
+        revision: saved.revision,
+      });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not save shared memory.";
-      if (message === MEMORY_REVISION_CONFLICT_ERROR) return call.finish({ error: message });
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not save shared memory.";
+      if (message === MEMORY_REVISION_CONFLICT_ERROR)
+        return call.finish({ error: message });
       throw error;
     }
   },
@@ -158,7 +201,8 @@ export const memoryTools: ToolHandlers = {
     const { args } = call;
     if (!ctx.memory.semantic?.forget) {
       return call.finish({
-        error: "This memory provider does not support forgetting individual facts.",
+        error:
+          "This memory provider does not support forgetting individual facts.",
       });
     }
     return call.finish(
@@ -179,3 +223,21 @@ export const memoryTools: ToolHandlers = {
     );
   },
 };
+
+/** Provenance for a remember call. The bot may claim the owner said it; it defaults to inferred. */
+export function rememberProvenance(
+  args: Record<string, unknown>,
+): MemoryFactProvenance {
+  const method = args.source;
+  const confidence =
+    typeof args.confidence === "number" ? args.confidence : undefined;
+  return {
+    method:
+      method === "owner-stated" ||
+      method === "tool-observed" ||
+      method === "bot-inferred"
+        ? method
+        : "bot-inferred",
+    ...(confidence === undefined ? {} : { confidence }),
+  };
+}

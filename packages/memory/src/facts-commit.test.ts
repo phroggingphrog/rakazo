@@ -38,7 +38,11 @@ type Fact = {
 /** Enough of the client shape for commit and facts, with the transaction inline. */
 function fakeClient() {
   const documents: Document[] = [];
-  const revisions: Array<{ documentId: string; revision: number; content: string }> = [];
+  const revisions: Array<{
+    documentId: string;
+    revision: number;
+    content: string;
+  }> = [];
   const facts: Fact[] = [];
   let seq = 0;
   const matches = (document: Document, where: Record<string, unknown>) =>
@@ -49,8 +53,16 @@ function fakeClient() {
   const memoryDocument = {
     findFirst: async ({ where }: { where: Record<string, unknown> }) =>
       documents.find((document) => matches(document, where)) ?? null,
-    update: async ({ where, data }: { where: { id: string }; data: Partial<Document> }) => {
-      const document = documents.find((candidate) => candidate.id === where.id)!;
+    update: async ({
+      where,
+      data,
+    }: {
+      where: { id: string };
+      data: Partial<Document>;
+    }) => {
+      const document = documents.find(
+        (candidate) => candidate.id === where.id,
+      )!;
       Object.assign(document, data);
       return document;
     },
@@ -85,14 +97,19 @@ function fakeClient() {
     }) => {
       let count = 0;
       for (const fact of facts) {
-        if (!where.id.in.includes(fact.id) || fact.invalidFrom !== null) continue;
+        if (!where.id.in.includes(fact.id) || fact.invalidFrom !== null)
+          continue;
         fact.invalidFrom = data.invalidFrom;
         fact.invalidFromRevision = data.invalidFromRevision;
         count += 1;
       }
       return { count };
     },
-    createMany: async ({ data }: { data: Array<Omit<Fact, "id" | "createdAt">> }) => {
+    createMany: async ({
+      data,
+    }: {
+      data: Array<Omit<Fact, "id" | "createdAt">>;
+    }) => {
       for (const row of data) {
         facts.push({
           ...row,
@@ -130,7 +147,11 @@ function fakeClient() {
   return { prisma, documents, revisions, facts };
 }
 
-const commit = (content: string) => ({ scope: "user" as const, path: "MEMORY.md", content });
+const commit = (content: string) => ({
+  scope: "user" as const,
+  path: "MEMORY.md",
+  content,
+});
 const request = (content: string) => ({
   ...commit(content),
   sourceRunId: `run-${content.length}`,
@@ -141,15 +162,25 @@ describe("fact-level memory validity", () => {
   it("invalidates the earlier fact at the revision that corrected it and keeps both readable", async () => {
     const { prisma, facts } = fakeClient();
     const store = new MarkdownMemoryStore(prisma as never);
-    const first = await store.commit(request("Deploy runs on Wednesdays."), context);
-    await store.commit(request("Deploy runs on Wednesdays.\nReview happens on Fridays."), context);
+    const first = await store.commit(
+      request("Deploy runs on Wednesdays."),
+      context,
+    );
+    await store.commit(
+      request("Deploy runs on Wednesdays.\nReview happens on Fridays."),
+      context,
+    );
     const corrected = await store.commit(
       request("Deploy runs on Thursdays.\nReview happens on Fridays."),
       context,
     );
 
-    const stale = facts.find((fact) => fact.text === "Deploy runs on Wednesdays.")!;
-    const current = facts.find((fact) => fact.text === "Deploy runs on Thursdays.")!;
+    const stale = facts.find(
+      (fact) => fact.text === "Deploy runs on Wednesdays.",
+    )!;
+    const current = facts.find(
+      (fact) => fact.text === "Deploy runs on Thursdays.",
+    )!;
     expect(stale.invalidFromRevision).toBe(corrected.revision);
     expect(current.invalidFrom).toBeNull();
     expect(current.supersedesFactId).toBe(stale.id);
@@ -161,7 +192,10 @@ describe("fact-level memory validity", () => {
     const { prisma, facts } = fakeClient();
     const store = new MarkdownMemoryStore(prisma as never);
     await store.commit(request("Deploy runs on Wednesdays."), context);
-    await store.commit(request("Deploy runs on Wednesdays.\nReview happens on Fridays."), context);
+    await store.commit(
+      request("Deploy runs on Wednesdays.\nReview happens on Fridays."),
+      context,
+    );
     expect(facts.filter((fact) => fact.invalidFrom === null)).toHaveLength(2);
     expect(facts.every((fact) => fact.invalidFrom === null)).toBe(true);
   });
@@ -169,9 +203,17 @@ describe("fact-level memory validity", () => {
   it("records a rewrite without guessing which new fact replaced which old one", async () => {
     const { prisma, facts } = fakeClient();
     const store = new MarkdownMemoryStore(prisma as never);
-    await store.commit(request("Deploy runs on Wednesdays.\nReview happens on Fridays."), context);
-    const rewritten = await store.commit(request("Deploy runs on Thursdays."), context);
-    expect(facts.filter((fact) => fact.invalidFromRevision === rewritten.revision)).toHaveLength(2);
+    await store.commit(
+      request("Deploy runs on Wednesdays.\nReview happens on Fridays."),
+      context,
+    );
+    const rewritten = await store.commit(
+      request("Deploy runs on Thursdays."),
+      context,
+    );
+    expect(
+      facts.filter((fact) => fact.invalidFromRevision === rewritten.revision),
+    ).toHaveLength(2);
     expect(facts.every((fact) => fact.supersedesFactId === null)).toBe(true);
   });
 });

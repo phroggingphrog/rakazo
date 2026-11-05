@@ -14,7 +14,7 @@ import type {
 import { MEMORY_REVISION_CONFLICT_ERROR } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
 import { Prisma, withTransactionRetry } from "@rakazo/db";
-import { planMemoryFacts } from "./facts.js";
+import { botMemoryBankId, clampConfidence, planMemoryFacts } from "./facts.js";
 
 export class MarkdownMemoryStore implements MemoryStore {
   constructor(private readonly prisma: PrismaClient) {}
@@ -28,7 +28,10 @@ export class MarkdownMemoryStore implements MemoryStore {
     };
   }
 
-  async read(request: MemoryReadRequest, context: AdapterContext): Promise<MemorySnapshot> {
+  async read(
+    request: MemoryReadRequest,
+    context: AdapterContext,
+  ): Promise<MemorySnapshot> {
     const documents = await this.prisma.memoryDocument.findMany({
       where: {
         spaceId: context.spaceId,
@@ -64,7 +67,11 @@ export class MarkdownMemoryStore implements MemoryStore {
     });
     const q = request.query.toLowerCase();
     return documents
-      .filter((doc) => doc.content.toLowerCase().includes(q) || doc.path.toLowerCase().includes(q))
+      .filter(
+        (doc) =>
+          doc.content.toLowerCase().includes(q) ||
+          doc.path.toLowerCase().includes(q),
+      )
       .map((doc) => ({
         path: doc.path,
         snippet: snippet(doc.content, q),
@@ -72,7 +79,10 @@ export class MarkdownMemoryStore implements MemoryStore {
       }));
   }
 
-  async commit(request: MemoryCommitRequest, context: AdapterContext): Promise<MemoryRevision> {
+  async commit(
+    request: MemoryCommitRequest,
+    context: AdapterContext,
+  ): Promise<MemoryRevision> {
     // A save replaces the current content, appends its history and moves the facts the new
     // content adds or drops, all atomically. A fact the save no longer contains is invalidated
     // from this revision rather than deleted, so the correction and what it replaced both stay
@@ -91,12 +101,16 @@ export class MarkdownMemoryStore implements MemoryStore {
           });
           if (request.expectedRevision !== undefined) {
             const live = existing?.revision ?? 0;
-            if (live !== request.expectedRevision) throw new Error(MEMORY_REVISION_CONFLICT_ERROR);
+            if (live !== request.expectedRevision)
+              throw new Error(MEMORY_REVISION_CONFLICT_ERROR);
           }
           const doc = existing
             ? await tx.memoryDocument.update({
                 where: { id: existing.id },
-                data: { content: request.content, revision: existing.revision + 1 },
+                data: {
+                  content: request.content,
+                  revision: existing.revision + 1,
+                },
               })
             : await tx.memoryDocument.create({
                 data: {
@@ -118,7 +132,12 @@ export class MarkdownMemoryStore implements MemoryStore {
             },
           });
           await recordFacts(tx, doc.id, doc.revision, request);
-          return { id: doc.id, path: doc.path, revision: doc.revision, content: doc.content };
+          return {
+            id: doc.id,
+            path: doc.path,
+            revision: doc.revision,
+            content: doc.content,
+          };
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       ),
@@ -129,13 +148,21 @@ export class MarkdownMemoryStore implements MemoryStore {
   async facts(documentId: string, context: AdapterContext) {
     // A document id alone is not an authorisation: the caller must own it in this space.
     const document = await this.prisma.memoryDocument.findFirst({
-      where: { id: documentId, spaceId: context.spaceId, userId: context.userId },
+      where: {
+        id: documentId,
+        spaceId: context.spaceId,
+        userId: context.userId,
+      },
       select: { id: true },
     });
     if (!document) return [];
     return this.prisma.memoryFact.findMany({
       where: { documentId },
-      orderBy: [{ validFromRevision: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+      orderBy: [
+        { validFromRevision: "desc" },
+        { createdAt: "desc" },
+        { id: "desc" },
+      ],
     });
   }
 
@@ -162,7 +189,10 @@ export class MarkdownMemoryStore implements MemoryStore {
     context: AdapterContext,
   ): AsyncIterable<PortableFile> {
     const snapshot = await this.read(
-      { scope: request.scope === "all" ? "user" : request.scope, botId: request.botId },
+      {
+        scope: request.scope === "all" ? "user" : request.scope,
+        botId: request.botId,
+      },
       context,
     );
     for (const doc of snapshot.documents) {
@@ -208,11 +238,18 @@ async function recordFacts(
     select: { id: true, text: true },
   });
   const plan = planMemoryFacts(live, request.content);
+  const owner = await tx.memoryDocument.findFirst({
+    where: { id: documentId },
+    select: { botId: true, spaceId: true, scope: true },
+  });
   if (plan.invalidated.length === 0 && plan.added.length === 0) return;
   const at = new Date();
   if (plan.invalidated.length > 0) {
     await tx.memoryFact.updateMany({
-      where: { id: { in: plan.invalidated.map((fact) => fact.id) }, invalidFrom: null },
+      where: {
+        id: { in: plan.invalidated.map((fact) => fact.id) },
+        invalidFrom: null,
+      },
       data: { invalidFrom: at, invalidFromRevision: revision },
     });
   }
@@ -226,6 +263,13 @@ async function recordFacts(
         supersedesFactId: plan.supersedes.get(text) ?? null,
         sourceRunId: request.sourceRunId ?? null,
         sourceThreadId: request.sourceThreadId ?? null,
+        botId: owner?.botId ?? null,
+        spaceId: owner?.spaceId ?? null,
+        scope: owner?.scope ?? null,
+        bankId: botMemoryBankId(owner?.botId),
+        method: request.provenance?.method ?? null,
+        confidence: clampConfidence(request.provenance?.confidence),
+        sourceMessageId: request.provenance?.sourceMessageId ?? null,
       })),
     });
   }

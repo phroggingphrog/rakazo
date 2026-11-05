@@ -51,7 +51,10 @@ export function parseFactLines(content: string): string[] {
  * points at the one it replaced. A commit that drops several facts at once (a rewrite or a merge)
  * records the invalidation without guessing which new fact replaced which old one.
  */
-export function planMemoryFacts(live: readonly LiveMemoryFact[], content: string): MemoryFactPlan {
+export function planMemoryFacts(
+  live: readonly LiveMemoryFact[],
+  content: string,
+): MemoryFactPlan {
   const next = parseFactLines(content);
   const nextTexts = new Set(next);
   const liveTexts = new Set(live.map((fact) => fact.text));
@@ -63,4 +66,19 @@ export function planMemoryFacts(live: readonly LiveMemoryFact[], content: string
     for (const text of added) supersedes.set(text, replaced.id);
   }
   return { added, invalidated, supersedes };
+}
+
+/**
+ * Logical id of a bot's private memory bank. Facts carry it so a later sync can mirror them into a
+ * per-bot semantic bank; nothing here provisions that bank.
+ */
+export function botMemoryBankId(
+  botId: string | null | undefined,
+): string | null {
+  return botId ? `rakazo-bot-${botId}` : null;
+}
+
+export function clampConfidence(value: number | undefined): number | null {
+  if (value === undefined || !Number.isFinite(value)) return null;
+  return Math.min(1, Math.max(0, value));
 }

@@ -356,6 +356,17 @@ export interface MemoryCommitRequest {
   expectedRevision?: number;
   sourceRunId?: string;
   sourceThreadId?: string;
+  /** Provenance stamped on the facts this commit adds. Absent means unknown. */
+  provenance?: MemoryFactProvenance;
+}
+
+export type MemoryFactMethod = "owner-stated" | "tool-observed" | "bot-inferred";
+
+export interface MemoryFactProvenance {
+  method?: MemoryFactMethod;
+  /** 0..1 */
+  confidence?: number;
+  sourceMessageId?: string;
 }
 
 export interface MemoryRemoveRequest {

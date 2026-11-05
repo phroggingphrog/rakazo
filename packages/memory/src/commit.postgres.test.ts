@@ -8,7 +8,9 @@ const databaseUrl = process.env.DATABASE_URL;
 // Agent runs save memory in the worker, outside any request.
 const MEMORY_SAVE = "agent run memory save";
 const describePostgres =
-  process.env.VERIFY_DATABASE && databaseUrl ? describe.sequential : describe.skip;
+  process.env.VERIFY_DATABASE && databaseUrl
+    ? describe.sequential
+    : describe.skip;
 
 describePostgres("memory commits (PostgreSQL)", () => {
   const context: AdapterContext = {
@@ -57,7 +59,9 @@ describePostgres("memory commits (PostgreSQL)", () => {
   afterAll(async () => {
     if (!prisma) return;
     try {
-      await asSystem(prisma).organization.deleteMany({ where: { id: context.spaceId } });
+      await asSystem(prisma).organization.deleteMany({
+        where: { id: context.spaceId },
+      });
     } finally {
       await close();
     }
@@ -118,7 +122,10 @@ describePostgres("memory commits (PostgreSQL)", () => {
           concurrentStore.commit(write("second"), context),
         ]);
 
-        expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+        expect(results.map((result) => result.status)).toEqual([
+          "fulfilled",
+          "fulfilled",
+        ]);
         expect(reads).toBe(3);
         const saved = results.flatMap((result) =>
           result.status === "fulfilled" ? [result.value] : [],
@@ -126,11 +133,15 @@ describePostgres("memory commits (PostgreSQL)", () => {
         expect(saved.map((result) => result.revision).sort()).toEqual([2, 3]);
         const current = await document(path);
         expect(current.revision).toBe(3);
-        expect(current.content).toBe(saved.find((result) => result.revision === 3)!.content);
+        expect(current.content).toBe(
+          saved.find((result) => result.revision === 3)!.content,
+        );
         expect(current.revisions).toHaveLength(3);
         for (const result of [initial, ...saved]) {
           expect(
-            current.revisions.find((revision) => revision.revision === result.revision),
+            current.revisions.find(
+              (revision) => revision.revision === result.revision,
+            ),
           ).toMatchObject({
             documentId: result.id,
             revision: result.revision,
@@ -211,7 +222,10 @@ describePostgres("memory commits (PostgreSQL)", () => {
                 const result = await query(args);
                 attempts += 1;
                 // Invalidate every attempted snapshot with a separate committed save.
-                await store.commit(request(path, `winner-${attempts}`), context);
+                await store.commit(
+                  request(path, `winner-${attempts}`),
+                  context,
+                );
                 return result;
               },
             },
@@ -227,7 +241,12 @@ describePostgres("memory commits (PostgreSQL)", () => {
       expect(attempts).toBe(3);
       const current = await document(path);
       expect(current).toMatchObject({ revision: 4, content: "winner-3" });
-      expect(current.revisions.map(({ revision, content }) => ({ revision, content }))).toEqual([
+      expect(
+        current.revisions.map(({ revision, content }) => ({
+          revision,
+          content,
+        })),
+      ).toEqual([
         { revision: 1, content: "initial" },
         { revision: 2, content: "winner-1" },
         { revision: 3, content: "winner-2" },
@@ -239,7 +258,10 @@ describePostgres("memory commits (PostgreSQL)", () => {
       const afterRetry = await document(path);
       expect(afterRetry).toMatchObject({ revision: 5, content: "rejected" });
       expect(afterRetry.revisions).toHaveLength(5);
-      expect(afterRetry.revisions.at(-1)).toMatchObject({ revision: 5, content: "rejected" });
+      expect(afterRetry.revisions.at(-1)).toMatchObject({
+        revision: 5,
+        content: "rejected",
+      });
     }));
 
   it("invalidates a corrected fact and keeps the earlier one readable", () =>
@@ -251,21 +273,37 @@ describePostgres("memory commits (PostgreSQL)", () => {
       const corrected = await store.commit(request(path, after), context);
 
       const facts = await store.facts(first.id, context);
-      const stale = facts.find((fact) => fact.text === "Deploy runs on Wednesdays.");
-      const current = facts.find((fact) => fact.text === "Deploy runs on Thursdays.");
+      const stale = facts.find(
+        (fact) => fact.text === "Deploy runs on Wednesdays.",
+      );
+      const current = facts.find(
+        (fact) => fact.text === "Deploy runs on Thursdays.",
+      );
       expect(stale?.invalidFrom).toBeInstanceOf(Date);
       expect(stale).toMatchObject({ invalidFromRevision: corrected.revision });
-      expect(current).toMatchObject({ invalidFrom: null, invalidFromRevision: null });
+      expect(current).toMatchObject({
+        invalidFrom: null,
+        invalidFromRevision: null,
+      });
       expect(current?.supersedesFactId).toBe(stale?.id);
       // The fact the correction replaced is stale, never current. This history view is
       // newest revision first, so compare what is live rather than the row order.
       expect(
-        new Set(facts.filter((fact) => fact.invalidFrom === null).map((fact) => fact.text)),
-      ).toEqual(new Set(["Review happens on Fridays.", "Deploy runs on Thursdays."]));
+        new Set(
+          facts
+            .filter((fact) => fact.invalidFrom === null)
+            .map((fact) => fact.text),
+        ),
+      ).toEqual(
+        new Set(["Review happens on Fridays.", "Deploy runs on Thursdays."]),
+      );
 
       const saved = await document(path);
       expect(saved.content).toBe(after);
       // Both versions of the fact stay in the document history.
-      expect(saved.revisions.map(({ content }) => content)).toEqual([before, after]);
+      expect(saved.revisions.map(({ content }) => content)).toEqual([
+        before,
+        after,
+      ]);
     }));
 });

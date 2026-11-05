@@ -21,6 +21,7 @@ describe("bot runtime profile contracts", () => {
         maxTokensPerReview: 0,
         maxReviewSeconds: 0,
         maxRetries: 0,
+        share: "off",
       },
       initiative: {
         enabled: false,
@@ -42,19 +43,29 @@ describe("bot runtime profile contracts", () => {
       }).persona,
     ).toEqual({ persona: "A careful guide" });
     expect(
-      BotRuntimeProfile.safeParse({ persona: { instructions: "Duplicate authority" } }).success,
+      BotRuntimeProfile.safeParse({
+        persona: { instructions: "Duplicate authority" },
+      }).success,
     ).toBe(false);
-    expect(BotRuntimeProfile.safeParse({ persona: { soul: "combined" } }).success).toBe(false);
+    expect(
+      BotRuntimeProfile.safeParse({ persona: { soul: "combined" } }).success,
+    ).toBe(false);
   });
 
   it("accepts only the two skill selection modes and unique explicit IDs", () => {
     expect(
-      BotRuntimeProfile.safeParse({ skills: { mode: "explicit", skillIds: ["a", "b"] } }).success,
+      BotRuntimeProfile.safeParse({
+        skills: { mode: "explicit", skillIds: ["a", "b"] },
+      }).success,
     ).toBe(true);
     expect(
-      BotRuntimeProfile.safeParse({ skills: { mode: "explicit", skillIds: ["a", "a"] } }).success,
+      BotRuntimeProfile.safeParse({
+        skills: { mode: "explicit", skillIds: ["a", "a"] },
+      }).success,
     ).toBe(false);
-    expect(BotRuntimeProfile.safeParse({ skills: { mode: "all" } }).success).toBe(false);
+    expect(
+      BotRuntimeProfile.safeParse({ skills: { mode: "all" } }).success,
+    ).toBe(false);
   });
 
   it("requires an immutable digest and rejects secret-like extension settings", () => {
@@ -106,8 +117,9 @@ describe("bot runtime profile contracts", () => {
 
   it("requires finite nonnegative learning and initiative budgets", () => {
     expect(
-      BotRuntimeProfile.safeParse({ learning: { mode: "automatic-private", maxReviewsPerDay: 2 } })
-        .success,
+      BotRuntimeProfile.safeParse({
+        learning: { mode: "automatic-private", maxReviewsPerDay: 2 },
+      }).success,
     ).toBe(false);
     expect(
       BotRuntimeProfile.safeParse({
@@ -120,15 +132,24 @@ describe("bot runtime profile contracts", () => {
         },
       }).success,
     ).toBe(true);
-    expect(BotRuntimeProfile.safeParse({ initiative: { enabled: true } }).success).toBe(false);
-    expect(BotRuntimeProfile.safeParse({ routing: { enabled: true } }).success).toBe(false);
+    expect(
+      BotRuntimeProfile.safeParse({ initiative: { enabled: true } }).success,
+    ).toBe(false);
+    expect(
+      BotRuntimeProfile.safeParse({ routing: { enabled: true } }).success,
+    ).toBe(false);
     expect(
       BotRuntimeProfile.safeParse({
-        learning: { mode: "automatic-private", maxTokensPerReview: Number.POSITIVE_INFINITY },
+        learning: {
+          mode: "automatic-private",
+          maxTokensPerReview: Number.POSITIVE_INFINITY,
+        },
       }).success,
     ).toBe(false);
     expect(
-      BotRuntimeProfile.safeParse({ initiative: { enabled: true, maxRunsPerDay: -1 } }).success,
+      BotRuntimeProfile.safeParse({
+        initiative: { enabled: true, maxRunsPerDay: -1 },
+      }).success,
     ).toBe(false);
   });
 
@@ -155,8 +176,18 @@ describe("bot runtime profile contracts", () => {
         routing: {
           enabled: true,
           routes: [
-            { label: "fast", modelRef: "model-1", effort: "low", execution: "inline" },
-            { label: "fast", modelRef: "model-2", effort: "high", execution: "background" },
+            {
+              label: "fast",
+              modelRef: "model-1",
+              effort: "low",
+              execution: "inline",
+            },
+            {
+              label: "fast",
+              modelRef: "model-2",
+              effort: "high",
+              execution: "background",
+            },
           ],
         },
       }).success,
