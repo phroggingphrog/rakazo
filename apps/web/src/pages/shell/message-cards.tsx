@@ -333,7 +333,15 @@ export function McpApprovalCard({
   block: Extract<MessageBlock, { kind: "mcp_approval" }>;
 }) {
   const { t } = useLingui();
-  const { name, serverId, transport, endpoint, needsOAuth, status: savedStatus } = block;
+  const {
+    name,
+    serverId,
+    transport,
+    endpoint,
+    needsOAuth,
+    assignmentOnly,
+    status: savedStatus,
+  } = block;
   const [localStatus, setLocalStatus] = useState<McpApprovalState>("pending");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -400,21 +408,35 @@ export function McpApprovalCard({
           M
         </span>
         <span className="text-[14.5px] font-medium text-foreground">
-          <Trans>Connect MCP server “{name}”</Trans>
+          {assignmentOnly ? (
+            <Trans>Assign MCP server “{name}”</Trans>
+          ) : (
+            <Trans>Connect MCP server “{name}”</Trans>
+          )}
         </span>
       </div>
       <p className="mt-1.5 truncate text-[12px] text-muted-foreground">{summary}</p>
       {state === "pending" || state === "connecting" ? (
         <>
           <p className="mt-2 text-[13px] leading-[1.5] text-foreground/75">
-            {needsOAuth
-              ? t`Authorize this server so agents can use its tools. A popup opens.`
-              : t`Approve this server to let your agent use its tools.`}
+            {assignmentOnly
+              ? t`Allow this bot to use the existing server. Sign-in and provider access are not verified here.`
+              : needsOAuth
+                ? t`Authorize this server so agents can use its tools. A popup opens.`
+                : t`Approve this server to let your agent use its tools.`}
           </p>
           {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
           <div className="mt-3 flex flex-wrap gap-2">
             <Button disabled={state !== "pending" || busy} onClick={() => void authorize()}>
-              {state === "connecting" ? t`Connecting…` : needsOAuth ? t`Authorize` : t`Approve`}
+              {state === "connecting"
+                ? assignmentOnly
+                  ? t`Saving…`
+                  : t`Connecting…`
+                : assignmentOnly
+                  ? t`Approve assignment`
+                  : needsOAuth
+                    ? t`Authorize`
+                    : t`Approve`}
             </Button>
             <Button
               variant="secondary"
@@ -428,7 +450,12 @@ export function McpApprovalCard({
       ) : null}
       {state === "connected" ? (
         <div className="mt-3">
-          <SuccessPop label={t`Connected`} />
+          <SuccessPop label={assignmentOnly ? t`Assignment saved` : t`Connected`} />
+          {assignmentOnly ? (
+            <p className="mt-2 text-[13px] text-muted-foreground">
+              <Trans>Sign-in and provider access have not been verified.</Trans>
+            </p>
+          ) : null}
         </div>
       ) : null}
       {state === "dismissed" ? (

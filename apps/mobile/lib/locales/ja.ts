@@ -1,4 +1,16 @@
 export const JA_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "ソース監視を設定",
+  "Source monitor": "ソース監視",
+  "Saving a proposal does not start a routine or read the source.":
+    "提案を保存しても、ルーチンの開始やソースの読み取りは行われません。",
+  "Source access and permissions have not been verified. No read was performed.":
+    "ソースへのアクセスと権限は確認されていません。読み取りは行われていません。",
+  "Declared required fields:": "必須として宣言されたフィールド:",
+  "Enter a valid JSON object up to 8 KB.": "8 KB以下の有効なJSONオブジェクトを入力してください。",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "APIキーとパスワードは連携設定で指定してください。ページネーショントークンはここに入力できます。引数はここでは操作のスキーマに照らして検証されません。",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "設定がルーティンと一致する場合、ソースチェックはこれらの引数で選択した操作の実行を試みます。実行状況で成功したか確認できます。テストでは通知の配信は確認されません。",
   "How other bots see it": "他のボットからの見え方",
   "Share to": "共有先",
   "{count} files": "{count}個のファイル",
@@ -477,6 +489,12 @@ export const JA_MESSAGES: Record<string, string> = {
     "このサーバー自身の{source}認証情報を使って{provider}にアクセスします。",
   "Connect API key": "APIキーを接続",
   "Connect MCP server {name}": "MCPサーバー{name}を接続",
+  "Assign MCP server {name}": "MCPサーバー{name}を割り当て",
+  "Approve assignment": "割り当てを承認",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "このボットによる既存サーバーの使用を許可します。サインインとプロバイダーへのアクセスはここでは確認されません。",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "割り当てを保存しました。サインインとプロバイダーへのアクセスは確認されていません。",
   "Connected.": "接続しました。",
   "Context limit": "コンテキスト上限",
   "Could not connect this provider": "このプロバイダーに接続できませんでした",

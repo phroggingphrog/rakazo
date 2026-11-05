@@ -180,6 +180,8 @@ export type FinalizeRunInput = FinalizeRunBase &
         outcome: "completed";
         blocks: MessageBlock[];
         markUnread?: boolean;
+        /** Persist a recovery intent for a routine's completed message. */
+        routineCompletionNotification?: boolean;
       }
     | {
         outcome: "failed";
@@ -1765,6 +1767,9 @@ async function finalizeRunOnce(
         status: "running",
         leaseOwner: input.leaseOwner,
         leaseFence: input.leaseFence,
+        ...(input.outcome === "completed" && input.routineCompletionNotification
+          ? { trigger: "routine", routineId: { not: null } }
+          : {}),
       },
       data: {
         status: input.outcome,
@@ -1828,6 +1833,7 @@ async function finalizeRunOnce(
       });
     }
     let firstResponse = false;
+    let completedMessageId: string | undefined;
     const replyBlocks =
       input.outcome === "completed"
         ? completedRunBlocks(input.blocks, writableRun?.startedAt ?? null, now)
@@ -1843,6 +1849,7 @@ async function finalizeRunOnce(
           ? { markUnread: input.markUnread }
           : { clientNonce: partialReplyClientNonce(input.runId) }),
       });
+      if (input.outcome === "completed") completedMessageId = message.id;
       const response = await appendEventInTransaction(tx, {
         spaceId: input.spaceId,
         threadId: input.threadId,
@@ -1879,6 +1886,22 @@ async function finalizeRunOnce(
       });
     }
     const continuationRunId = await createPendingSteeringRun(tx, input);
+    if (
+      input.outcome === "completed" &&
+      input.routineCompletionNotification &&
+      completedMessageId &&
+      !continuationRunId &&
+      writableRun
+    ) {
+      await tx.routineNotificationIntent.create({
+        data: {
+          spaceId: input.spaceId,
+          userId: writableRun.userId,
+          runId: input.runId,
+          messageId: completedMessageId,
+        },
+      });
+    }
     await tx.bot.update({ where: { id: input.botId }, data: { updatedAt: now } });
     return { threadId: lastEvent.threadId, seq: lastEvent.seq, continuationRunId, firstResponse };
   }, FINALIZE_TRANSACTION_OPTIONS);

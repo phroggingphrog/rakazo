@@ -103,7 +103,7 @@ const scheduleCreateProperties = {
   prompt: {
     type: "string",
     description:
-      'Concrete steps for when the schedule fires: what to use, what to extract, and how to report. Name the connected plugin tools to call when one covers the data (e.g. GITHUB_LIST_RELEASES for owner/repo), preferring them over the computer browser or web search; for a website without one, describe the pages and actions to take in the computer\'s browser. This prompt is all a future run knows, and it runs in new circumstances: write the user\'s lasting request in full, keeping every standing item and preference, including their swap and skip rules. A decision that only fit this time, such as an item swapped or skipped because it was out of stock or anything the user said "this week" or "this time" about, becomes a condition, never a permanent change ("skip sourdough if it is out of stock", not "skip sourdough").',
+      'Describe what to use, extract, and report. Prefer named connected tools (e.g. GITHUB_LIST_RELEASES for owner/repo) over browser or search; otherwise describe browser pages and actions. Each future run sees only this prompt: include the full lasting request and standing preferences, including swap and skip rules. Turn one-time choices into conditions, not permanent changes (e.g. "skip sourdough if out of stock").',
   },
   timezone: { type: "string", description: "IANA timezone (default: the user's timezone)." },
 };
@@ -200,11 +200,20 @@ function scheduleCreateBranch(
 /** Exactly one timing method. Null or blank leftovers stay valid so callers can ignore them. */
 const scheduleCreateInputSchema = {
   oneOf: [
-    scheduleCreateBranch(["cron"]),
-    scheduleCreateBranch(["every", "unit"]),
-    scheduleCreateBranch(["runAt"]),
-    scheduleCreateBranch(["delayMinutes"]),
-    scheduleCreateBranch(["delaySeconds"]),
+    ...[["cron"], ["every", "unit"], ["runAt"], ["delayMinutes"], ["delaySeconds"]].map((timing) =>
+      scheduleCreateBranch(timing as (keyof typeof scheduleTimingSpecs)[], {
+        source: {
+          type: "object",
+          description: "Optional exact MCP read; access remains unverified until a run succeeds.",
+          properties: {
+            tool: { type: "string", description: "Full discovered MCP tool name." },
+            arguments: { type: "object", additionalProperties: true },
+          },
+          required: ["tool", "arguments"],
+          additionalProperties: false,
+        },
+      }),
+    ),
     scheduleCreateBranch(["watch"]),
   ],
 };
@@ -668,6 +677,19 @@ export const builtinAgentTools: ConnectorTool[] = [
           description: "Attach the rendered PNG to the chat (default true).",
         },
       },
+    },
+  },
+  {
+    name: "connect_existing_mcp",
+    description:
+      "Find existing MCP integrations available to this bot, or request a connection card for one. Omit server_id to list; pass an id to connect. Existing restricted grants stay unchanged.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_id: { type: "string", description: "Existing integration id to connect." },
+        query: { type: "string", description: "Filter integration names when listing." },
+      },
+      additionalProperties: false,
     },
   },
   {
@@ -1209,9 +1231,68 @@ export const builtinAgentTools: ConnectorTool[] = [
     },
   },
   {
+    name: "proactive_set_interval",
+    description:
+      "Set this bot's fallback patrol interval in milliseconds. Use 0 to turn fallback patrol off; otherwise use five minutes to seven days. Other timers are unaffected.",
+    inputSchema: {
+      type: "object",
+      properties: { fallbackMs: { type: "number" } },
+      required: ["fallbackMs"],
+    },
+  },
+  {
+    name: "proactive_set_wake",
+    description:
+      "Set your next durable wake. dueAt is epoch milliseconds, at least five minutes ahead; maximum twenty self-set wakes per UTC day.",
+    inputSchema: {
+      type: "object",
+      properties: { dueAt: { type: "number" }, note: { type: "string" } },
+      required: ["dueAt"],
+    },
+  },
+  {
+    name: "proactive_set_timer",
+    description:
+      "Create a durable named timer for this bot. Use a unique id and dueAt epoch milliseconds at least five minutes ahead.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" }, dueAt: { type: "number" }, note: { type: "string" } },
+      required: ["id", "dueAt"],
+    },
+  },
+  {
+    name: "proactive_cancel_timer",
+    description: "Cancel this bot own pending named timer.",
+    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "proactive_hook",
+    description:
+      "Register or replace an event hook for this bot. Matches an existing event source and optional literal text; does not create external subscriptions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        source: { type: "string" },
+        contains: { type: "string" },
+      },
+      required: ["id", "source"],
+    },
+  },
+  {
+    name: "proactive_get",
+    description: "Read this bot proactive configuration and revision.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "proactive_reset",
+    description: "Reset this bot proactive configuration to defaults; does not reset daily quotas.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "schedule_create",
     description:
-      'Create a reminder or recurring job for this bot. Use for "remind me in 10 minutes" or "every morning send a joke". Repeats: cron or every/unit (min 1 minute), optionally from startAt. One-shot: runAt, delayMinutes, or delaySeconds. A repeating job carries out the user\'s lasting request each time, not a copy of what was decided today.',
+      'Create a reminder or recurring job for this bot. Use for "remind me in 10 minutes" or "every morning send a joke". Repeats: cron or every/unit (min 1 minute), optionally from startAt. One-shot: runAt, delayMinutes, or delaySeconds. A repeating job carries out the user\'s lasting request each time, not a copy of what was decided today. To attempt an exact integration read each run, supply source with the discovered tool and explicit arguments. Access is unverified until a run succeeds.',
     inputSchema: scheduleCreateInputSchema,
   },
   {
@@ -1222,7 +1303,7 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "schedule_update",
     description:
-      "Edit one of this bot's schedules by routineId instead of cancelling and recreating it. Send only what changes. Timing fields replace the current timing; startAt alone moves the next run of the current repeat. active false pauses it.",
+      "Edit one of this bot's schedules by routineId instead of cancelling and recreating it. Send only what changes. Timing fields replace the current timing; startAt alone moves the next run of the current repeat. active false pauses it. To run a completed one-shot again, provide a new future time and active true together.",
     inputSchema: {
       type: "object",
       properties: {

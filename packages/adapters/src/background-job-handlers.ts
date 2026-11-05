@@ -28,10 +28,13 @@ import { performComputerUpdate } from "./computer-update.js";
 import type { createRunExecutor } from "./executor.js";
 import type { ExpoPushProvider } from "./expo-push.js";
 import { compactHistory } from "./history-compaction.js";
+import { collectLearningCandidates } from "./learning-candidate-collector.js";
+import { enqueueLearningReviewJobs, runScheduledLearningReview } from "./learning-review-store.js";
 import type { MemoryProviderResolver } from "./memory-provider-factory.js";
 import { deliverMessagingOutbound, mirrorMessagingOutbound } from "./messaging-delivery.js";
 import type { ProactiveRuntime } from "./proactive.js";
 import { pollPurchase } from "./purchase-poll.js";
+import { checkRoutineNotificationReceipt } from "./routine-notification-receipts.js";
 import { expireTaughtSkillTeaching } from "./teaching-session.js";
 
 type Tenant = { spaceId: string; userId: string };
@@ -117,6 +120,8 @@ export function createBackgroundJobHandlers(deps: {
     deps.prisma.cloudAgent.findUnique({ where: { id: agentId }, select: OWNER });
   const purchase = ({ purchaseId }: { purchaseId: string }) =>
     deps.prisma.purchase.findUnique({ where: { id: purchaseId }, select: OWNER });
+  const bot = ({ botId }: { botId: string }) =>
+    deps.prisma.bot.findUnique({ where: { id: botId }, select: OWNER });
   const updatedComputer = async ({ updateId }: { updateId: string }) =>
     (
       await deps.prisma.computerUpdate.findUnique({
@@ -130,6 +135,7 @@ export function createBackgroundJobHandlers(deps: {
       if (execution)
         await deps.executor.continueRun(payload.runId, deps.workerId, execution.onRunStarted);
       else await deps.executor.continueRun(payload.runId, deps.workerId);
+      await deps.proactive?.recordSent(payload.runId);
       // Automatic messaging mirror: once the run's bot messages are durable,
       // copy them into the outbox. Never let mirror failures fail the run.
       if (messagingDeps) {
@@ -218,7 +224,15 @@ export function createBackgroundJobHandlers(deps: {
     }),
     // A receipt belongs to a device's push token, not to a Space.
     "push.receipt": async (payload) => {
-      await runAsSystem("check a push receipt", () => deps.notifications?.checkReceipt(payload));
+      if (!deps.notifications) throw new Error("Push receipt provider is unavailable.");
+      if (payload.routine) {
+        await checkRoutineNotificationReceipt(
+          { prisma: deps.prisma, notifications: deps.notifications },
+          payload,
+        );
+      } else {
+        await runAsSystem("check a push receipt", () => deps.notifications!.checkReceipt(payload));
+      }
     },
     // The proactive core acts for a bot's scope through its own tenant lookup, not a job owner.
     "proactive.apply": async (payload) => {
@@ -250,5 +264,27 @@ export function createBackgroundJobHandlers(deps: {
         payload.threadId,
       );
     }),
+    // One bot's scheduled review. The collector stays off unless its flag is set; the review only
+    // runs for a bot whose stored profile asks for it, and it re-plans the next slot afterwards so
+    // the chain continues without a separate cron entry.
+    "learning.review": async (payload) => {
+      const owner = await runAsSystem("find the tenant a learning review acts for", () =>
+        bot(payload),
+      );
+      if (!owner) return;
+      await runAsTenant(owner, async () => {
+        await collectLearningCandidates({ prisma: deps.prisma });
+        const result = await runScheduledLearningReview({
+          prisma: deps.prisma,
+          botId: payload.botId,
+          spaceId: owner.spaceId,
+          userId: owner.userId,
+        });
+        getLogger().info("learning.review finished", { botId: payload.botId, result });
+      });
+      await runAsSystem("plan this bot's next learning review", () =>
+        enqueueLearningReviewJobs({ prisma: deps.prisma, jobs: deps.jobs, botId: payload.botId }),
+      );
+    },
   };
 }

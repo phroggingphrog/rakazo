@@ -298,6 +298,7 @@ export interface ConnectorCall {
   args: Record<string, unknown>;
   connectionId?: string;
   executionId: string;
+  enforceResourceRevision?: boolean;
   route?: ConnectorRoute;
 }
 
@@ -766,12 +767,19 @@ export interface BackgroundJobPayloads {
   "cloud_agent.poll": { agentId: string };
   "purchase.poll": { purchaseId: string };
   /** Read an Expo push receipt; the token is identified by its digest, never stored. */
-  "push.receipt": { userId: string; ticketId: string; tokenDigest: string };
+  "push.receipt": {
+    userId: string;
+    ticketId: string;
+    tokenDigest: string;
+    routine?: { intentId: string; spaceId: string };
+  };
   /** Proactive core: apply a scope's stored events, decide its due group, hand over wakes, fire timers. */
   "proactive.apply": { scope: string };
   "proactive.decide": { scope: string };
   "proactive.redeliver": Record<string, never>;
   "proactive.timers": Record<string, never>;
+  /** Scheduled learning review: judge the bot's pending lessons and record the outcome. */
+  "learning.review": { botId: string };
 }
 
 export type BackgroundJobName = keyof BackgroundJobPayloads;

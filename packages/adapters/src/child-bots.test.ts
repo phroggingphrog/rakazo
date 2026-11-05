@@ -291,6 +291,7 @@ describe("destroyBot", () => {
     const removeArtifact = vi.fn().mockResolvedValue(undefined);
     const findArtifacts = vi.fn().mockResolvedValue([{ storageKey: "stored-artifact" }]);
     const deleteArtifacts = vi.fn().mockResolvedValue({ count: 1 });
+    const cancelJob = vi.fn().mockResolvedValue(undefined);
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
         $queryRaw: vi.fn().mockResolvedValue([{ id: "bot-1" }]),
@@ -315,7 +316,7 @@ describe("destroyBot", () => {
         findMany: vi.fn().mockResolvedValue([]),
         updateMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
-      routine: { findMany: vi.fn().mockResolvedValue([]) },
+      routine: { findMany: vi.fn().mockResolvedValue([{ id: "routine-1" }]) },
       $transaction: transaction,
     } as unknown as PrismaClient;
 
@@ -324,7 +325,7 @@ describe("destroyBot", () => {
         prisma,
         sandbox: {} as SandboxProvider,
         home: {} as AgentHomeStore,
-        jobs: { cancel: vi.fn() } as unknown as JobPublisher,
+        jobs: { cancel: cancelJob } as unknown as JobPublisher,
         artifacts: { remove: removeArtifact } as unknown as ArtifactStore,
       },
       {
@@ -339,6 +340,14 @@ describe("destroyBot", () => {
     );
 
     expect(transaction).toHaveBeenCalledOnce();
+    expect(cancelJob).toHaveBeenCalledTimes(2);
+    expect(cancelJob).toHaveBeenLastCalledWith("routine:routine-1");
+    expect(cancelJob.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteBot.mock.invocationCallOrder[0]!,
+    );
+    expect(cancelJob.mock.invocationCallOrder[1]).toBeGreaterThan(
+      deleteBot.mock.invocationCallOrder[0]!,
+    );
     expect(releaseComputers).toHaveBeenCalledWith({
       where: {
         OR: [{ controlBotId: "bot-1" }, { executionBotId: "bot-1" }],

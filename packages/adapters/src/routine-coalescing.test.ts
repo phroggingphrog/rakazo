@@ -52,6 +52,30 @@ describe("pending routine timer coalescing", () => {
       data: { updatedAt },
     });
   });
+  it("coalesces only the same unstarted selected-source snapshot", async () => {
+    const { tx, findMany } = fixture();
+    const sourceSnapshot = { source: { serverId: "server-1" }, arguments: { query: "one" } };
+    const sourceBinding = {
+      kind: "setup_source_test",
+      status: "intended",
+      request: sourceSnapshot,
+    };
+    await findPendingRoutineTick(tx, { ...config, sourceBinding });
+    const where = findMany.mock.calls[0]![0]!.where!;
+    expect(where.effects).toEqual({
+      some: { kind: "setup_source_test", status: "intended", request: { equals: sourceSnapshot } },
+      every: { kind: "setup_source_test", status: "intended", request: { equals: sourceSnapshot } },
+    });
+  });
+  it("can coalesce an unbound routine without changing its ordinary retry behavior", async () => {
+    const { tx, findMany } = fixture();
+    const sourceBinding = { kind: "setup_source_unbound", status: "completed", request: {} };
+    await findPendingRoutineTick(tx, { ...config, sourceBinding });
+    expect(findMany.mock.calls[0]![0]!.where!.effects).toEqual({
+      some: { kind: "setup_source_unbound", status: "completed", request: { equals: {} } },
+      every: { kind: "setup_source_unbound", status: "completed", request: { equals: {} } },
+    });
+  });
   it("preserves manual runs even with no client nonce", async () => {
     const { tx, updateMany } = fixture(null);
     expect(await findPendingRoutineTick(tx, config)).toBeNull();

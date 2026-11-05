@@ -84,6 +84,7 @@ From `.env.images.example` (images installer). Leave blank if unused:
 | --- | --- |
 | `OPENROUTER_API_KEY` | Deployment-wide OpenRouter models |
 | `TYPESAFE_API_KEY` | Optional TypeSafe Jev Auto Review verifier (`RAKAZO_AUTO_REVIEW_PROVIDER=jev`) |
+| `TYPESAFE_API_URL` | Optional TypeSafe-compatible Jev endpoint; defaults to `https://api.typesafe.ai/v1/systemone` |
 | `COMPOSIO_API_KEY` | Composio managed catalog |
 | `E2B_API_KEY` / `DAYTONA_API_KEY` / `BOAT_API_KEY` | Remote computers when `SANDBOX_PROVIDER` is not `docker` |
 | `EMAIL_PROVIDER` / `EMAIL_API_KEY` / `SMTP_URL` / `EMAIL_FROM` | Optional account email via Resend API or SMTP |

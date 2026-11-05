@@ -34,11 +34,13 @@ const payloadSchemas = {
     userId: z.string().min(1),
     ticketId: z.string().min(1),
     tokenDigest: z.string().min(1),
+    routine: z.object({ intentId: z.string().min(1), spaceId: z.string().min(1) }).optional(),
   }),
   "proactive.apply": z.object({ scope: z.string().min(1) }),
   "proactive.decide": z.object({ scope: z.string().min(1) }),
   "proactive.redeliver": z.object({}),
   "proactive.timers": z.object({}),
+  "learning.review": z.object({ botId: z.string().min(1) }),
 } satisfies { [Name in BackgroundJobName]: z.ZodType<BackgroundJobPayloads[Name]> };
 
 export function parseBackgroundJob(name: string, payload: unknown): BackgroundJob {
@@ -187,7 +189,19 @@ export function pushReceiptJob(
   payload: BackgroundJobPayloads["push.receipt"],
   availableAt: Date,
 ): BackgroundJob {
-  return { name: "push.receipt", payload, availableAt, maxAttempts: 8 };
+  return {
+    name: "push.receipt",
+    payload,
+    availableAt,
+    maxAttempts: 8,
+    ...(payload.routine
+      ? {
+          replaceKey: `routine-receipt:${payload.routine.intentId}`,
+          keepExisting: true,
+          replaceLockedBefore: new Date(Date.now() - 5 * 60_000),
+        }
+      : {}),
+  };
 }
 
 export function cloudAgentPollJobKey(agentId: string): string {
@@ -227,4 +241,12 @@ export function proactiveJob(
     return { name: `proactive.${name}`, payload: { scope }, availableAt: runAt, replaceKey };
   }
   return { name: `proactive.${name}`, payload: {}, availableAt: runAt, replaceKey };
+}
+
+/**
+ * One bot's scheduled learning review. The key carries the day and the slot, so re-planning the
+ * same slot replaces the pending job instead of queueing a second review of the same lessons.
+ */
+export function learningReviewJob(botId: string, runAt: Date, replaceKey: string): BackgroundJob {
+  return { name: "learning.review", payload: { botId }, availableAt: runAt, replaceKey };
 }

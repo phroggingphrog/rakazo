@@ -23,6 +23,7 @@ import type {
   PiOAuthLogins,
   PluginRepoFetcher,
   PluginTextReader,
+  ProactiveRuntime,
   ProviderCatalogCache,
   PushTokenStore,
   RemoteConnectorDependencies,
@@ -47,6 +48,7 @@ import { messagingRoutes } from "./routes/messaging.js";
 import { modelsRoutes } from "./routes/models.js";
 import { paymentWalletRoutes } from "./routes/payment-wallet.js";
 import { routinesRoutes } from "./routes/routines.js";
+import { setupPlansRoutes } from "./routes/setup-plans.js";
 import { spacesRoutes } from "./routes/spaces.js";
 import { threadsRoutes } from "./routes/threads.js";
 import type { VoiceDeps } from "./voice.js";
@@ -57,6 +59,7 @@ export { HEARTBEAT_MS, SESSION_RECHECK_MS } from "./routes/shared.js";
 export { callMarkerClientNonce } from "./routes/threads.js";
 
 export interface RouterDeps {
+  proactive?: ProactiveRuntime;
   pushTokens: PushTokenStore;
   analytics?: ProductAnalytics;
   cloudAgent?: CloudAgentConnection | null;
@@ -93,7 +96,7 @@ export interface RouterDeps {
   composio?: ComposioProvider;
   mcpOAuth?: McpOAuthBroker;
   /** Probes MCP server health; without it servers are never probed from here. */
-  mcp?: Pick<McpConnector, "probe">;
+  mcp?: Pick<McpConnector, "probe" | "discoverMonitorTools" | "discoverSetupMonitorTools">;
   connectors: ConnectorRegistry;
   remoteConnectors?: RemoteConnectorDependencies;
   pluginRepoFetcher?: PluginRepoFetcher;
@@ -153,6 +156,7 @@ export function createRouter(deps: RouterDeps) {
     ...computerRoutes(ctx),
     ...memoryRoutes(ctx),
     ...routinesRoutes(ctx),
+    ...setupPlansRoutes(ctx),
     ...boardsRoutes(ctx),
     ...mcpRoutes(ctx),
     ...availabilityRoutes(ctx),

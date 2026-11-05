@@ -63,7 +63,7 @@ export class HttpDecisionProvider implements DecisionProvider {
       const response = await (this.options.fetch ?? fetch)(
         this.provider === "openrouter"
           ? "https://openrouter.ai/api/alpha/decisions"
-          : "https://api.typesafe.ai/v1/systemone",
+          : this.options.endpoint?.trim() || "https://api.typesafe.ai/v1/systemone",
         {
           method: "POST",
           redirect: "error",

@@ -1,7 +1,15 @@
+import { randomUUID } from "node:crypto";
 import type { BackgroundJob, BackgroundJobHandlers } from "@rakazo/adapter-kit";
 import { messagingDeliverJob, routineWakeupJob } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
-import { createPool, currentDbContext, runAsTenant } from "@rakazo/db";
+import {
+  createDb,
+  createPool,
+  currentDbContext,
+  provisionMessagingIdentity,
+  runAsSystem,
+  runAsTenant,
+} from "@rakazo/db";
 import { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -26,27 +34,31 @@ afterEach(async () => {
 });
 
 function handlers(overrides: Partial<BackgroundJobHandlers> = {}): BackgroundJobHandlers {
-  return {
-    "run.continue": vi.fn(async () => undefined),
-    "routine.wakeup": vi.fn(async () => undefined),
-    "routine.retry": vi.fn(async () => undefined),
-    "computer.update": vi.fn(async () => undefined),
-    "computer.sleep": vi.fn(async () => undefined),
-    "computer.control-expire": vi.fn(async () => undefined),
-    "skill.teaching-expire": vi.fn(async () => undefined),
-    "call.expire": vi.fn(async () => undefined),
-    "history.compact": vi.fn(async () => undefined),
-    "messaging.deliver": vi.fn(async () => undefined),
-    "messaging.credential-cleanup": vi.fn(async () => undefined),
-    "cloud_agent.poll": vi.fn(async () => undefined),
-    "purchase.poll": vi.fn(async () => undefined),
-    "push.receipt": vi.fn(async () => undefined),
-    "proactive.apply": vi.fn(async () => undefined),
-    "proactive.decide": vi.fn(async () => undefined),
-    "proactive.redeliver": vi.fn(async () => undefined),
-    "proactive.timers": vi.fn(async () => undefined),
-    ...overrides,
-  };
+  // Object.assign keeps the map's keys required, so a spread Partial cannot make one optional.
+  return Object.assign(
+    {
+      "run.continue": vi.fn(async () => undefined),
+      "routine.wakeup": vi.fn(async () => undefined),
+      "routine.retry": vi.fn(async () => undefined),
+      "computer.update": vi.fn(async () => undefined),
+      "computer.sleep": vi.fn(async () => undefined),
+      "computer.control-expire": vi.fn(async () => undefined),
+      "skill.teaching-expire": vi.fn(async () => undefined),
+      "call.expire": vi.fn(async () => undefined),
+      "history.compact": vi.fn(async () => undefined),
+      "messaging.deliver": vi.fn(async () => undefined),
+      "messaging.credential-cleanup": vi.fn(async () => undefined),
+      "cloud_agent.poll": vi.fn(async () => undefined),
+      "purchase.poll": vi.fn(async () => undefined),
+      "push.receipt": vi.fn(async () => undefined),
+      "proactive.apply": vi.fn(async () => undefined),
+      "proactive.decide": vi.fn(async () => undefined),
+      "proactive.redeliver": vi.fn(async () => undefined),
+      "proactive.timers": vi.fn(async () => undefined),
+      "learning.review": vi.fn(async () => undefined),
+    },
+    overrides,
+  );
 }
 
 function deferred() {
@@ -162,13 +174,36 @@ describePostgres("Graphile background jobs (PostgreSQL contract)", () => {
     }
   });
 
-  it("starts due maintenance jobs while others are still running", async () => {
-    const publisher = new GraphileJobPublisher(testPool());
-    const host = createReservedGraphileJobWorkerHost(testPool(), { pollInterval: 25 });
+  it("starts a due routine wakeup while other maintenance jobs are still running", async () => {
+    const db = createDb(databaseUrl!);
+    const publisher = new GraphileJobPublisher(db.pool);
+    const host = createReservedGraphileJobWorkerHost(db.pool, { pollInterval: 25 });
     const release = deferred();
     const sleeping: string[] = [];
     const woken: string[] = [];
     try {
+      const identity = await runAsSystem("routine fairness test fixture", () =>
+        provisionMessagingIdentity(
+          db.prisma,
+          { provider: "email", address: `routine-fairness-${randomUUID()}@example.test` },
+          { signupsEnabled: undefined, signupAllowlist: undefined },
+        ),
+      );
+      const due = new Date(Date.now() - 1_000);
+      const routine = await runAsTenant(identity, () =>
+        db.prisma.routine.create({
+          data: {
+            spaceId: identity.spaceId,
+            userId: identity.userId,
+            botId: identity.botId,
+            name: "Routine fairness fixture",
+            prompt: "fixture",
+            crons: ["@once"],
+            active: true,
+            nextRunAt: due,
+          },
+        }),
+      );
       await host.start(
         handlers({
           "computer.sleep": async ({ computerId }) => {
@@ -184,12 +219,14 @@ describePostgres("Graphile background jobs (PostgreSQL contract)", () => {
         await publisher.enqueue({ name: "computer.sleep", payload: { computerId } });
       }
       await waitFor(() => expect(sleeping).toHaveLength(3));
-      await publisher.enqueue(routineWakeupJob("routine-due", new Date()));
-      await waitFor(() => expect(woken).toEqual(["routine-due"]));
+      await runAsTenant(identity, () => publisher.enqueue(routineWakeupJob(routine.id, due)));
+      await waitFor(() => expect(woken).toEqual([routine.id]));
     } finally {
       release.resolve();
       await host.stop();
       await publisher.close();
+      await db.prisma.$disconnect();
+      await db.pool.end();
     }
   });
 

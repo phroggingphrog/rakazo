@@ -1,4 +1,16 @@
 export const ZH_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "设置数据源监控",
+  "Source monitor": "数据源监控",
+  "Saving a proposal does not start a routine or read the source.":
+    "保存提案不会启动例程或读取数据源。",
+  "Source access and permissions have not been verified. No read was performed.":
+    "尚未验证数据源访问权限。未执行读取。",
+  "Declared required fields:": "声明的必填字段：",
+  "Enter a valid JSON object up to 8 KB.": "请输入不超过 8 KB 的有效 JSON 对象。",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "请在集成设置中配置 API 密钥和密码。分页令牌可在此输入。此处不会根据操作架构验证参数。",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "当设置与例程一致时，来源检查会尝试使用这些参数执行所选操作。运行状态会显示操作是否成功。测试不能确认通知已送达。",
   "How other bots see it": "其他机器人如何了解它",
   "Share to": "分享到",
   "{count} files": "{count} 个文件",
@@ -330,6 +342,12 @@ export const ZH_MESSAGES: Record<string, string> = {
   "Connect API key": "连接 API 密钥",
   "Connect Executor": "连接 Executor",
   "Connect MCP server {name}": "连接 MCP 服务器 {name}",
+  "Assign MCP server {name}": "分配 MCP 服务器 {name}",
+  "Approve assignment": "批准分配",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "允许此机器人使用现有服务器。此处不会验证登录状态和提供商访问权限。",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "分配已保存。登录状态和提供商访问权限尚未验证。",
   "Connect Treg": "连接 Treg",
   Connected: "已连接",
   "Connected.": "已连接。",

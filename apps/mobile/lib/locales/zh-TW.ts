@@ -1,4 +1,16 @@
 export const ZH_TW_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "設定資料來源監控",
+  "Source monitor": "資料來源監控",
+  "Saving a proposal does not start a routine or read the source.":
+    "儲存提案不會啟動例行工作或讀取資料來源。",
+  "Source access and permissions have not been verified. No read was performed.":
+    "尚未驗證資料來源存取權限，且未執行讀取。",
+  "Declared required fields:": "宣告的必填欄位：",
+  "Enter a valid JSON object up to 8 KB.": "請輸入不超過 8 KB 的有效 JSON 物件。",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "請在整合設定中設定 API 金鑰和密碼。分頁權杖可在此輸入。此處不會依操作結構描述驗證引數。",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "當設定與例行工作一致時，來源檢查會嘗試使用這些引數執行所選操作。執行狀態會顯示操作是否成功。測試無法確認通知已送達。",
   "How other bots see it": "其他機器人如何瞭解它",
   "Share to": "分享到",
   "{count} files": "{count} 個檔案",
@@ -314,6 +326,12 @@ export const ZH_TW_MESSAGES: Record<string, string> = {
   "Connect API key": "連線 API 金鑰",
   "Connect Executor": "連線 Executor",
   "Connect MCP server {name}": "連線 MCP 伺服器 {name}",
+  "Assign MCP server {name}": "指派 MCP 伺服器 {name}",
+  "Approve assignment": "核准指派",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "允許此機器人使用現有伺服器。此處不會驗證登入狀態和供應商存取權限。",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "指派已儲存。登入狀態和供應商存取權限尚未驗證。",
   "Connect Treg": "連線 Treg",
   Connected: "已連線",
   "Connected. Its tools are available from your next message.":

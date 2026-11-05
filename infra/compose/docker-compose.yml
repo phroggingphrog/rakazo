@@ -84,6 +84,7 @@ x-app-environment: &app-environment
   OPENROUTER_API_KEY:
   ANTHROPIC_API_KEY:
   TYPESAFE_API_KEY:
+  TYPESAFE_API_URL:
   MAX_TOOL_CALLS_PER_TURN:
   MODEL_STREAM_MAX_RETRIES:
   RAKAZO_LOCAL_MODELS:
@@ -226,6 +227,9 @@ x-app-environment: &app-environment
   PHROG_WEB_URL:
   PHROG_WEB_TOKEN:
   PROACTIVE_WEBHOOK_BOTS:
+  # Off by default: bot self-configuration rollout flags.
+  PROACTIVE_ROUTINE_SOURCE:
+  RAKAZO_TOOL_SELECTION:
   # Messaging (outbound delivery runs in the worker)
   MESSAGING_OPEN_SIGNUP:
   SENDBLUE_API_KEY_ID:
@@ -470,6 +474,12 @@ services:
     build:
       context: ../..
       dockerfile: infra/compose/Dockerfile
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/build-id').then(async r=>{const t=(await r.text()).trim();if(!r.ok||t.length!==14||![...t].every(c=>c>='0'&&c<='9'))process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     # Directly, not through pnpm, so a stop reaches it (see the api command).
     working_dir: /app/apps/web
     command: ["node_modules/.bin/vite", "preview", "--host", "0.0.0.0", "--port", "5173"]

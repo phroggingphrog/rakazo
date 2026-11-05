@@ -1,5 +1,6 @@
 import * as z from "zod";
 import { Id, IsoDate } from "./ids.js";
+import { PortableSetupPlanDraftSchema } from "./setup-plan.js";
 
 /**
  * A whole account as one zip, to move between Rakazo installs (Cloud to self-hosted and back).
@@ -162,6 +163,13 @@ export const AccountExportRecordSchema = z.discriminatedUnion("type", [
     thinkingLevel: z.string().nullable(),
     watch: json.nullable(),
     createdAt: IsoDate,
+  }),
+  z.object({
+    type: z.literal("setup_plan"),
+    id: Id,
+    draft: PortableSetupPlanDraftSchema,
+    createdAt: IsoDate,
+    updatedAt: IsoDate,
   }),
   z.object({
     type: z.literal("scratchpad_item"),

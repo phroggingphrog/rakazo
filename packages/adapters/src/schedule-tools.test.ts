@@ -4,7 +4,7 @@ import {
   cancelScheduleFromTool,
   commandWatchFromTool,
   compactScheduleInput,
-  createScheduleFromTool,
+  createScheduleFromTool as createScheduleFromToolImpl,
   filterBuiltinToolsForRun,
   filterBuiltinToolsForThread,
   isOneShotRoutineCron,
@@ -16,6 +16,14 @@ import {
 } from "./schedule-tools.js";
 
 const noRoutines = async () => [];
+// These unit fixtures have no database; PostgreSQL tests exercise the actual row lock.
+const createScheduleFromTool: typeof createScheduleFromToolImpl = (deps, input) => {
+  const prisma = deps.prisma;
+  if (typeof prisma.$transaction === "function") return createScheduleFromToolImpl(deps, input);
+  const tx = { ...prisma, $queryRaw: async () => [{ id: input.target?.botId ?? input.botId }] };
+  const mockPrisma = { ...prisma, $transaction: async (run: (tx: unknown) => unknown) => run(tx) };
+  return createScheduleFromToolImpl({ ...deps, prisma: mockPrisma as typeof prisma }, input);
+};
 const impossibleOffsetDates = ["2030-02-30T10:00Z", "2030-04-31T10:00+05:30"];
 
 describe("resolveScheduleTiming", () => {

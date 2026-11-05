@@ -92,6 +92,7 @@ import {
   reconcilePurchases,
   removePiUserSessions,
   resolveDeploymentModel,
+  routineSourceFromEnv,
   ScriptedAgentRuntime,
   SpaceMemoryProviderResolver,
   StripeBillingProvider,
@@ -627,7 +628,20 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   const userDevices = userDeviceHub
     ? new UserDevices({ prisma, forwardSecret: userDeviceSecret, hub: userDeviceHub })
     : undefined;
+  const proactive = createProactiveRuntime({
+    prisma,
+    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
+    events,
+    jobs,
+    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
+    // A routine reaches the pipeline only when asked; the runner starts runs otherwise.
+    routineSource: routineSourceFromEnv(process.env),
+    // Built before the executor, so the starter is read on first use rather than now.
+    startRoutine: (routineId, scheduledFor) => executor.startRoutine(routineId, scheduledFor),
+  });
+
   const executor = createRunExecutor({
+    proactive,
     billingEnabled: modelCreditsEnabled,
     maxUploadSizeBytes: env.maxUploadSizeBytes,
     contextStrategy,
@@ -665,6 +679,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
     deploymentModelConfigured: env.deploymentModelConfigured,
     dataDir: env.dataDir,
     notifications,
+    routineNotificationOutbox: !inMemoryJobs,
     jobs,
     events,
     onTicketChange: ticketChanges,
@@ -681,13 +696,6 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   });
 
   // Off until PROACTIVE_WEBHOOK_BOTS names bots (or "*"); then those bots' webhooks use the core.
-  const proactive = createProactiveRuntime({
-    prisma,
-    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
-    events,
-    jobs,
-    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
-  });
   const jobHandlers = createBackgroundJobHandlers({
     proactive,
     executor,
@@ -753,6 +761,7 @@ async function buildApp(overrides: CreateAppOverrides): Promise<AppHandles> {
   const stopMcpReprobe = startMcpReprobe({ prisma, mcp, secrets }, mcpOAuth);
 
   const router = createRouter({
+    proactive,
     speechSummary:
       env.voiceSummaryMinChars === undefined
         ? undefined

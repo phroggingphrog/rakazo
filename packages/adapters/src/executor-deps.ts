@@ -20,11 +20,13 @@ import type { PrismaClient, RunLease, ThreadEvents } from "@rakazo/db";
 import type { CloudAgentConnection } from "./cloud-agent-factory.js";
 import type { MemoryProviderResolver } from "./memory-provider-factory.js";
 import type { CodexLiveCatalog } from "./pi-codex-catalog.js";
+import type { ProactiveRuntime } from "./proactive.js";
 import type { RemoteTransportDependencies } from "./remote-mcp.js";
 import type { TicketChangeNotifier } from "./ticket-changes.js";
 import type { UserDeviceGateway } from "./user-device-protocol.js";
 
 export interface ExecutorDeps {
+  proactive?: ProactiveRuntime;
   maxUploadSizeBytes?: number;
   contextStrategy?: AgentContextStrategy;
   prisma: PrismaClient;
@@ -48,6 +50,7 @@ export interface ExecutorDeps {
   deploymentModelConfigured?: boolean;
   dataDir?: string;
   notifications?: NotificationProvider;
+  routineNotificationOutbox?: boolean;
   jobs: JobPublisher;
   /** Publishes board-change signals and wakes ticket owners; absent disables both. */
   onTicketChange?: TicketChangeNotifier;

@@ -27,6 +27,8 @@ export type McpApprovalDecision = {
   assign: boolean;
   /** Whether it closed an open card, rather than repeating a decision. */
   resolved: boolean;
+  /** At least one resolved card describes an assignment to an existing integration. */
+  assignmentOnly?: true;
 };
 
 export type ThreadSeq = {
@@ -102,11 +104,18 @@ async function rewriteCards(
   threads: ApprovalThread[],
   input: { botId?: string; serverId: string; status: ApprovalBlock["status"] },
   selectable: (block: ApprovalBlock) => boolean,
-): Promise<{ seqs: ThreadSeq[]; flipped: number; dismissed: boolean; connected: boolean }> {
+): Promise<{
+  seqs: ThreadSeq[];
+  flipped: number;
+  dismissed: boolean;
+  connected: boolean;
+  assignmentOnly: boolean;
+}> {
   const seqs: ThreadSeq[] = [];
   let flipped = 0;
   let dismissed = false;
   let connected = false;
+  let assignmentOnly = false;
   for (const thread of threads) {
     const messages = await tx.message.findMany({
       where: { threadId: thread.id },
@@ -126,6 +135,8 @@ async function rewriteCards(
         else if (block.status === "connected") connected = true;
       }
       if (!matching.some(selectable)) continue;
+      if (matching.some((block) => selectable(block) && block.assignmentOnly === true))
+        assignmentOnly = true;
       const next = blocks.map((block) =>
         isApproval(block, input.serverId) && selectable(block)
           ? { ...block, status: input.status }
@@ -145,7 +156,7 @@ async function rewriteCards(
       seqs.push({ threadId: thread.id, seq: event.seq });
     }
   }
-  return { seqs, flipped, dismissed, connected };
+  return { seqs, flipped, dismissed, connected, assignmentOnly };
 }
 
 /** Flip every open mcp_approval card for this server. The read, the writes,
@@ -175,7 +186,13 @@ export async function resolveMcpApprovalCards<T>(
           painted.dismissed;
         const assign = !dismissalWon;
         const resolved = painted.flipped > 0;
-        const value = effect ? await effect(tx, { assign, resolved }) : undefined;
+        const value = effect
+          ? await effect(tx, {
+              assign,
+              resolved,
+              ...(painted.assignmentOnly ? { assignmentOnly: true as const } : {}),
+            })
+          : undefined;
         return { seqs: painted.seqs, value };
       },
       { isolationLevel: "Serializable" },
@@ -271,7 +288,17 @@ export async function dismissMcpServerApprovals(
   return seqs;
 }
 
-function mcpConnectedPrompt(name: string): string {
+function mcpConnectedPrompt(
+  name: string,
+  input: { assignmentOnly?: boolean; allowAllTools?: boolean },
+): string {
+  if (input.assignmentOnly || input.allowAllTools === false) {
+    const restricted =
+      input.allowAllTools === false
+        ? " The existing assignment is restricted to its allowed tools."
+        : "";
+    return `The user approved the MCP server ${JSON.stringify(name)} for this bot.${restricted} The assignment was saved, but provider sign-in and tool availability have not been verified. Continue with the user's request and check what is available before claiming the integration works.`;
+  }
   return `The user just connected the MCP server ${JSON.stringify(name)} from its approval card, so its tools are available now. Carry on with what they asked for. If nothing is left to do, confirm in one short sentence.`;
 }
 
@@ -282,7 +309,13 @@ function mcpConnectedPrompt(name: string): string {
 export async function queueMcpConnectedRun(
   tx: Prisma.TransactionClient,
   actor: Actor,
-  input: { botId: string; serverId: string; threadId: string },
+  input: {
+    botId: string;
+    serverId: string;
+    threadId: string;
+    assignmentOnly?: boolean;
+    allowAllTools?: boolean;
+  },
 ): Promise<string | null> {
   const thread = await tx.thread.findFirst({
     where: {
@@ -322,7 +355,7 @@ export async function queueMcpConnectedRun(
       botId: input.botId,
       threadId: thread.id,
       userId: actor.userId,
-      prompt: mcpConnectedPrompt(server.name),
+      prompt: mcpConnectedPrompt(server.name, input),
       status: "queued",
     },
   });

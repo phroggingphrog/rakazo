@@ -18,6 +18,9 @@ export interface EngineOptions {
   target: WakeTarget;
   judge?: Judge;
   rules?: Rule[];
+  scopePolicy?: (
+    scope: string,
+  ) => Promise<{ order?: string[]; rules?: Rule[]; fallbackMs?: number }>;
   clock?: Clock;
   config?: Partial<ProactiveConfig>;
   /** Called for errors the engine absorbs so a sweep can go on. */
@@ -53,6 +56,7 @@ export class ProactiveEngine {
   private readonly target: WakeTarget;
   private readonly judge?: Judge;
   private readonly rules: Rule[];
+  private readonly scopePolicy?: EngineOptions["scopePolicy"];
   private readonly clock: Clock;
   readonly config: ProactiveConfig;
   private readonly onError: (where: string, error: unknown) => void;
@@ -64,6 +68,7 @@ export class ProactiveEngine {
     this.target = options.target;
     this.judge = options.judge;
     this.rules = options.rules ?? [];
+    this.scopePolicy = options.scopePolicy;
     this.clock = options.clock ?? systemClock;
     this.config = { ...DEFAULT_CONFIG, ...options.config };
     this.onError = options.onError ?? (() => undefined);
@@ -147,15 +152,33 @@ export class ProactiveEngine {
 
   /** steer > addressed > rules > judge. A judge failure never drops events. */
   async policy(scope: string, events: ProactiveEvent[]): Promise<Decision> {
-    if (await this.target.isWorking(scope)) return { kind: "wake", reason: "steer" };
-    const dm = events.find((e) => e.addressed === "dm");
-    if (dm) return { kind: "wake", reason: "dm" };
-    if (events.some((e) => e.addressed === "mention")) return { kind: "wake", reason: "mention" };
-    if (events.some((e) => e.kind === "timer")) return { kind: "wake", reason: "timer" };
-    for (const rule of this.rules) {
-      const hit = rule(events);
-      if (hit) return { kind: "wake", reason: `rule:${hit.name}` };
+    events = events.filter((event) => event.kind !== "sent");
+    if (!events.length) return { kind: "drop", reason: "heard" };
+    const policy = await this.scopePolicy?.(scope);
+    if ((policy?.fallbackMs ?? this.config.fallbackMs) <= 0) {
+      events = events.filter(event => !(event.source === "timer" && event.id.startsWith(`fallback:${scope}:`)));
+      if (!events.length) return { kind: "drop", reason: "heard" };
     }
+    for (const stage of policy?.order ?? ["steer", "dm", "mention", "timer", "rules", "judge"]) {
+      if (stage === "steer" && (await this.target.isWorking(scope)))
+        return { kind: "wake", reason: "steer" };
+      if (stage === "dm" && events.some((e) => e.addressed === "dm"))
+        return { kind: "wake", reason: "dm" };
+      if (stage === "mention" && events.some((e) => e.addressed === "mention"))
+        return { kind: "wake", reason: "mention" };
+      if (stage === "timer" && events.some((e) => e.kind === "timer"))
+        return { kind: "wake", reason: "timer" };
+      if (stage === "rules")
+        for (const rule of [...this.rules, ...(policy?.rules ?? [])]) {
+          const hit = rule(events);
+          if (hit) return { kind: "wake", reason: `rule:${hit.name}` };
+        }
+      if (stage === "judge" && this.judge) return this.judgeEvents(scope, events);
+    }
+    return { kind: "drop", reason: "heard" };
+  }
+
+  private async judgeEvents(scope: string, events: ProactiveEvent[]): Promise<Decision> {
     if (!this.judge) return { kind: "drop", reason: "heard" };
 
     const responsibilities = await this.target.responsibilities();
@@ -286,9 +309,10 @@ export class ProactiveEngine {
 
   /** Keep one fallback timer pending for the scope. No-op when it is off or already there. */
   async ensureFallback(scope: string): Promise<void> {
-    if (this.config.fallbackMs <= 0) return;
+    const fallbackMs = (await this.scopePolicy?.(scope))?.fallbackMs ?? this.config.fallbackMs;
+    if (fallbackMs <= 0) return;
     if (await this.store.hasPendingTimer(scope, "fallback:")) return;
-    const dueAt = this.clock.now() + this.config.fallbackMs;
+    const dueAt = this.clock.now() + fallbackMs;
     await this.setTimer({
       id: `fallback:${scope}:${dueAt}`,
       scope,

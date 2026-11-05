@@ -78,6 +78,8 @@ it("approves the bot after OAuth completes while a COOP popup keeps focus", asyn
         />,
       ),
     );
+    expect(host.textContent).toContain("Connect MCP server “Example”");
+    expect(host.querySelector("button")?.textContent).toBe("Authorize");
     await act(async () => host.querySelector("button")?.click());
     await act(async () => vi.advanceTimersByTimeAsync(1000));
     expect(calls.approve).not.toHaveBeenCalled();
@@ -89,7 +91,49 @@ it("approves the bot after OAuth completes while a COOP popup keeps focus", asyn
       serverId: "server",
       threadId: "thread",
     });
+    expect(host.textContent).toContain("Connected");
     expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it("labels an existing server assignment without claiming provider access", async () => {
+  calls.approve.mockClear();
+  calls.oauthBegin.mockClear();
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <McpApprovalCard
+          botId="bot"
+          threadId="thread"
+          block={{
+            kind: "mcp_approval",
+            name: "Example",
+            serverId: "server",
+            transport: "streamable_http",
+            endpoint: "https://example.test/mcp",
+            needsOAuth: false,
+            assignmentOnly: true,
+            status: "pending",
+          }}
+        />,
+      ),
+    );
+    expect(host.textContent).toContain("Sign-in and provider access are not verified here.");
+    expect(host.querySelector("button")?.textContent).toBe("Approve assignment");
+    await act(async () => host.querySelector("button")?.click());
+    expect(calls.approve).toHaveBeenCalledExactlyOnceWith({
+      botId: "bot",
+      serverId: "server",
+      threadId: "thread",
+    });
+    expect(calls.oauthBegin).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Assignment saved");
+    expect(host.textContent).toContain("Sign-in and provider access have not been verified.");
+    expect(host.textContent).not.toContain("Connected");
   } finally {
     await act(async () => root.unmount());
   }

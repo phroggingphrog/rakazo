@@ -6,6 +6,7 @@ import {
   runContinueJob,
   TransientModelError,
 } from "@rakazo/adapter-kit";
+import { SETUP_SOURCE_TEST_KIND } from "@rakazo/contracts";
 import {
   displayName,
   expandSkillReferencesInPrompt,
@@ -17,10 +18,12 @@ import { sanitizedError } from "@rakazo/logging/monitoring";
 import { protectedComputerLifecycleRefusal } from "./desktop-command-guard.js";
 import type { ExecutorDeps } from "./executor-deps.js";
 import { routineRunModelPin } from "./model-selection.js";
+import { routineSourceFromEnv } from "./proactive.js";
 import { findPendingRoutineTick, routineTimerNonce } from "./routine-coalescing.js";
-import { tickRoutineWatch } from "./routine-watch.js";
+import { stableStringify, tickRoutineWatch, watchDefinitionFilter } from "./routine-watch.js";
 import { isUniqueViolation } from "./run-messages.js";
 import { notifyRun } from "./run-notifications.js";
+import { resolveSetupSourceBinding, storeSetupSourceBinding } from "./setup-source-binding.js";
 import { listAgentSkillRecords } from "./skill-tools.js";
 
 /** A routine run stopped by a transient model error gets one more try this much later. */
@@ -34,7 +37,7 @@ export async function deferFutureRoutine(
   routineId: string,
   scheduledAt: Date,
 ): Promise<boolean> {
-  if (scheduledAt.getTime() <= Date.now() + 1_000) return false;
+  if (scheduledAt.getTime() <= Date.now()) return false;
   await jobs.enqueue(routineWakeupJob(routineId, scheduledAt));
   return true;
 }
@@ -69,7 +72,7 @@ export async function scheduleRoutineRetry(
   }
   try {
     const retryAt = Date.now() + ROUTINE_RETRY_DELAY_MS;
-    const [routine, toolCalls, botMessages] = await Promise.all([
+    const [routine, toolCalls, botMessages, sourceTest] = await Promise.all([
       deps.prisma.routine.findUnique({
         where: { id: run.routineId },
         select: { nextRunAt: true },
@@ -78,8 +81,12 @@ export async function scheduleRoutineRetry(
       deps.prisma.message.count({
         where: { threadId: run.threadId, runId: run.id, role: "bot" },
       }),
+      deps.prisma.externalEffect.findFirst({
+        where: { runId: run.id, kind: SETUP_SOURCE_TEST_KIND },
+        select: { id: true },
+      }),
     ]);
-    if (!routine || toolCalls > 0 || botMessages > 0) return false;
+    if (!routine || toolCalls > 0 || botMessages > 0 || sourceTest) return false;
     if (routineNextRunIsNear(routine.nextRunAt, retryAt)) return false;
     await deps.jobs.enqueue(routineRetryJob(run.id, new Date(retryAt)));
     return true;
@@ -112,7 +119,53 @@ async function notifyFailedRoutineRun(
   );
 }
 
+/** Whether scheduled routines reach the bot through the proactive pipeline. */
+function routineSourceEnabled(): boolean {
+  return routineSourceFromEnv(process.env);
+}
+
+/**
+ * Hands a due routine to the proactive pipeline and reports whether it took it. Every
+ * reason to decline — flag off, bot not on the proactive path, routine no longer due, the
+ * event could not be stored — returns false so the caller starts the run the usual way.
+ * A routine is never dropped here.
+ */
+async function routeRoutineThroughProactive(
+  deps: ExecutorDeps,
+  routineId: string,
+  scheduledAt: Date,
+): Promise<boolean> {
+  const proactive = deps.proactive;
+  if (!proactive?.routineSource || !routineSourceEnabled()) return false;
+  try {
+    const routine = await deps.prisma.routine.findUnique({
+      where: { id: routineId },
+      select: { id: true, botId: true, active: true, nextRunAt: true, prompt: true },
+    });
+    if (!routine?.active || routine.nextRunAt?.getTime() !== scheduledAt.getTime()) return true;
+    if (!proactive.enabledFor(routine.botId)) return false;
+    await proactive.receiveRoutine({
+      botId: routine.botId,
+      routineId: routine.id,
+      scheduledFor: scheduledAt.getTime(),
+      text: routine.prompt,
+    });
+    return true;
+  } catch (error) {
+    getLogger().error("routine proactive route", error);
+    return false;
+  }
+}
+
 export async function wakeRoutine(deps: ExecutorDeps, routineId: string, scheduledFor: string) {
+  const scheduledAt = new Date(scheduledFor);
+  if (!Number.isFinite(scheduledAt.getTime())) return;
+  if (await routeRoutineThroughProactive(deps, routineId, scheduledAt)) return;
+  await startRoutineRun(deps, routineId, scheduledFor);
+}
+
+/** Claims a due routine and starts its run. The pipeline calls this for a routine it woke for. */
+export async function startRoutineRun(deps: ExecutorDeps, routineId: string, scheduledFor: string) {
   const scheduledAt = new Date(scheduledFor);
   if (!Number.isFinite(scheduledAt.getTime())) return;
   const routine = await deps.prisma.routine.findUnique({
@@ -181,15 +234,15 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
     spaceId: routine.spaceId,
     userId: routine.userId,
   });
-  const routinePrompt =
-    expandSkillReferencesInPrompt(routine.prompt, skillRecords) +
-    (watchTick?.run ? watchTick.note : "");
   const claimed = await deps.prisma.$transaction(async (tx) => {
     const updated = await tx.routine.updateMany({
       where: {
         id: routine.id,
         active: true,
         nextRunAt: scheduledAt,
+        crons: { equals: routine.crons },
+        timezone: routine.timezone,
+        watch: watchDefinitionFilter(routine.watch),
         bot: { archivedAt: null },
       },
       data: {
@@ -203,9 +256,20 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
     // The claim locks the row, so this is the model that was committed when it fired.
     const currentModel = await tx.routine.findUnique({
       where: { id: routine.id },
-      select: { modelProvider: true, modelId: true, thinkingLevel: true },
+      select: { modelProvider: true, modelId: true, thinkingLevel: true, prompt: true },
     });
     if (!currentModel) return null;
+    const currentPrompt = currentModel.prompt ?? routine.prompt;
+    const routinePrompt =
+      expandSkillReferencesInPrompt(currentPrompt, skillRecords) +
+      (watchTick?.run ? watchTick.note : "");
+    const sourceBinding = await resolveSetupSourceBinding(tx, {
+      routineId: routine.id,
+      spaceId: routine.spaceId,
+      userId: routine.userId,
+      botId: bot.id,
+      prompt: currentPrompt,
+    });
     const timerTick = routine.watch == null && !isOneShotRoutineCrons(routine.crons);
     const timerNonce = timerTick ? routineTimerNonce(routine.id, scheduledFor) : undefined;
     if (timerNonce) {
@@ -216,6 +280,7 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
         userId: routine.userId,
         threadId: thread.id,
         prompt: routinePrompt,
+        ...(sourceBinding ? { sourceBinding } : {}),
         ...routineRunModelPin(currentModel),
       });
       if (pending) return { ...pending, coalesced: true };
@@ -250,9 +315,22 @@ export async function wakeRoutine(deps: ExecutorDeps, routineId: string, schedul
         ...routineRunModelPin(currentModel),
       },
     });
+    await storeSetupSourceBinding(tx, routine.spaceId, run.id, sourceBinding);
     return { ...run, coalesced: false };
   });
-  if (!claimed) return;
+  if (!claimed) {
+    const current = await deps.prisma.routine.findUnique({ where: { id: routineId } });
+    if (
+      current?.active &&
+      current.nextRunAt?.getTime() === scheduledAt.getTime() &&
+      (current.timezone !== routine.timezone ||
+        JSON.stringify(current.crons) !== JSON.stringify(routine.crons) ||
+        stableStringify(current.watch) !== stableStringify(routine.watch))
+    ) {
+      await deps.jobs.enqueue(routineWakeupJob(routine.id, scheduledAt));
+    }
+    return;
+  }
   if (claimed === "fired") {
     if (nextRunAt) await deps.jobs.enqueue(routineWakeupJob(routine.id, nextRunAt));
     return;

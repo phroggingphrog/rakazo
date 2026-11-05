@@ -13,6 +13,7 @@ import { phoneCallSettings } from "@rakazo/core";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 import { stopOnShutdownSignals } from "@rakazo/core/node/shutdown-signals";
 import { startWorkerHealth, watchEventLoopStalls } from "./health.js";
+import { workerRoutineNotifications } from "./routine-notifications.js";
 import { createWorkerSecretStore } from "./secret-store.js";
 
 loadRootEnv();
@@ -48,6 +49,7 @@ import {
   databaseCapacityBackoffMs,
   deploymentModelUsageLookup,
   ExpoPushProvider,
+  enqueueLearningReviewJobs,
   GraphileJobPublisher,
   homeStorageSweeper,
   InMemoryJobQueue,
@@ -75,6 +77,7 @@ import {
   resolveDeploymentModel,
   resolvePiSessionRoot,
   resolveSandboxProvider,
+  routineSourceFromEnv,
   ScriptedAgentRuntime,
   SpaceMemoryProviderResolver,
   sandboxProviderOptionsFromEnv,
@@ -277,7 +280,28 @@ async function main() {
     jobs,
     accessToken: process.env.EXPO_ACCESS_TOKEN,
   });
+  const proactive = createProactiveRuntime({
+    prisma,
+    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
+    events,
+    jobs,
+    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
+    // A routine reaches the pipeline only when asked; the runner starts runs otherwise.
+    routineSource: routineSourceFromEnv(process.env),
+    // Built before the executor, so the starter is read on first use rather than now.
+    startRoutine: (routineId, scheduledFor) => executor.startRoutine(routineId, scheduledFor),
+  });
+
+  const routineNotifications = workerRoutineNotifications({
+    prisma,
+    notifications,
+    jobs,
+    durable: !inMemoryJobs,
+  });
+
   const executor = createRunExecutor({
+    ...routineNotifications.executor,
+    proactive,
     maxUploadSizeBytes: uploadSizeFromEnv(process.env),
     prisma,
     runtime,
@@ -342,13 +366,6 @@ async function main() {
       }),
     );
 
-  const proactive = createProactiveRuntime({
-    prisma,
-    contentKeys: (created as { contentKeys?: ContentKeyRing }).contentKeys,
-    events,
-    jobs,
-    enabledBots: process.env.PROACTIVE_WEBHOOK_BOTS,
-  });
   const jobHandlers = createBackgroundJobHandlers({
     proactive,
     executor,
@@ -371,6 +388,7 @@ async function main() {
     notifications,
   });
   const reconciler = createJobReconciler({
+    ...routineNotifications.reconciler,
     prisma,
     jobs,
     events,
@@ -405,6 +423,9 @@ async function main() {
     },
     reconcileIdleComputers: createIdleComputerSweeper({ prisma, jobs }),
     reconcileDeadJobs: inMemoryJobs ? undefined : createDeadJobPruner(pool),
+    reconcileLearningReviews: async () => {
+      await enqueueLearningReviewJobs({ prisma, jobs });
+    },
     reconcileProactive: () => proactive.reconcile(),
   });
   let stopHealth: (() => Promise<void>) | undefined;

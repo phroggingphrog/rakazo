@@ -1563,6 +1563,9 @@ describe("createChildRoutine", () => {
 
   it("creates the routine in the child's thread and rolls it back if enqueueing fails", async () => {
     const { prisma } = fakeFleet(fleet);
+    prisma.$transaction.mockImplementation(async (write) =>
+      write({ ...prisma, $queryRaw: async () => [{ id: "bot-writer" }] }),
+    );
     const deps = writeDeps(prisma);
     deps.enqueue.mockRejectedValueOnce(new Error("queue down"));
     const result = await createChildRoutine(deps, run, canonical);
@@ -1580,6 +1583,9 @@ describe("createChildRoutine", () => {
 
   it("keeps the routine name on one line in the routine, its result and its notification", async () => {
     const { prisma } = fakeFleet(fleet);
+    prisma.$transaction.mockImplementation(async (write) =>
+      write({ ...prisma, $queryRaw: async () => [{ id: "bot-writer" }] }),
+    );
     const deps = writeDeps(prisma);
     const result = await createChildRoutine(deps, run, { ...canonical, name: "Daily\nbrief" });
     expect(result).toMatchObject({ ok: true, name: "Daily brief", botName: "Writer" });

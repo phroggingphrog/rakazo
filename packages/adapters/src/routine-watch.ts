@@ -20,6 +20,7 @@ import {
   appendEventInTransaction,
   createThreadMessageInTransaction,
   listApprovalRules,
+  Prisma,
   parseComputerMode,
 } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
@@ -323,6 +324,28 @@ export function stableStringify(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value) ?? "null";
+}
+
+export function watchDefinitionFilter(watch: unknown) {
+  return { equals: watch == null ? Prisma.AnyNull : (watch as Prisma.InputJsonValue) };
+}
+
+async function republishChangedWatch(
+  deps: Pick<RoutineWatchTickDeps, "prisma" | "jobs">,
+  routine: TickRoutine,
+  scheduledAt: Date,
+): Promise<void> {
+  const current = await deps.prisma.routine.findUnique({
+    where: { id: routine.id },
+    select: { active: true, nextRunAt: true, watch: true },
+  });
+  if (
+    current?.active &&
+    current.nextRunAt?.getTime() === scheduledAt.getTime() &&
+    stableStringify(current.watch) !== stableStringify(routine.watch)
+  ) {
+    await deps.jobs.enqueue(routineWakeupJob(routine.id, scheduledAt));
+  }
 }
 
 function clip(text: string): string {
@@ -702,15 +725,26 @@ export async function tickRoutineWatch(
     if (error instanceof RoutineWatchRetry) {
       const retryAt = new Date(now.getTime() + RETRY_AFTER_MS);
       const deferred = await deps.prisma.routine.updateMany({
-        where: { id: routine.id, active: true, nextRunAt: scheduledAt },
+        where: {
+          id: routine.id,
+          active: true,
+          nextRunAt: scheduledAt,
+          watch: watchDefinitionFilter(routine.watch),
+        },
         data: { nextRunAt: retryAt },
       });
       if (deferred.count === 1) await deps.jobs.enqueue(routineWakeupJob(routine.id, retryAt));
+      else await republishChangedWatch(deps, routine, scheduledAt);
       return { run: false };
     }
     const reason = error instanceof Error ? error.message : String(error);
     const paused = await deps.prisma.routine.updateMany({
-      where: { id: routine.id, active: true, nextRunAt: scheduledAt },
+      where: {
+        id: routine.id,
+        active: true,
+        nextRunAt: scheduledAt,
+        watch: watchDefinitionFilter(routine.watch),
+      },
       data: {
         active: false,
         nextRunAt: null,
@@ -731,7 +765,7 @@ export async function tickRoutineWatch(
         role: "bot",
         text: `I paused the **${routine.name}** routine because its change check failed: ${reason}\n\nTell me how to fix it, or turn the routine back on once it's sorted.`,
       });
-    }
+    } else await republishChangedWatch(deps, routine, scheduledAt);
     return { run: false };
   }
   const nextRunAt = nextRoutineWatchAt(
@@ -747,10 +781,18 @@ export async function tickRoutineWatch(
     };
   }
   const claimed = await deps.prisma.routine.updateMany({
-    where: { id: routine.id, active: true, nextRunAt: scheduledAt },
+    where: {
+      id: routine.id,
+      active: true,
+      nextRunAt: scheduledAt,
+      watch: watchDefinitionFilter(routine.watch),
+    },
     data: { nextRunAt, watchState: outcome.state },
   });
-  if (claimed.count !== 1) return { run: false };
+  if (claimed.count !== 1) {
+    await republishChangedWatch(deps, routine, scheduledAt);
+    return { run: false };
+  }
   if (watch.loud) {
     await postRoutineWatchMessage(deps, {
       spaceId: routine.spaceId,

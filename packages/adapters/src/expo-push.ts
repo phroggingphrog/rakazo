@@ -17,15 +17,24 @@ import { readBodyCapped, withAbort } from "./web-ssrf.js";
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 const EXPO_RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts";
 const EXPO_PUSH_TIMEOUT_MS = 15_000;
-/** Expo asks for exponential backoff on 429, 5xx and `MessageRateExceeded`. */
+/** Read-only receipt checks back off on 429 and 5xx; sends only retry explicit rate limits. */
 const EXPO_PUSH_RETRY_DELAYS_MS = [1_000, 2_000];
 /** Expo suggests reading receipts 15 minutes after a send and clears them after a day. */
-const EXPO_RECEIPT_DELAY_MS = 15 * 60_000;
+export const EXPO_RECEIPT_DELAY_MS = 15 * 60_000;
+export const EXPO_RECEIPT_TTL_MS = 24 * 60 * 60_000;
 /** Keeps a push well inside Expo's 4096-byte payload limit. */
 const MAX_PUSH_TITLE_CHARS = 100;
 const MAX_PUSH_BODY_CHARS = 180;
 export const MAX_EXPO_PUSH_RESPONSE_BYTES = 64 * 1024;
 const RESPONSE_TOO_LARGE = "Expo push response is too large.";
+
+/** A submission may have reached Expo; retrying without reconciliation can duplicate it. */
+export class ExpoPushUncertainError extends Error {
+  constructor(detail?: string) {
+    super(`Expo push outcome is uncertain${detail ? `: ${detail}` : "."}`);
+    this.name = "ExpoPushUncertainError";
+  }
+}
 
 /** Data a notification tap uses to open the bot or group thread in its space.
  * `deliveryId` distinguishes this send from another push for the same thread:
@@ -166,7 +175,11 @@ export class ExpoPushProvider implements NotificationProvider {
    * has no token, or Expo said the device is gone and the token was dropped.
    * Neither is an Expo acceptance, so callers must not record a reminder.
    */
-  async deliver(message: NotificationMessage, context: AdapterContext): Promise<ExpoPushDelivery> {
+  async deliver(
+    message: NotificationMessage,
+    context: AdapterContext,
+    onAccepted?: (ticketId: string, tokenDigest: string) => Promise<void>,
+  ): Promise<ExpoPushDelivery> {
     const token = await this.deliverableToken(context.userId);
     if (!token) return "undeliverable";
     const payload = {
@@ -178,12 +191,29 @@ export class ExpoPushProvider implements NotificationProvider {
       ...(message.badge === undefined ? {} : { badge: message.badge }),
       data: expoPushData(message, context.spaceId, randomUUID()),
     };
-    const { status, body } = await this.postWithBackoff(EXPO_PUSH_URL, payload, context.signal);
-    const [ticket] = expoPushTickets(body);
+    const { status, body } = await this.postWithBackoff(
+      EXPO_PUSH_URL,
+      payload,
+      context.signal,
+      true,
+    );
+    const tickets = expoPushTickets(body);
+    const [ticket] = tickets;
     if (status < 300 && body === undefined) {
-      throw new Error("Expo push returned an invalid response.");
+      throw new ExpoPushUncertainError("invalid response");
     }
     if (ticket?.details?.error === "DeviceNotRegistered") {
+      const rawData = body && typeof body === "object" ? (body as { data?: unknown }).data : null;
+      if (
+        status < 200 ||
+        status >= 300 ||
+        tickets.length !== 1 ||
+        (Array.isArray(rawData) && rawData.length !== 1) ||
+        ticket.status !== "error" ||
+        ticket.id ||
+        expoRequestErrorList(body).length
+      )
+        throw new ExpoPushUncertainError("contradictory rejection response");
       await this.tokens.remove(context.userId, credentialDigest(token));
       return "undeliverable";
     }
@@ -193,43 +223,55 @@ export class ExpoPushProvider implements NotificationProvider {
       getLogger().error(failure);
       throw new Error(failure);
     }
-    if (ticket?.id) await this.scheduleReceiptCheck(context.userId, token, ticket.id);
+    if (ticket?.status !== "ok" || typeof ticket.id !== "string" || !ticket.id) {
+      throw new ExpoPushUncertainError("missing acceptance ticket");
+    }
+    if (onAccepted) await onAccepted(ticket.id, credentialDigest(token));
+    else await this.scheduleReceiptCheck(context.userId, token, ticket.id);
     return "delivered";
   }
 
-  /** Drops the token when the receipt says the device is no longer registered. */
-  async checkReceipt(receipt: BackgroundJobPayloads["push.receipt"]): Promise<void> {
+  /** A receipt does not confirm that a device displayed a notification. */
+  async checkReceipt(
+    receipt: BackgroundJobPayloads["push.receipt"],
+  ): Promise<ExpoPushReceiptResult> {
     const { status, body } = await this.postWithBackoff(EXPO_RECEIPTS_URL, {
       ids: [receipt.ticketId],
     });
-    // The next send's ticket also reports an unregistered device, so a skipped check loses nothing.
     if (expoAskedToBackOff(status, body)) {
       getLogger().warn("expo push receipt unavailable", { status });
-      return;
+      throw new Error("Expo push receipt temporarily unavailable.");
     }
     const failure = expoRequestError(body, status, this.accessToken);
     if (failure) throw new Error(failure);
     const result = expoPushReceipts(body)[receipt.ticketId];
-    // Still missing 15 minutes on means Expo lost it; there is nothing left to check.
     if (!result) {
       getLogger().warn("expo push receipt missing");
-      return;
+      throw new Error("Expo push receipt is not available yet.");
     }
-    if (result.status !== "error") return;
+    if (result.status === "ok") return "ok";
+    if (result.status !== "error") throw new Error("Expo push receipt has an invalid status.");
     if (result.details?.error === "DeviceNotRegistered") {
       await this.tokens.remove(receipt.userId, receipt.tokenDigest);
-      return;
+      return "device_not_registered";
     }
-    getLogger().error(
-      `expo push receipt error: ${result.details?.error ?? result.message ?? "unknown"}`,
-    );
+    getLogger().error("expo push receipt error");
+    return "error";
   }
 
-  private async postWithBackoff(url: string, payload: unknown, signal?: AbortSignal) {
+  private async postWithBackoff(
+    url: string,
+    payload: unknown,
+    signal?: AbortSignal,
+    submission = false,
+  ) {
     for (let attempt = 0; ; attempt += 1) {
-      const reply = await postToExpo(url, payload, this.accessToken, signal);
+      const reply = await postToExpo(url, payload, this.accessToken, signal, submission);
+      if (submission && reply.status >= 500) throw new ExpoPushUncertainError();
       const retryDelay = this.retryDelaysMs[attempt];
       if (retryDelay === undefined || !expoAskedToBackOff(reply.status, reply.body)) return reply;
+      if (submission && !expoDefinitelyRejectedForRate(reply.status, reply.body))
+        throw new ExpoPushUncertainError("contradictory rate-limit response");
       await delay(retryDelay, undefined, { signal });
     }
   }
@@ -262,7 +304,7 @@ export class ExpoPushProvider implements NotificationProvider {
       expiresAt = await this.sessionExpiresAt(saved.sessionId);
     } catch (error) {
       getLogger().error("push session lookup failed", error);
-      return undefined;
+      throw new Error("Push recipient session lookup failed.");
     }
     if (!expiresAt) return undefined;
     if (expiresAt.getTime() <= Date.now()) {
@@ -276,6 +318,7 @@ export class ExpoPushProvider implements NotificationProvider {
 }
 
 export type ExpoPushDelivery = "delivered" | "undeliverable";
+export type ExpoPushReceiptResult = "ok" | "device_not_registered" | "error";
 
 function expoAskedToBackOff(status: number, body: unknown): boolean {
   return (
@@ -285,16 +328,34 @@ function expoAskedToBackOff(status: number, body: unknown): boolean {
   );
 }
 
+/** A submission may only be repeated after an unambiguous rate-limit rejection. */
+function expoDefinitelyRejectedForRate(status: number, body: unknown): boolean {
+  const data = body && typeof body === "object" ? (body as { data?: unknown }).data : undefined;
+  if (status === 429 && data == null) return true;
+  if (status < 200 || status >= 300 || expoRequestErrorList(body).length > 0) return false;
+  if (Array.isArray(data) && data.length !== 1) return false;
+  const tickets = expoPushTickets(body);
+  const ticket = tickets[0];
+  return Boolean(
+    tickets.length === 1 &&
+      ticket?.status === "error" &&
+      !ticket.id &&
+      ticket.details?.error === "MessageRateExceeded",
+  );
+}
+
 /**
- * One POST to Expo. A network failure, while sending or reading the reply,
- * reads as a 503 so the caller retries it like one.
+ * A failed receipt lookup can be retried. A failed submission may have reached
+ * the provider even when reading its response failed.
  */
 async function postToExpo(
   url: string,
   payload: unknown,
   accessToken: string | undefined,
   signal?: AbortSignal,
+  submission = false,
 ): Promise<{ status: number; body: unknown }> {
+  const cancelledBeforeRequest = Boolean(signal?.aborted);
   const attempt = combineSignals(signal, AbortSignal.timeout(EXPO_PUSH_TIMEOUT_MS));
   try {
     const response = await fetch(url, {
@@ -310,6 +371,11 @@ async function postToExpo(
     return { status: response.status, body: await readExpoPushBody(response, attempt) };
   } catch (error) {
     getLogger().warn("expo push request failed", { error });
+    if (submission && !cancelledBeforeRequest) {
+      throw new ExpoPushUncertainError(
+        errorMessage(error) === RESPONSE_TOO_LARGE ? RESPONSE_TOO_LARGE : undefined,
+      );
+    }
     if (signal?.aborted || errorMessage(error) === RESPONSE_TOO_LARGE) throw error;
     return { status: 503, body: { errors: [{ message: errorMessage(error) }] } };
   }

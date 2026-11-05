@@ -20,6 +20,8 @@ import { FakeWebProvider } from "./fake-web.js";
 import type * as FleetToolsModule from "./fleet-tools.js";
 import type { HostComputerRequest } from "./host-computer-protocol.js";
 import { catalogEntries, resolveCatalogCall } from "./lazy-tool-catalog.js";
+import { toAgentTools } from "./pi-runtime-tools.js";
+import { ToolProgressGuard } from "./tool-progress.js";
 import type { UserDeviceGateway } from "./user-device-protocol.js";
 
 vi.mock("./computer-lifecycle.js", async (importOriginal) => ({
@@ -83,6 +85,7 @@ function fixture({
   },
   shutdownSignal,
   builtin = false,
+  bridge = false,
   disabledBuiltinTools = [],
   parallelCalls = false,
   sourceRole,
@@ -113,6 +116,7 @@ function fixture({
   parallelCalls?: boolean;
   sourceRole?: string;
   builtin?: boolean;
+  bridge?: boolean;
   disabledBuiltinTools?: string[];
   existingSharedMemory?: string;
   /** Simulates another writer landing between the save's read and its commit. */
@@ -282,6 +286,20 @@ function fixture({
       }),
     },
     botRuntimeProfile: { findUnique: vi.fn(async () => null) },
+    mcpServer: {
+      findMany: vi.fn(async () => [
+        { id: "existing", name: "Synthetic mail", transport: "stdio", allBots: false },
+      ]),
+      findFirst: vi.fn(async ({ where }: { where: { id?: string } }) =>
+        where.id === "existing"
+          ? { id: "existing", name: "Synthetic mail", transport: "stdio", allBots: false }
+          : null,
+      ),
+    },
+    botMcpServer: {
+      findMany: vi.fn(async () => [{ serverId: "existing", allowAllTools: false }]),
+      findFirst: vi.fn(async () => ({ allowAllTools: false })),
+    },
     bot: {
       findFirst: vi.fn(async ({ where }: { where: { id: string } }) => ({ id: where.id })),
       findUniqueOrThrow: vi.fn(async () => ({
@@ -334,6 +352,7 @@ function fixture({
     },
     thread: {
       findUniqueOrThrow: vi.fn(async () => ({ id: run.threadId, groupId: null })),
+      findFirst: vi.fn(async () => ({ id: run.threadId })),
       update: vi.fn(async () => ({ nextMessageSeq: 2, nextEventSeq: 2 })),
     },
     message: {
@@ -429,7 +448,7 @@ function fixture({
     externalEffect,
   };
   const transactionalPrisma = Object.assign(prisma, {
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn(async (..._args: unknown[]): Promise<Array<{ id: string }>> => []),
     $transaction: async (action: (tx: typeof prisma) => unknown) => action(prisma),
   });
   const pauseRunForInput = vi.fn(async () => {
@@ -453,6 +472,30 @@ function fixture({
   const runtimeRun = vi.fn(async function* (request: AgentRunRequest) {
     offeredTools = request.tools.map((tool) => tool.name);
     instructions = request.instructions ?? "";
+    if (bridge) {
+      const signal = new AbortController().signal;
+      const tools = toAgentTools(request.tools, {
+        request,
+        signal,
+        queue: [],
+        depth: 0,
+        pausePending: false,
+        pendingShells: [],
+        toolCallSeq: { value: 0 },
+        toolProgress: new ToolProgressGuard(),
+        toolCallBudget: { count: 0, exceeded: false, limit: 0, inFlight: 0 },
+        abortTurn: () => undefined,
+      } as never);
+      for (const call of calls) {
+        const selected = tools.find((tool) => tool.name === call.name);
+        if (!selected) throw new Error(`Missing runtime tool ${call.name}`);
+        const result = await selected.execute(call.executionId, call.args, signal, () => undefined);
+        results.push(result.details);
+        if (isApprovalPausedResult(result.details)) return;
+      }
+      yield { type: "done" as const, text: "Done" };
+      return;
+    }
     const executeCall = async (call: (typeof calls)[number]) => {
       const result = call.name
         ? await request.executeTool!(call.name, call.args, call.executionId)
@@ -672,6 +715,108 @@ describe("disabled builtins", () => {
     expect(f.commit).not.toHaveBeenCalled();
     expect(f.execute).not.toHaveBeenCalled();
     expect(f.effects).toEqual([]);
+  });
+});
+
+describe("existing integration through the deferred tool bridge", () => {
+  it("posts one approval card for an unassigned integration through the real gate and handler", async () => {
+    const f = fixture({ builtin: true, bridge: true });
+    f.prisma.mcpServer.findFirst.mockResolvedValue({
+      id: "existing",
+      name: "Synthetic mail",
+      transport: "stdio",
+      allBots: false,
+    });
+    f.prisma.botMcpServer.findFirst.mockResolvedValue(null as never);
+    f.prisma.$queryRaw.mockImplementation(async (...args: unknown[]) =>
+      String(args[0]).includes("FROM threads") ? [{ id: "thread-1" }] : [],
+    );
+    f.setCalls([
+      { name: "find_tool", args: { names: ["connect_existing_mcp"] }, executionId: "find-1" },
+      {
+        name: "use_tool",
+        args: { name: "connect_existing_mcp", arguments: { server_id: "existing" } },
+        executionId: "connect-1",
+      },
+    ]);
+    await f.run();
+    expect(f.results[1]).toMatchObject({ ok: true, access: "pending" });
+    const cards = () =>
+      f.prisma.message.create.mock.calls.filter(
+        ([{ data }]) =>
+          Array.isArray(data.blocks) &&
+          data.blocks.some(
+            (block: unknown) =>
+              typeof block === "object" &&
+              block !== null &&
+              "kind" in block &&
+              block.kind === "mcp_approval",
+          ),
+      );
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]![0].data).toMatchObject({
+      botId: "bot-1",
+      runId: "run-1",
+      blocks: [
+        expect.objectContaining({ serverId: "existing", assignmentOnly: true, status: "pending" }),
+      ],
+    });
+    await f.run();
+    expect(f.results[3]).toMatchObject({ ok: true, access: "pending" });
+    expect(cards()).toHaveLength(1);
+    expect(f.effects.filter((effect) => effect.kind === "connect_existing_mcp")).toHaveLength(1);
+  });
+
+  it("discovers and runs the real handler, preserving a restricted assignment on replay", async () => {
+    const f = fixture({ builtin: true, bridge: true });
+    f.setCalls([
+      { name: "find_tool", args: { names: ["connect_existing_mcp"] }, executionId: "find-1" },
+      {
+        name: "use_tool",
+        args: { name: "connect_existing_mcp", arguments: {} },
+        executionId: "list-1",
+      },
+      {
+        name: "use_tool",
+        args: { name: "connect_existing_mcp", arguments: { server_id: "existing" } },
+        executionId: "connect-1",
+      },
+    ]);
+    await f.run();
+    expect(f.results[0]).toMatchObject({
+      tools: [expect.objectContaining({ name: "connect_existing_mcp" })],
+    });
+    expect(f.results[1]).toMatchObject({
+      integrations: [expect.objectContaining({ id: "existing", access: "restricted" })],
+    });
+    expect(f.results[2]).toMatchObject({ ok: true, access: "restricted" });
+    expect(f.effects.filter((effect) => effect.kind === "connect_existing_mcp")).toHaveLength(2);
+    expect(f.prisma.mcpServer.findFirst).toHaveBeenCalledTimes(1);
+    expect(f.prisma.botMcpServer.findFirst).toHaveBeenCalledTimes(1);
+    await f.run();
+    expect(f.results[5]).toMatchObject({ ok: true, access: "restricted" });
+    expect(f.prisma.mcpServer.findFirst).toHaveBeenCalledTimes(1);
+    expect(f.prisma.botMcpServer.findFirst).toHaveBeenCalledTimes(1);
+    expect(f.effects.filter((effect) => effect.kind === "connect_existing_mcp")).toHaveLength(2);
+  });
+
+  it("honors an existing deny rule before reaching the integration handler", async () => {
+    const f = fixture({
+      builtin: true,
+      bridge: true,
+      rules: [{ effect: "deny", matchKind: "tool", matchValue: "connect_existing_mcp" }],
+    });
+    f.setCalls([
+      { name: "find_tool", args: { names: ["connect_existing_mcp"] }, executionId: "find-1" },
+      {
+        name: "use_tool",
+        args: { name: "connect_existing_mcp", arguments: { server_id: "existing" } },
+        executionId: "connect-1",
+      },
+    ]);
+    await f.run();
+    expect(f.results[1]).toMatchObject({ error: expect.stringContaining("blocked") });
+    expect(f.prisma.mcpServer.findFirst).not.toHaveBeenCalled();
   });
 });
 

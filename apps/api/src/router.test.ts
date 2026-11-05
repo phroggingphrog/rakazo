@@ -7334,11 +7334,71 @@ describe("routines.update", () => {
     expect(response.status).toBe(200);
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "routine-1", bot: { archivedAt: null }, nextRunAt: null, active: false },
+        where: {
+          id: "routine-1",
+          bot: { archivedAt: null },
+          nextRunAt: null,
+          active: false,
+          crons: { equals: ["@once"] },
+          lastRunAt: null,
+        },
         data: expect.objectContaining({ active: true }),
       }),
     );
     expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("re-arms a completed one-shot only when a new future time is supplied", async () => {
+    const { call, update, enqueue } = fixture(false, false, {
+      lastRunAt: new Date("2026-09-01T09:00:00.000Z"),
+    });
+    const runAt = new Date(Date.now() + 120_000).toISOString();
+    expect((await call({ runAt })).status).toBe(200);
+    expect(update.mock.calls[0]![0]).toMatchObject({
+      where: {
+        active: false,
+        nextRunAt: null,
+        crons: { equals: ["@once"] },
+        lastRunAt: new Date("2026-09-01T09:00:00.000Z"),
+      },
+      data: { active: true, nextRunAt: new Date(runAt) },
+    });
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("does not re-arm a completed one-shot for an unrelated edit", async () => {
+    const { call, update, enqueue } = fixture(false, false, {
+      lastRunAt: new Date("2026-09-01T09:00:00.000Z"),
+    });
+    expect((await call({ name: "Renamed", active: undefined, runAt: undefined })).status).toBe(200);
+    expect(update.mock.calls[0]![0].data).not.toHaveProperty("nextRunAt");
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("requires a new future time to reactivate a completed one-shot", async () => {
+    const { call, update, enqueue } = fixture(false, false, {
+      lastRunAt: new Date("2026-09-01T09:00:00.000Z"),
+    });
+    expect((await call({ runAt: undefined })).status).toBe(400);
+    expect((await call({ runAt: new Date(Date.now() - 60_000).toISOString() })).status).toBe(400);
+    expect(update).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does not rearm over a concurrently changed one-shot", async () => {
+    const lastRunAt = new Date("2026-09-01T09:00:00.000Z");
+    const { call, update, enqueue } = fixture(false, false, { lastRunAt });
+    update.mockImplementationOnce(async (args) => {
+      expect(args.where).toMatchObject({
+        active: false,
+        nextRunAt: null,
+        lastRunAt,
+        crons: { equals: ["@once"] },
+      });
+      throw Object.assign(new Error("not found"), { code: "P2025" });
+    });
+    expect((await call()).status).toBe(409);
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("does not re-arm when the bot is archived between the read and the write", async () => {

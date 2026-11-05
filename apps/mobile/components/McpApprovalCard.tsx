@@ -77,7 +77,11 @@ export function McpApprovalCard({
 
   return (
     <View
-      accessibilityLabel={t("Connect MCP server {name}", { name: block.name })}
+      accessibilityLabel={
+        block.assignmentOnly
+          ? t("Assign MCP server {name}", { name: block.name })
+          : t("Connect MCP server {name}", { name: block.name })
+      }
       style={[styles.card, { backgroundColor: native.fill }]}
     >
       <View style={styles.header}>
@@ -90,7 +94,9 @@ export function McpApprovalCard({
             onAccessibilityAction={onAccessibilityAction}
             style={[styles.title, { color: tokens.foreground }]}
           >
-            {t("Connect MCP server {name}", { name: block.name })}
+            {block.assignmentOnly
+              ? t("Assign MCP server {name}", { name: block.name })
+              : t("Connect MCP server {name}", { name: block.name })}
           </Text>
           <Text style={[styles.summary, { color: tokens.mutedForeground }]} numberOfLines={2}>
             {summary}
@@ -105,20 +111,26 @@ export function McpApprovalCard({
           }}
         >
           {status === "connected"
-            ? t("Connected.")
+            ? block.assignmentOnly
+              ? t("Assignment saved. Sign-in and provider access have not been verified.")
+              : t("Connected.")
             : t("Dismissed. Reconnect anytime from MCP settings.")}
         </Text>
       ) : !readOnly ? (
         <>
           <Text style={[styles.description, { color: tokens.foreground }]}>
-            {block.needsOAuth
-              ? t("Finish MCP authorization in the web app.")
-              : t("Approve this server to let your agent use its tools.")}
+            {block.assignmentOnly
+              ? t(
+                  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.",
+                )
+              : block.needsOAuth
+                ? t("Finish MCP authorization in the web app.")
+                : t("Approve this server to let your agent use its tools.")}
           </Text>
           <View style={styles.actions}>
             {!block.needsOAuth ? (
               <NativeActionButton
-                label={t("Approve")}
+                label={block.assignmentOnly ? t("Approve assignment") : t("Approve")}
                 fill={false}
                 disabled={pendingAction !== null}
                 onPress={() => void submit("approve")}

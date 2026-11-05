@@ -1,4 +1,16 @@
 export const DE_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "Quellenmonitor einrichten",
+  "Source monitor": "Quellenmonitor",
+  "Saving a proposal does not start a routine or read the source.":
+    "Beim Speichern eines Vorschlags wird weder eine Routine gestartet noch die Quelle gelesen.",
+  "Source access and permissions have not been verified. No read was performed.":
+    "Der Zugriff auf die Quelle und die Berechtigungen wurden nicht überprüft. Es wurde nichts gelesen.",
+  "Declared required fields:": "Als erforderlich angegebene Felder:",
+  "Enter a valid JSON object up to 8 KB.": "Gib ein gültiges JSON-Objekt mit höchstens 8 KB ein.",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "Verwende die Integrationseinstellungen für API-Schlüssel und Passwörter. Seitenwechsel-Token kannst du hier eingeben. Die Argumente werden hier nicht anhand des Operationsschemas überprüft.",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "Wenn die Einrichtung mit der Routine übereinstimmt, versucht eine Quellenprüfung die ausgewählte Operation mit diesen Argumenten auszuführen. Der Ausführungsstatus zeigt, ob sie erfolgreich war. Ein Test bestätigt nicht die Zustellung einer Benachrichtigung.",
   "How other bots see it": "So sehen andere Bots ihn",
   "Share to": "Teilen mit",
   "{count} files": "{count} Dateien",
@@ -495,6 +507,12 @@ export const DE_MESSAGES: Record<string, string> = {
     "Verwendet die eigenen {source}-Zugangsdaten dieses Servers für den Zugriff auf {provider}.",
   "Connect API key": "API-Schlüssel verbinden",
   "Connect MCP server {name}": "MCP-Server „{name}“ verbinden",
+  "Assign MCP server {name}": "MCP-Server „{name}“ zuweisen",
+  "Approve assignment": "Zuweisung genehmigen",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "Diesem Bot die Nutzung des vorhandenen Servers erlauben. Anmeldung und Anbieterzugriff werden hier nicht überprüft.",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "Zuweisung gespeichert. Anmeldung und Anbieterzugriff wurden nicht überprüft.",
   "Connected.": "Verbunden.",
   "Context limit": "Kontextlimit",
   "Could not connect this provider": "Anbieter konnte nicht verbunden werden",

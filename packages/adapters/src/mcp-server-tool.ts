@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import type { McpTransport, MessageBlock } from "@rakazo/contracts";
 import { McpRemoteEndpointSchema, McpTransportSchema } from "@rakazo/contracts";
 import { deriveMcpSlug } from "@rakazo/core";
 import type { McpServer } from "@rakazo/db";
+import { availableInSpace } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
 import type { ExecutorDeps } from "./executor-deps.js";
 import { toStringRecord } from "./memory-provider-factory.js";
@@ -11,6 +13,177 @@ import { isUniqueViolation, persistMessageInTransaction, runLeaseFor } from "./r
 export { deriveMcpSlug } from "@rakazo/core";
 
 const MAX_HEADERS = 32;
+
+function cardEndpoint(endpoint: string | null): string | null {
+  if (!endpoint) return null;
+  try {
+    const url = new URL(endpoint);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/** List or request an existing owner integration without changing its grants or credentials. */
+export async function connectExistingMcpFromTool(
+  deps: ExecutorDeps,
+  run: { id: string; spaceId: string; userId: string; threadId: string; botId: string },
+  args: Record<string, unknown>,
+  effectKey: string,
+) {
+  const scope = { userId: run.userId, spaceId: run.spaceId };
+  const serverId = typeof args.server_id === "string" ? args.server_id.trim() : "";
+  const query = typeof args.query === "string" ? args.query.trim().slice(0, 120) : "";
+  const bot = await deps.prisma.bot.findFirst({
+    where: { id: run.botId, ...scope, archivedAt: null },
+    select: { id: true },
+  });
+  if (!bot) return { error: "This bot is unavailable." };
+  if (!serverId) {
+    const servers = await deps.prisma.mcpServer.findMany({
+      where: {
+        ...availableInSpace(scope),
+        enabled: true,
+        ...(query ? { name: { contains: query, mode: "insensitive" } } : {}),
+      },
+      select: { id: true, name: true, transport: true, allBots: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      take: 51,
+    });
+    const visible = servers.slice(0, 50);
+    const assignments = await deps.prisma.botMcpServer.findMany({
+      where: { ...scope, botId: bot.id, serverId: { in: visible.map((server) => server.id) } },
+      select: { serverId: true, allowAllTools: true },
+    });
+    return {
+      integrations: visible.map((server) => {
+        const assignment = assignments.find((row) => row.serverId === server.id);
+        return {
+          id: server.id,
+          name: server.name,
+          transport: server.transport,
+          access: assignment
+            ? assignment.allowAllTools
+              ? "assigned"
+              : "restricted"
+            : server.allBots
+              ? "shared"
+              : "not_assigned",
+        };
+      }),
+      more: servers.length > 50,
+    };
+  }
+  const nonce = `mcp-existing:${createHash("sha256").update(effectKey).digest("hex")}`;
+  const result = await deps.prisma.$transaction(async (tx) => {
+    const [currentBot, server, assignment] = await Promise.all([
+      tx.bot.findFirst({ where: { id: bot.id, ...scope, archivedAt: null }, select: { id: true } }),
+      tx.mcpServer.findFirst({
+        where: { id: serverId, ...availableInSpace(scope), enabled: true },
+        select: { id: true, name: true, transport: true, endpoint: true, allBots: true },
+      }),
+      tx.botMcpServer.findFirst({
+        where: { ...scope, botId: bot.id, serverId },
+        select: { allowAllTools: true },
+      }),
+    ]);
+    if (!currentBot || !server)
+      return { error: "This integration is unavailable in this space." } as const;
+    if (assignment)
+      return {
+        ok: true as const,
+        access: assignment.allowAllTools ? "assigned" : "restricted",
+        note: "The existing assignment was kept unchanged. Provider sign-in and tool readiness were not checked.",
+      };
+    if (server.allBots)
+      return {
+        ok: true as const,
+        access: "shared",
+        note: "This integration is already shared with this bot. Provider sign-in and tool readiness were not checked.",
+      };
+    const threads = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM threads WHERE id = ${run.threadId} AND "userId" = ${run.userId}
+        AND "spaceId" = ${run.spaceId} FOR UPDATE`;
+    if (!threads.length) return { error: "This conversation is unavailable." } as const;
+    const thread = await tx.thread.findFirst({
+      where: {
+        id: run.threadId,
+        ...scope,
+        OR: [{ botId: bot.id }, { group: { members: { some: { botId: bot.id } } } }],
+      },
+      select: { id: true },
+    });
+    if (!thread) return { error: "This bot is not part of the conversation." } as const;
+    const previous = await tx.message.findUnique({
+      where: { threadId_clientNonce: { threadId: run.threadId, clientNonce: nonce } },
+      select: { runId: true, botId: true, blocks: true },
+    });
+    if (previous) {
+      const card = Array.isArray(previous.blocks)
+        ? previous.blocks.find(
+            (block) =>
+              block &&
+              typeof block === "object" &&
+              !Array.isArray(block) &&
+              block.kind === "mcp_approval" &&
+              block.serverId === server.id,
+          )
+        : undefined;
+      if (
+        previous.runId !== run.id ||
+        previous.botId !== run.botId ||
+        !card ||
+        typeof card !== "object" ||
+        Array.isArray(card)
+      )
+        return { error: "Could not recover the connection request." } as const;
+      return {
+        ok: true as const,
+        access:
+          card.status === "dismissed"
+            ? "dismissed"
+            : card.status === "connected"
+              ? "connection_changed"
+              : "pending",
+        note: "Review the existing connection card in the chat.",
+      };
+    }
+    const blocks: MessageBlock[] = [
+      {
+        kind: "mcp_approval",
+        name: server.name,
+        serverId: server.id,
+        transport: server.transport as McpTransport,
+        endpoint: cardEndpoint(server.endpoint),
+        needsOAuth: false,
+        assignmentOnly: true,
+        status: "pending",
+      },
+    ];
+    const committed = await persistMessageInTransaction(
+      tx,
+      run,
+      "bot",
+      blocks,
+      undefined,
+      nonce,
+      false,
+      runLeaseFor(deps, run.id),
+    );
+    return {
+      ok: true as const,
+      access: "pending",
+      note: "Approve the connection card in chat. This grants assignment only; provider sign-in and tool readiness are not verified. Use integration settings if sign-in is needed.",
+      seq: committed.eventSeq,
+      responseRunId: committed.firstResponseRunId,
+    };
+  });
+  if ("seq" in result && result.seq !== undefined)
+    await deps.events
+      .notify(run.threadId, result.seq, result.responseRunId)
+      .catch((error) => getLogger().error("MCP approval realtime notification", error));
+  return result;
+}
 
 export type ParsedMcpServerArgs = {
   slug: string;
@@ -236,7 +409,7 @@ export async function addMcpServerFromTool(
   } catch (error) {
     if (isUniqueViolation(error)) {
       return {
-        error: `An MCP server named "${parsed.name}" already exists. Ask the user to remove it first or pick another name.`,
+        error: `An MCP server named "${parsed.name}" already exists. Use connect_existing_mcp to inspect available integrations, or choose another name if this is a different server.`,
       };
     }
     throw error;

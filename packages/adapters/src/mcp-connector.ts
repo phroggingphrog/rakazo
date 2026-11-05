@@ -420,6 +420,62 @@ export class McpConnector implements ConnectorProvider {
     return lazyCatalogTools(catalogToolPrefix("mcp"), "mcp", "MCP", catalogEntries(tools));
   }
 
+  async discoverMonitorTools(
+    context: AdapterContext,
+    serverId: string,
+  ): Promise<{ status: "ok" | "unavailable" | "not_assigned"; tools: ConnectorTool[] }> {
+    const observations = new Map<string, "ok" | "unavailable">();
+    const tools = await this.authorizedTools(context, observations, serverId);
+    const status = observations.get(serverId) ?? "not_assigned";
+    return {
+      status,
+      tools:
+        status === "ok"
+          ? tools.filter(
+              (tool) =>
+                tool.readOnly === true &&
+                !tool.batch &&
+                tool.route?.resourceId === serverId &&
+                !tool.route.toolName.startsWith("__rakazo_"),
+            )
+          : [],
+    };
+  }
+
+  /** Owner-triggered setup preview; does not create a bot assignment. */
+  async discoverSetupMonitorTools(
+    context: AdapterContext,
+    serverId: string,
+  ): Promise<{ status: "ok" | "unavailable" | "not_assigned"; tools: ConnectorTool[] }> {
+    if (!context.botId) return { status: "not_assigned" as const, tools: [] };
+    const bot = await this.prisma.bot.findFirst({
+      where: {
+        id: context.botId,
+        spaceId: context.spaceId,
+        userId: context.userId,
+        archivedAt: null,
+      },
+      select: { id: true },
+    });
+    if (!bot) return { status: "not_assigned" as const, tools: [] };
+    const observations = new Map<string, "ok" | "unavailable">();
+    const tools = await this.authorizedTools(context, observations, serverId, true);
+    const status = observations.get(serverId) ?? "not_assigned";
+    return {
+      status,
+      tools:
+        status === "ok"
+          ? tools.filter(
+              (tool) =>
+                tool.readOnly === true &&
+                !tool.batch &&
+                tool.route?.resourceId === serverId &&
+                !tool.route.toolName.startsWith("__rakazo_"),
+            )
+          : [],
+    };
+  }
+
   async resolveCall(
     call: ConnectorCall,
     context: AdapterContext,
@@ -435,7 +491,12 @@ export class McpConnector implements ConnectorProvider {
     return resolveCatalogCall(call, catalogEntries(await this.authorizedTools(context)));
   }
 
-  private async authorizedTools(context: AdapterContext): Promise<ConnectorTool[]> {
+  private async authorizedTools(
+    context: AdapterContext,
+    observations?: Map<string, "ok" | "unavailable">,
+    serverId?: string,
+    setupPreview = false,
+  ): Promise<ConnectorTool[]> {
     if (!context.botId) return [];
     const usable = { enabled: true, ...availableInSpace(context) };
     const [assigned, shared] = await Promise.all([
@@ -453,11 +514,18 @@ export class McpConnector implements ConnectorProvider {
         where: { ...usable, allBots: true, assignments: { none: { botId: context.botId } } },
       }),
     ]);
-    const assignments = [...assigned, ...shared.map(sharedAssignment)];
+    const assignments = [...assigned, ...shared.map(sharedAssignment)]
+      .filter((assignment) => !serverId || assignment.server.id === serverId)
+      .map((assignment) => (setupPreview ? sharedAssignment(assignment.server) : assignment));
+    if (setupPreview && serverId && assignments.length === 0) {
+      const server = await this.prisma.mcpServer.findFirst({ where: { ...usable, id: serverId } });
+      if (server) assignments.push(sharedAssignment(server));
+    }
     const groups = await Promise.all(
       assignments.map(async (assignment): Promise<ConnectorTool[]> => {
         const startedAt = Date.now();
         const server = assignment.server;
+        observations?.set(server.id, "unavailable");
         const key = this.sessionKey(server, context);
         const live = this.sessions.get(key)?.revision === server.revision;
         // A package still installing finishes in the background; this run goes on without it.
@@ -493,6 +561,7 @@ export class McpConnector implements ConnectorProvider {
             }),
             this.options.discoveryTimeoutMs ?? DEFAULT_MCP_DISCOVERY_TIMEOUT_MS,
           );
+          observations?.set(server.id, "ok");
           this.discoveryBackoff.delete(key);
           this.unavailable.delete(key);
           void this.recordHealth(assignment.server.id, {
@@ -687,6 +756,17 @@ export class McpConnector implements ConnectorProvider {
       (await this.prisma.mcpServer
         .findFirst({ where: { ...usable, id: call.route.resourceId, allBots: true } })
         .then((server) => (server ? sharedAssignment(server) : null)));
+    if (
+      assignment &&
+      call.enforceResourceRevision &&
+      call.route.resourceRevision !== assignment.server.revision
+    ) {
+      yield {
+        type: "error",
+        message: "The selected integration changed before the operation could run.",
+      };
+      return;
+    }
     if (assignment && call.route.toolName === UNAVAILABLE_TOOL) {
       const reason =
         this.unavailable.get(this.sessionKey(assignment.server, context)) ??

@@ -1,6 +1,12 @@
 import { ORPCError } from "@orpc/server";
 import { routineWakeupJob } from "@rakazo/adapter-kit";
-import { parseRoutineWatch, parseRoutineWatchState, routineRunModelPin } from "@rakazo/adapters";
+import {
+  parseRoutineWatch,
+  parseRoutineWatchState,
+  resolveSetupSourceBinding,
+  routineRunModelPin,
+  storeSetupSourceBinding,
+} from "@rakazo/adapters";
 import type { Actor, CreateRoutineInput, Routine } from "@rakazo/contracts";
 import { canonicalPiProviderId } from "@rakazo/contracts";
 import {
@@ -189,6 +195,14 @@ export async function createRoutineTestRun(
   nonce: string | undefined,
 ) {
   const { routine, botId, threadId } = target;
+  const locked = await tx.$queryRaw<Array<{ prompt: string }>>`
+    SELECT prompt FROM routines WHERE id = ${routine.id}
+      AND "spaceId" = ${actor.spaceId} AND "userId" = ${actor.userId} FOR SHARE`;
+  if (!locked.length) throw new IsolationError();
+  if (locked[0]!.prompt !== routine.prompt)
+    throw new ORPCError("CONFLICT", {
+      message: "Routine changed; review it before starting a test.",
+    });
   const task = await tx.task.create({
     data: {
       spaceId: actor.spaceId,
@@ -201,10 +215,10 @@ export async function createRoutineTestRun(
   });
   const currentModel = await tx.routine.findUnique({
     where: { id: routine.id },
-    select: { modelProvider: true, modelId: true, thinkingLevel: true },
+    select: { modelProvider: true, modelId: true, thinkingLevel: true, prompt: true },
   });
   if (!currentModel) throw new IsolationError();
-  return tx.run.create({
+  const run = await tx.run.create({
     data: {
       spaceId: actor.spaceId,
       botId,
@@ -219,4 +233,13 @@ export async function createRoutineTestRun(
     },
     select: { id: true, status: true },
   });
+  const sourceBinding = await resolveSetupSourceBinding(tx, {
+    routineId: routine.id,
+    spaceId: actor.spaceId,
+    userId: actor.userId,
+    botId,
+    prompt: routine.prompt,
+  });
+  await storeSetupSourceBinding(tx, actor.spaceId, run.id, sourceBinding);
+  return run;
 }

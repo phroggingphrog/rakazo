@@ -1,4 +1,16 @@
 export const RU_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "Настроить монитор источника",
+  "Source monitor": "Монитор источника",
+  "Saving a proposal does not start a routine or read the source.":
+    "Сохранение предложения не запускает задачу и не считывает данные источника.",
+  "Source access and permissions have not been verified. No read was performed.":
+    "Доступ к источнику и разрешения не проверены. Данные не считывались.",
+  "Declared required fields:": "Поля, указанные как обязательные:",
+  "Enter a valid JSON object up to 8 KB.": "Введите корректный объект JSON размером до 8 КБ.",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "API-ключи и пароли задаются в настройках интеграции. Токены пагинации можно ввести здесь. Здесь аргументы не проверяются по схеме операции.",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "Если настройки соответствуют рутине, проверка источника попытается выполнить выбранную операцию с этими аргументами. Статус запуска покажет, удалось ли это. Тест не подтверждает доставку уведомления.",
   "How other bots see it": "Как его видят другие боты",
   "Share to": "Отправить в",
   "{count} files": "Файлов: {count}",
@@ -351,6 +363,12 @@ export const RU_MESSAGES: Record<string, string> = {
   "Connect API key": "Подключить API-ключ",
   "Connect Executor": "Подключить Executor",
   "Connect MCP server {name}": "Подключение MCP-сервера {name}",
+  "Assign MCP server {name}": "Назначить MCP-сервер {name}",
+  "Approve assignment": "Одобрить назначение",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "Разрешить этому боту использовать существующий сервер. Вход и доступ к провайдеру здесь не проверяются.",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "Назначение сохранено. Вход и доступ к провайдеру не проверены.",
   "Connect Treg": "Подключить Treg",
   Connected: "Подключено",
   "Connected.": "Подключено.",

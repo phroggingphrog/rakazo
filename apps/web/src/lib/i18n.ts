@@ -67,9 +67,12 @@ export async function activateUiLocale(locale: UiLocale): Promise<UiLocale> {
   if (activeLocale === locale && i18n.locale === locale) return locale;
 
   try {
-    const messages = await loadCatalog(locale);
+    const [messages, english] = await Promise.all([
+      loadCatalog(locale),
+      locale === "en" ? Promise.resolve({}) : loadCatalog("en").catch(() => ({})),
+    ]);
     if (!isCurrent()) return getActiveUiLocale();
-    return activateLoaded(locale, messages);
+    return activateLoaded(locale, { ...english, ...messages });
   } catch {
     if (!isCurrent()) return getActiveUiLocale();
     if (locale !== "en") {
@@ -86,7 +89,7 @@ export async function activateUiLocale(locale: UiLocale): Promise<UiLocale> {
   }
 }
 
-/** Resolve preferred locale and load only that catalog. */
+/** Resolve preferred locale, with English entries for missing translations. */
 export async function bootstrapI18n(preferred: UiLocale = resolveUiLocale()): Promise<UiLocale> {
   return activateUiLocale(preferred);
 }

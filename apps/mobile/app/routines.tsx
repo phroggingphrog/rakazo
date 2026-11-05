@@ -1,15 +1,20 @@
 import type { Routine } from "@rakazo/contracts";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
-import { ActivityIndicator, Alert, StyleSheet, Text, View } from "react-native";
+import { isOneShotRoutineCrons } from "@rakazo/core";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Platform, StyleSheet, Text, View } from "react-native";
+import { EmailMonitorSetup } from "../components/email-monitor-setup";
 import { NativeActionButton } from "../components/native-action-button";
 import { RoutineList } from "../components/routine-list";
+import { RoutineRearm } from "../components/routine-rearm";
 import { useI18n } from "../lib/i18n";
 import { native, useThemedStyles } from "../lib/native";
 import { deviceTimeZone } from "../lib/routine";
 import {
   loadBotRoutines,
+  rearmBotRoutine,
   removeBotRoutine,
+  routineScope,
   setRoutineActive,
   useBotRoutines,
 } from "../lib/routine-store";
@@ -24,6 +29,49 @@ export default function Routines() {
   const { botId = "", name } = useLocalSearchParams<{ botId?: string; name?: string }>();
   const { routines, error } = useBotRoutines(botId);
   const [deleting, setDeleting] = useState(false);
+  const [rearming, setRearming] = useState<{ routine: Routine; scope: string } | null>(null);
+  const [rearmSaving, setRearmSaving] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const rearmInFlight = useRef(false);
+
+  useEffect(() => setSetupOpen(false), [botId]);
+  useFocusEffect(useCallback(() => () => setSetupOpen(false), []));
+
+  const setupLauncher =
+    botId && (Platform.OS === "ios" || Platform.OS === "android") ? (
+      <NativeActionButton
+        label={t("Set up source monitor")}
+        prominence="secondary"
+        onPress={() => setSetupOpen(true)}
+      />
+    ) : null;
+  const setupSheet = setupOpen ? (
+    <EmailMonitorSetup
+      botId={botId}
+      botName={name ?? t("Bot")}
+      onClose={() => setSetupOpen(false)}
+      onOpenIntegrations={() => {
+        setSetupOpen(false);
+        router.push("/integrations");
+      }}
+      onConfigured={() => void loadBotRoutines(botId)}
+    />
+  ) : null;
+
+  async function rearm(at: Date) {
+    if (!rearming || rearmInFlight.current) return;
+    rearmInFlight.current = true;
+    setRearmSaving(true);
+    try {
+      await rearmBotRoutine(botId, rearming.routine, at, rearming.scope);
+      setRearming(null);
+    } catch (cause) {
+      Alert.alert(t("Could not update routine"), errorText(cause, t("Try again.")));
+    } finally {
+      rearmInFlight.current = false;
+      setRearmSaving(false);
+    }
+  }
 
   async function remove(routine: Routine) {
     setDeleting(true);
@@ -52,30 +100,56 @@ export default function Routines() {
 
   if (routines?.length) {
     return (
-      <RoutineList
-        routines={routines}
-        timeZone={deviceTimeZone()}
-        canDelete={!deleting}
-        onOpen={(routine) =>
-          router.push({
-            pathname: "/routine",
-            params: { botId, botName: name, routineId: routine.id, origin: "profile" },
-          })
-        }
-        onToggle={(routine, active) =>
-          setRoutineActive(botId, routine, active, (cause) =>
-            Alert.alert(t("Could not update routine"), errorText(cause, t("Try again."))),
-          )
-        }
-        onDelete={confirmDelete}
-      />
+      <>
+        <RoutineList
+          routines={routines}
+          header={setupLauncher}
+          timeZone={deviceTimeZone()}
+          canDelete={!deleting}
+          onOpen={(routine) =>
+            router.push({
+              pathname: "/routine",
+              params: { botId, botName: name, routineId: routine.id, origin: "profile" },
+            })
+          }
+          onToggle={(routine, active) => {
+            if (active && isOneShotRoutineCrons(routine.crons) && !routine.nextRunAt) {
+              if (Platform.OS !== "ios" && Platform.OS !== "android") {
+                Alert.alert(
+                  t("Choose a new time"),
+                  t("Open the routine editor to choose a new time."),
+                );
+                return;
+              }
+              setRearming({ routine, scope: routineScope(botId) });
+              return;
+            }
+            setRoutineActive(botId, routine, active, (cause) =>
+              Alert.alert(t("Could not update routine"), errorText(cause, t("Try again."))),
+            );
+          }}
+          onDelete={confirmDelete}
+        />
+        {rearming ? (
+          <RoutineRearm
+            saving={rearmSaving}
+            onCancel={() => setRearming(null)}
+            onSave={(at) => void rearm(at)}
+          />
+        ) : null}
+        {setupSheet}
+      </>
     );
   }
   return (
     <View style={[styles.empty, sideInsets]}>
       {routines ? (
         // There is no add button here: routines are set up by asking the bot.
-        <Text style={styles.message}>{t("Ask this Bot in chat to set up a routine.")}</Text>
+        <>
+          <Text style={styles.message}>{t("Ask this Bot in chat to set up a routine.")}</Text>
+          {setupLauncher}
+          {setupSheet}
+        </>
       ) : error ? (
         <>
           <Text style={styles.message}>{t("Could not load routines")}</Text>

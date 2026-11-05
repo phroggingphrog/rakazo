@@ -9,6 +9,12 @@ import { Linking } from "react-native";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MobileMessage } from "./api";
 
+const assignmentRpc = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+vi.mock("./api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api")>()),
+  rpc: assignmentRpc,
+}));
+
 vi.mock("react-native", async () => {
   const { createElement, useImperativeHandle } = await import("react");
   const flatten = (style: unknown): Record<string, unknown> =>
@@ -104,7 +110,19 @@ vi.mock("../components/native-symbol", () => ({
   NativeSymbol: ({ ios }: { ios: string }) => <i data-symbol={ios} />,
 }));
 vi.mock("../components/native-action-button", () => ({
-  NativeActionButton: ({ label }: { label: string }) => <button type="button">{label}</button>,
+  NativeActionButton: ({
+    label,
+    onPress,
+    disabled,
+  }: {
+    label: string;
+    onPress?: () => void;
+    disabled?: boolean;
+  }) => (
+    <button type="button" onClick={onPress} disabled={disabled}>
+      {label}
+    </button>
+  ),
 }));
 // Cards this file doesn't exercise; each has its own tests.
 vi.mock("../components/thread/ask-block", () => ({ AskBlock: () => null }));
@@ -536,8 +554,48 @@ describe("thread cards", () => {
     );
     const card = container.firstElementChild;
     expect(card?.textContent).toContain("Example notes");
+    expect(card?.textContent).toContain("Connect MCP server Example notes");
+    expect(card?.textContent).toContain("Approve this server to let your agent use its tools.");
+    expect(card?.querySelector("button")?.textContent).toBe("Approve");
     expect(styleOf(card)).toMatchObject({ maxWidth: 576 });
     expect(styleOf(card).width).toBeUndefined();
+  });
+
+  it("saves an assignment without presenting it as a verified connection", async () => {
+    assignmentRpc.mockClear();
+    await act(async () =>
+      root.render(
+        <McpApprovalCard
+          botId="bot-1"
+          threadId="thread-1"
+          block={{
+            kind: "mcp_approval",
+            serverId: "server-1",
+            name: "Example notes",
+            transport: "streamable_http",
+            endpoint: "https://example.test/mcp",
+            needsOAuth: false,
+            assignmentOnly: true,
+            status: "pending",
+          }}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain("Sign-in and provider access are not verified here.");
+    const approve = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Approve assignment",
+    );
+    expect(approve).toBeDefined();
+    await act(async () => approve?.click());
+    expect(assignmentRpc).toHaveBeenCalledExactlyOnceWith("mcp/assignments/approve", {
+      botId: "bot-1",
+      serverId: "server-1",
+      threadId: "thread-1",
+    });
+    expect(container.textContent).toContain(
+      "Assignment saved. Sign-in and provider access have not been verified.",
+    );
+    expect(container.textContent).not.toContain("Connected.");
   });
 
   it("labels a running helper", () => {

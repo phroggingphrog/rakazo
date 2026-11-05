@@ -23,6 +23,7 @@ model AiDataConsent {
 
 model User {
   aiDataConsents AiDataConsent[]
+  setupPlans SetupPlan[]
   id                          String                       @id
   name                        String
   email                       String
@@ -373,6 +374,7 @@ model Member {
 
 model Space {
   aiDataConsents              AiDataConsent[]
+  setupPlans                  SetupPlan[]
   id                          String                       @id
   organizationId              String
   organization                Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -738,6 +740,8 @@ model Bot {
 
   externalConversations ExternalConversation[]
   runtimeProfile    BotRuntimeProfile?
+  learningCandidates LearningCandidate[]
+  learningReviews    LearningReview[]
 
   @@unique([spaceId, spawnKey])
   @@index([spaceId, userId, archivedAt, pinned, updatedAt])
@@ -893,6 +897,7 @@ model Message {
   sourceRuns            Run[]             @relation("RunSourceMessage")
   externalTranscriptFor  ExternalMessage?
   steeringMessages SteeringMessage[]
+  routineNotification RoutineNotificationIntent?
   createdAt        DateTime  @default(now())
 
   @@unique([threadId, seq])
@@ -988,6 +993,7 @@ model Run {
   effects              ExternalEffect[]
   steeringMessages     SteeringMessage[]
   externalMessage      ExternalMessage?
+  routineNotification  RoutineNotificationIntent?
 
   @@unique([spaceId, clientNonce])
   @@index([status, wakeAt])
@@ -1005,6 +1011,34 @@ model Run {
   // Partial index runs_bot_outcome_pending_idx (unreturned bot-message outcomes) is created in SQL.
   @@index([routineId])
   @@map("runs")
+}
+
+/// One routine completion notification; message content stays in the protected message row.
+model RoutineNotificationIntent {
+  id             String   @id @default(cuid())
+  spaceId        String
+  userId         String
+  runId          String   @unique
+  run            Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  messageId      String?  @unique
+  message        Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  status         String   @default("pending")
+  claimToken     String?
+  claimExpiresAt DateTime?
+  preSubmitFailures Int @default(0)
+  nextPreSubmitAttemptAt DateTime?
+  receiptTicketId String?
+  receiptTokenDigest String?
+  receiptStatus String?
+  receiptCheckAt DateTime?
+  receiptExpiresAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([spaceId, userId])
+  @@index([receiptStatus, receiptCheckAt])
+  @@map("routine_notification_intents")
 }
 
 model SteeringMessage {
@@ -1193,10 +1227,35 @@ model Routine {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   runs           Run[]
+  setupPlan      SetupPlan?
 
   @@index([active, nextRunAt])
   @@index([spaceId, botId])
   @@map("routines")
+}
+
+model SetupPlan {
+  id                     String   @id @default(cuid())
+  spaceId                String
+  space                  Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId                 String
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestKey             String
+  requestPayload         Json
+  revision               Int      @default(1)
+  status                 String   @default("draft")
+  draft                  Json
+  routineId              String?  @unique
+  routine                Routine? @relation(fields: [routineId], references: [id], onDelete: SetNull)
+  configureRequestKey    String?
+  configuredFromRevision Int?
+  configuredPrompt       String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([spaceId, userId, requestKey])
+  @@index([spaceId, userId, updatedAt])
+  @@map("setup_plans")
 }
 
 model ScratchpadItem {
@@ -1349,6 +1408,7 @@ model MemoryDocument {
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
   revisions MemoryRevision[]
+  facts     MemoryFact[]
 
   @@unique([spaceId, scope, botId, path])
   @@index([spaceId, userId])
@@ -1367,6 +1427,30 @@ model MemoryRevision {
 
   @@unique([documentId, revision])
   @@map("memory_revisions")
+}
+
+/// One line of a memory document, valid from the revision that introduced it until the revision
+/// that stopped containing it. A correction invalidates the earlier fact instead of deleting it, so
+/// both stay readable while only the newest one is current.
+model MemoryFact {
+  id                  String         @id @default(cuid())
+  documentId          String
+  document            MemoryDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  text                String
+  validFrom           DateTime
+  validFromRevision   Int
+  invalidFrom         DateTime?
+  invalidFromRevision Int?
+  supersedesFactId    String?
+  supersedes          MemoryFact?    @relation("MemoryFactSupersede", fields: [supersedesFactId], references: [id], onDelete: SetNull)
+  superseded          MemoryFact[]   @relation("MemoryFactSupersede")
+  sourceRunId         String?
+  sourceThreadId      String?
+  createdAt           DateTime       @default(now())
+
+  @@index([documentId, invalidFrom])
+  @@index([supersedesFactId])
+  @@map("memory_facts")
 }
 
 model AgentHome {
@@ -2377,4 +2461,51 @@ model ProactiveTimer {
   state String @default("pending")
 
   @@map("proactive_timers")
+}
+
+/// One lesson a bot produced, waiting for a review to judge it. Additive: nothing reads this
+/// table unless the learning collector is enabled and the bot's stored profile asks for reviews.
+model LearningCandidate {
+  id String @id @default(cuid())
+  spaceId String
+  botId String
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// memory | skill | persona. A persona candidate is always proposed, never applied.
+  kind String
+  /// Stable digest of what the candidate says, so the same lesson is collected once.
+  dedupeKey String
+  sourceRunId String?
+  sourceThreadId String?
+  payload Json @default("{}")
+  /// pending | proposed | promoted | dropped
+  status String @default("pending")
+  reviewReason String?
+  reviewedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([botId, dedupeKey])
+  @@index([botId, status, createdAt])
+  @@index([spaceId, createdAt])
+  @@map("learning_candidates")
+}
+
+/// One completed review per (bot, UTC day, slot). The unique key is the claim: two workers
+/// racing for the same slot cannot both record it, and the day's cap is the row count.
+model LearningReview {
+  id String @id @default(cuid())
+  botId String
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  day DateTime
+  slot Int
+  mode String
+  rubricVersion String
+  outcome Json @default("{}")
+  tokensSpent Int @default(0)
+  costUsd Float?
+  createdAt DateTime @default(now())
+
+  @@unique([botId, day, slot])
+  @@index([botId, createdAt])
+  @@map("learning_reviews")
 }

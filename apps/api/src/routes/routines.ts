@@ -170,11 +170,6 @@ export function routinesRoutes(ctx: RouterContext) {
               message: "One-shot schedules must be created from chat.",
             });
           }
-          if (!existing.nextRunAt && existing.lastRunAt) {
-            throw new ORPCError("BAD_REQUEST", {
-              message: "This one-shot already ran.",
-            });
-          }
         }
         const scheduleChanged =
           (!existing.active && active) ||
@@ -188,7 +183,7 @@ export function routinesRoutes(ctx: RouterContext) {
             ? nextRoutineDate(crons, timezone)
             : null;
         let armedOneShotAt: Date | null = null;
-        if (active && isOneShotRoutineCrons(crons) && !existing.nextRunAt && !existing.lastRunAt) {
+        if (active && isOneShotRoutineCrons(crons) && !existing.nextRunAt) {
           if (!input.runAt) {
             throw new ORPCError("BAD_REQUEST", {
               message: "Add a run time for this one-shot.",
@@ -203,7 +198,7 @@ export function routinesRoutes(ctx: RouterContext) {
           armedOneShotAt = parsed;
         } else if (input.runAt !== undefined) {
           throw new ORPCError("BAD_REQUEST", {
-            message: "A run time is only for one-shots that have not run yet.",
+            message: "A run time is only for an unarmed one-shot.",
           });
         }
         const nextRunAt = !active
@@ -239,6 +234,9 @@ export function routinesRoutes(ctx: RouterContext) {
                 : {}),
               ...(writesSchedule ? { nextRunAt: existing.nextRunAt } : {}),
               ...(writesActive ? { active: existing.active } : {}),
+              ...(armedOneShotAt
+                ? { crons: { equals: existing.crons }, lastRunAt: existing.lastRunAt }
+                : {}),
             },
             data: {
               name: input.name,

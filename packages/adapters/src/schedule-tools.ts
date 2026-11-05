@@ -1,7 +1,13 @@
-import type { ConnectorProvider, JobPublisher } from "@rakazo/adapter-kit";
+import { createHash } from "node:crypto";
+import type { ConnectorProvider, ConnectorRoute, JobPublisher } from "@rakazo/adapter-kit";
 import { routineJobKey, routineWakeupJob } from "@rakazo/adapter-kit";
 import type { RoutineWatch } from "@rakazo/contracts";
-import { RoutineWatchSchema, TimeZoneSchema } from "@rakazo/contracts";
+import {
+  RoutineWatchSchema,
+  SetupPlanDraftSchema,
+  setupRoutinePrompt,
+  TimeZoneSchema,
+} from "@rakazo/contracts";
 import {
   cronFromPreset,
   formatCron,
@@ -14,6 +20,7 @@ import {
   wallClock,
   zonedDateTime,
 } from "@rakazo/core";
+import { stableJsonValue } from "@rakazo/core/node/approval-effect-key";
 import type { Prisma, PrismaClient, ThreadEvents } from "@rakazo/db";
 
 import { localDateTime } from "./current-time.js";
@@ -266,6 +273,67 @@ export async function userTimeZone(prisma: PrismaClient, userId: string): Promis
 /** Each routine is an unattended model run, so a looping bot must not stack them. */
 export const MAX_ACTIVE_ROUTINES_PER_BOT = 50;
 
+/** Serialize all chat-created schedules for the same bot before checking name and capacity. */
+async function createRoutineWithBotLock(
+  deps: Pick<ScheduleToolDeps, "prisma">,
+  data: Prisma.RoutineUncheckedCreateInput,
+) {
+  return deps.prisma.$transaction(async (tx) => {
+    const bots = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM bots WHERE id = ${data.botId} AND "spaceId" = ${data.spaceId}
+        AND "userId" = ${data.userId} AND "archivedAt" IS NULL FOR UPDATE`;
+    if (!bots.length) return { error: "Bot not found." } as const;
+    const active = await tx.routine.findMany({
+      where: { spaceId: data.spaceId, botId: data.botId, active: true },
+      select: { id: true, name: true, threadId: true },
+    });
+    const sameName = active.find(
+      (row) =>
+        row.threadId === data.threadId &&
+        row.name.trim().toLowerCase() === data.name.trim().toLowerCase(),
+    );
+    if (sameName)
+      return {
+        error: `An active routine named "${sameName.name}" already exists (${sameName.id}). Update or cancel it instead.`,
+      } as const;
+    if (active.length >= MAX_ACTIVE_ROUTINES_PER_BOT)
+      return {
+        error: `This bot already has ${MAX_ACTIVE_ROUTINES_PER_BOT} active routines. Cancel one before adding another.`,
+      } as const;
+    return { row: await tx.routine.create({ data }) } as const;
+  });
+}
+
+function sourceRequestKey(effectKey: string): string {
+  return createHash("sha256").update(`chat-source:${effectKey}`).digest("hex");
+}
+
+/** The effect key includes the run and complete tool arguments. */
+export async function findSourceScheduleReplay(
+  deps: Pick<ScheduleToolDeps, "prisma">,
+  input: { spaceId: string; userId: string; botId: string; effectKey: string },
+) {
+  const scope = { spaceId: input.spaceId, userId: input.userId };
+  const plan = await deps.prisma.setupPlan.findFirst({
+    where: { ...scope, requestKey: sourceRequestKey(input.effectKey), status: "configured" },
+  });
+  if (!plan) return undefined;
+  const row = plan.routineId
+    ? await deps.prisma.routine.findFirst({
+        where: { ...scope, id: plan.routineId, botId: input.botId },
+      })
+    : null;
+  if (!row) return { error: "The previously created schedule is unavailable." };
+  return {
+    ok: true as const,
+    routineId: row.id,
+    replayed: true,
+    active: row.active,
+    sourceAccess: "not_verified" as const,
+    note: "The existing schedule was returned; wake-up publication was not rechecked.",
+  };
+}
+
 /** Persist and enqueue a bot routine that wakes in the originating thread. */
 export async function createScheduleFromTool(
   deps: ScheduleToolDeps,
@@ -279,6 +347,7 @@ export async function createScheduleFromTool(
     prompt: string;
     timezone?: string;
     schedule: Record<string, unknown>;
+    source?: { route: ConnectorRoute; arguments: Record<string, unknown>; requestKey: string };
   },
 ) {
   const routineBotId = input.target?.botId ?? input.botId;
@@ -287,6 +356,9 @@ export async function createScheduleFromTool(
   const prompt = input.prompt.trim();
   if (!name) return { error: "name is required." };
   if (!prompt) return { error: "prompt is required." };
+
+  if (input.source)
+    return createSourceScheduleFromTool(deps, { ...input, name, prompt, source: input.source });
 
   const active = await deps.prisma.routine.findMany({
     where: { spaceId: input.spaceId, botId: routineBotId, active: true },
@@ -321,21 +393,21 @@ export async function createScheduleFromTool(
   const resolved = resolveScheduleTiming(input.schedule, timezone);
   if (!resolved.ok) return { error: resolved.error };
 
-  const row = await deps.prisma.routine.create({
-    data: {
-      spaceId: input.spaceId,
-      botId: routineBotId,
-      userId: input.userId,
-      threadId: routineThreadId,
-      name,
-      prompt,
-      crons: [resolved.cron],
-      timezone,
-      notify: true,
-      active: true,
-      nextRunAt: resolved.nextRunAt,
-    },
+  const created = await createRoutineWithBotLock(deps, {
+    spaceId: input.spaceId,
+    botId: routineBotId,
+    userId: input.userId,
+    threadId: routineThreadId,
+    name,
+    prompt,
+    crons: [resolved.cron],
+    timezone,
+    notify: true,
+    active: true,
+    nextRunAt: resolved.nextRunAt,
   });
+  if ("error" in created) return created;
+  const row = created.row;
 
   try {
     await deps.jobs.enqueue(routineWakeupJob(row.id, resolved.nextRunAt));
@@ -373,6 +445,203 @@ export async function createScheduleFromTool(
     oneShot: resolved.oneShot,
     ...describeRoutineTiming(row),
   };
+}
+
+/** Create the same configured source binding used by owner-created setup plans. */
+async function createSourceScheduleFromTool(
+  deps: ScheduleToolDeps,
+  input: {
+    spaceId: string;
+    botId: string;
+    userId: string;
+    threadId: string;
+    name: string;
+    prompt: string;
+    timezone?: string;
+    schedule: Record<string, unknown>;
+    source: { route: ConnectorRoute; arguments: Record<string, unknown>; requestKey: string };
+  },
+) {
+  const { route } = input.source;
+  if (
+    !route.resourceId ||
+    typeof route.resourceRevision !== "number" ||
+    input.schedule.watch !== undefined
+  )
+    return { error: "Choose a specific integration read and a timed schedule." };
+  const parsedTimezone = TimeZoneSchema.safeParse(
+    input.timezone ?? (await userTimeZone(deps.prisma, input.userId)),
+  );
+  if (!parsedTimezone.success) return { error: "Invalid timezone." };
+  const timezone = parsedTimezone.data;
+  const resolved = resolveScheduleTiming(input.schedule, timezone);
+  if (!resolved.ok) return { error: resolved.error };
+  const parsed = SetupPlanDraftSchema.safeParse({
+    kind: "email_monitor",
+    purpose: input.prompt,
+    botId: input.botId,
+    source: {
+      serverId: route.resourceId,
+      revision: route.resourceRevision,
+      toolName: route.toolName,
+    },
+    arguments: input.source.arguments,
+    schedule: { cron: resolved.cron, timezone },
+    notify: true,
+  });
+  if (!parsed.success) return { error: "The selected source or operation arguments are invalid." };
+  const draft = parsed.data;
+  const requestKey = sourceRequestKey(input.source.requestKey);
+  const scope = { spaceId: input.spaceId, userId: input.userId };
+  try {
+    const saved = await deps.prisma.$transaction(async (tx) => {
+      const bots = await tx.$queryRaw<
+        Array<{ id: string }>
+      >`SELECT id FROM bots WHERE id = ${input.botId} AND "spaceId" = ${input.spaceId} AND "userId" = ${input.userId} AND "archivedAt" IS NULL FOR UPDATE`;
+      if (!bots.length) return { error: "The bot is unavailable." } as const;
+      const prior = await tx.setupPlan.findFirst({ where: { ...scope, requestKey } });
+      if (prior) {
+        if (stableJsonValue(prior.requestPayload) !== stableJsonValue(draft) || !prior.routineId)
+          return { error: "This setup request was already used with different details." } as const;
+        const row = await tx.routine.findFirst({
+          where: { ...scope, id: prior.routineId, botId: input.botId },
+        });
+        if (!row) return { error: "The previously created schedule is unavailable." } as const;
+        return { row, replayed: true } as const;
+      }
+      const servers = await tx.$queryRaw<
+        Array<{
+          id: string;
+          name: string;
+          slug: string;
+          spaceId: string;
+          allSpaces: boolean;
+          allBots: boolean;
+          revision: number;
+        }>
+      >`SELECT id, name, slug, "spaceId", "allSpaces", "allBots", revision FROM mcp_servers WHERE id = ${route.resourceId} AND "userId" = ${input.userId} AND enabled = true FOR SHARE`;
+      const server = servers[0];
+      if (!bots.length || !server || server.revision !== route.resourceRevision)
+        return { error: "The bot or selected integration is unavailable or changed." } as const;
+      if (server.spaceId !== input.spaceId && !server.allSpaces) {
+        const spaces = await tx.$queryRaw<
+          Array<{ serverId: string }>
+        >`SELECT "serverId" FROM mcp_server_spaces WHERE "serverId" = ${server.id} AND "spaceId" = ${input.spaceId} AND "userId" = ${input.userId} FOR SHARE`;
+        if (!spaces.length)
+          return { error: "The selected integration is unavailable in this space." } as const;
+      }
+      const assignments = await tx.$queryRaw<
+        Array<{ allowAllTools: boolean; allowedTools: unknown }>
+      >`SELECT "allowAllTools", "allowedTools" FROM bot_mcp_servers WHERE "botId" = ${input.botId} AND "serverId" = ${server.id} AND "spaceId" = ${input.spaceId} AND "userId" = ${input.userId} FOR SHARE`;
+      const assignment = assignments[0];
+      if (
+        assignment
+          ? !assignment.allowAllTools &&
+            !(
+              Array.isArray(assignment.allowedTools) &&
+              assignment.allowedTools.includes(route.toolName)
+            )
+          : !server.allBots
+      )
+        return {
+          error: "The selected integration operation is not assigned to this bot.",
+        } as const;
+      const active = await tx.routine.findMany({
+        where: { spaceId: input.spaceId, botId: input.botId, active: true },
+        select: { name: true, threadId: true },
+      });
+      if (
+        active.some(
+          (row) =>
+            row.threadId === input.threadId &&
+            row.name.trim().toLowerCase() === input.name.toLowerCase(),
+        )
+      )
+        return {
+          error: "An active routine with that name already exists. Update or cancel it instead.",
+        } as const;
+      if (active.length >= MAX_ACTIVE_ROUTINES_PER_BOT)
+        return { error: "This bot has reached its active routine limit." } as const;
+      const configuredPrompt = setupRoutinePrompt({
+        purpose: input.prompt,
+        integration: server,
+        toolName: route.toolName,
+        operationArguments: draft.arguments,
+      });
+      const row = await tx.routine.create({
+        data: {
+          ...scope,
+          botId: input.botId,
+          threadId: input.threadId,
+          name: input.name,
+          prompt: configuredPrompt,
+          crons: [resolved.cron],
+          timezone,
+          notify: true,
+          active: true,
+          nextRunAt: resolved.nextRunAt,
+        },
+      });
+      await tx.setupPlan.create({
+        data: {
+          ...scope,
+          requestKey,
+          requestPayload: draft,
+          draft,
+          status: "configured",
+          routineId: row.id,
+          configureRequestKey: requestKey,
+          configuredFromRevision: 1,
+          configuredPrompt,
+        },
+      });
+      return { row, replayed: false } as const;
+    });
+    if ("error" in saved) return saved;
+    if (saved.replayed)
+      return {
+        ok: true as const,
+        routineId: saved.row.id,
+        replayed: true,
+        active: saved.row.active,
+        sourceAccess: "not_verified" as const,
+        note: "The existing schedule was returned; wake-up publication was not rechecked.",
+      };
+    try {
+      await deps.jobs.enqueue(routineWakeupJob(saved.row.id, resolved.nextRunAt));
+    } catch {
+      return {
+        error:
+          "The schedule was saved, but its wake-up could not be confirmed. Check the existing schedule before retrying.",
+        routineId: saved.row.id,
+      };
+    }
+    try {
+      await deps.events.append({
+        spaceId: input.spaceId,
+        threadId: input.threadId,
+        botId: input.botId,
+        type: "routine.created",
+        payload: { name: saved.row.name },
+      });
+    } catch {
+      /* The schedule is saved. */
+    }
+    return {
+      ok: true as const,
+      routineId: saved.row.id,
+      name: saved.row.name,
+      cron: resolved.cron,
+      nextRunAt: resolved.nextRunAt.toISOString(),
+      oneShot: resolved.oneShot,
+      sourceAccess: "not_verified" as const,
+      note: "The schedule will attempt the selected source read when it runs; access and results have not yet been verified.",
+    };
+  } catch {
+    return {
+      error: "Could not save the source schedule. Check existing schedules before retrying.",
+    };
+  }
 }
 
 /** A routine that runs when something changes, from `schedule_create` with `watch`. */
@@ -418,22 +687,22 @@ async function createWatchFromTool(
     return { error: error instanceof Error ? error.message : "Invalid change trigger." };
   }
   const nextRunAt = new Date(Date.now() + 2_000);
-  const row = await deps.prisma.routine.create({
-    data: {
-      spaceId: input.spaceId,
-      botId: input.botId,
-      userId: input.userId,
-      threadId: input.threadId,
-      name: input.name,
-      prompt: input.prompt,
-      crons: [],
-      timezone: input.timezone,
-      notify: true,
-      active: true,
-      watch: parsed.data as Prisma.InputJsonValue,
-      nextRunAt,
-    },
+  const created = await createRoutineWithBotLock(deps, {
+    spaceId: input.spaceId,
+    botId: input.botId,
+    userId: input.userId,
+    threadId: input.threadId,
+    name: input.name,
+    prompt: input.prompt,
+    crons: [],
+    timezone: input.timezone,
+    notify: true,
+    active: true,
+    watch: parsed.data as Prisma.InputJsonValue,
+    nextRunAt,
   });
+  if ("error" in created) return created;
+  const row = created.row;
   try {
     await deps.jobs.enqueue(routineWakeupJob(row.id, nextRunAt));
   } catch {

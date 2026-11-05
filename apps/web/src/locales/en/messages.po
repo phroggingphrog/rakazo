@@ -6710,3 +6710,399 @@ msgstr "Your voice provider is out of credit."
 #: src/lib/user-error.ts
 msgid "Your voice provider key was rejected."
 msgstr "Your voice provider key was rejected."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "A test may read the selected source and send a notification."
+msgstr "A test may read the selected source and send a notification."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Activate routine"
+msgstr "Activate routine"
+
+#: src/pages/shell/message-cards.tsx
+msgid "Allow this bot to use the existing server. Sign-in and provider access are not verified here."
+msgstr "Allow this bot to use the existing server. Sign-in and provider access are not verified here."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Allowed in bot settings"
+msgstr "Allowed in bot settings"
+
+#: src/pages/shell/message-cards.tsx
+msgid "Approve assignment"
+msgstr "Approve assignment"
+
+#: src/pages/shell/message-cards.tsx
+msgid "Assign MCP server “{name}”"
+msgstr "Assign MCP server “{name}”"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Assign this integration to the bot first."
+msgstr "Assign this integration to the bot first."
+
+#: src/pages/shell/message-cards.tsx
+msgid "Assignment saved"
+msgstr "Assignment saved"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Assignment:"
+msgstr "Assignment:"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Available"
+msgstr "Available"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Bot:"
+msgstr "Bot:"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Changed; choose it again"
+msgstr "Changed; choose it again"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Check setup"
+msgstr "Check setup"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Choose an integration"
+msgstr "Choose an integration"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Choose an integration and a read operation."
+msgstr "Choose an integration and a read operation."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Choose an operation"
+msgstr "Choose an operation"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Configured"
+msgstr "Configured"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Could not load routine status. Open Routines to activate it."
+msgstr "Could not load routine status. Open Routines to activate it."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Could not update the setup. Try again."
+msgstr "Could not update the setup. Try again."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Create paused routine"
+msgstr "Create paused routine"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Declared as read-only"
+msgstr "Declared as read-only"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Declared fields:"
+msgstr "Declared fields:"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Declared required fields:"
+msgstr "Declared required fields:"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Describe what the agent should watch."
+msgstr "Describe what the agent should watch."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Draft"
+msgstr "Draft"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Draft saved"
+msgstr "Draft saved"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Email monitor"
+msgstr "Email monitor"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Enter a valid JSON object up to 8 KB."
+msgstr "Enter a valid JSON object up to 8 KB."
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Expo receipt unavailable; device delivery not confirmed"
+msgstr "Expo receipt unavailable; device delivery not confirmed"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Expo receipt was successful; device display not confirmed"
+msgstr "Expo receipt was successful; device display not confirmed"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Expo reported a push delivery error"
+msgstr "Expo reported a push delivery error"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Find read operations"
+msgstr "Find read operations"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "If the integration changed, choose New proposal and set it up again."
+msgstr "If the integration changed, choose New proposal and set it up again."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Integration"
+msgstr "Integration"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Integration:"
+msgstr "Integration:"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Load more proposals"
+msgstr "Load more proposals"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Mailbox access and permissions have not been verified. No read was performed."
+msgstr "Mailbox access and permissions have not been verified. No read was performed."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Manage integrations"
+msgstr "Manage integrations"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Most recent source test for this routine. It reflects the setup when that test ran."
+msgstr "Most recent source test for this routine. It reflects the setup when that test ran."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "New proposal"
+msgstr "New proposal"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "No available push recipient"
+msgstr "No available push recipient"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "No declared read operations were found."
+msgstr "No declared read operations were found."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Not allowed in bot settings"
+msgstr "Not allowed in bot settings"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Not checked"
+msgstr "Not checked"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Not configured"
+msgstr "Not configured"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Not found"
+msgstr "Not found"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Not started"
+msgstr "Not started"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Notification blocked before sending"
+msgstr "Notification blocked before sending"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Notification cancelled"
+msgstr "Notification cancelled"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Notification delivery unknown"
+msgstr "Notification delivery unknown"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Notification not sent; preparation retries exhausted"
+msgstr "Notification not sent; preparation retries exhausted"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Notification queued"
+msgstr "Notification queued"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Notification status unknown"
+msgstr "Notification status unknown"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Notification submission started; outcome pending"
+msgstr "Notification submission started; outcome pending"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Open routine history for the result and notification status."
+msgstr "Open routine history for the result and notification status."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Operation arguments (JSON object)"
+msgstr "Operation arguments (JSON object)"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Operation:"
+msgstr "Operation:"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Pause routine"
+msgstr "Pause routine"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Proposal saved"
+msgstr "Proposal saved"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Proposed"
+msgstr "Proposed"
+
+#: src/pages/RoutineRunHistory.tsx
+msgid "Push accepted by Expo; device delivery not confirmed"
+msgstr "Push accepted by Expo; device delivery not confirmed"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Read operation"
+msgstr "Read operation"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Read operation:"
+msgstr "Read operation:"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Refresh integrations"
+msgstr "Refresh integrations"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Refresh status"
+msgstr "Refresh status"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Routine no longer exists"
+msgstr "Routine no longer exists"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Run status:"
+msgstr "Run status:"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Run test"
+msgstr "Run test"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Save changes before checking this proposal."
+msgstr "Save changes before checking this proposal."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Save draft"
+msgstr "Save draft"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Save proposal"
+msgstr "Save proposal"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Saved proposals"
+msgstr "Saved proposals"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Selected operation permission:"
+msgstr "Selected operation permission:"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Set up email monitor"
+msgstr "Set up email monitor"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Setup changed; source not verified"
+msgstr "Setup changed; source not verified"
+
+#: src/pages/shell/message-cards.tsx
+msgid "Sign-in and provider access have not been verified."
+msgstr "Sign-in and provider access have not been verified."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Source test:"
+msgstr "Source test:"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Succeeded"
+msgstr "Succeeded"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "The previous save may have completed. Retry the same draft or reopen it from saved drafts."
+msgstr "The previous save may have completed. Retry the same draft or reopen it from saved drafts."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "The routine is unavailable, so a test cannot run."
+msgstr "The routine is unavailable, so a test cannot run."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "This creates a paused routine that you can test and activate."
+msgstr "This creates a paused routine that you can test and activate."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "This integration is unavailable."
+msgstr "This integration is unavailable."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "This saves a proposal. It does not start a routine or check your mailbox."
+msgstr "This saves a proposal. It does not start a routine or check your mailbox."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "This setup is saved. Its routine status and available actions appear below."
+msgstr "This setup is saved. Its routine status and available actions appear below."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Unavailable"
+msgstr "Unavailable"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Unavailable for this run"
+msgstr "Unavailable for this run"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Unavailable integration"
+msgstr "Unavailable integration"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Uncertain"
+msgstr "Uncertain"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here."
+msgstr "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "What should {botName} watch for?"
+msgstr "What should {botName} watch for?"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery."
+msgstr "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "When should it check?"
+msgstr "When should it check?"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Allow the selected read operation without changing other bot access."
+msgstr "Allow the selected read operation without changing other bot access."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Allow selected read"
+msgstr "Allow selected read"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Selected read is allowed in bot settings."
+msgstr "Selected read is allowed in bot settings."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Set up source monitor"
+msgstr "Set up source monitor"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Source monitor"
+msgstr "Source monitor"
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Saving a proposal does not start a routine or read the source."
+msgstr "Saving a proposal does not start a routine or read the source."
+
+#: src/pages/shell/email-monitor-setup.tsx
+msgid "Source access and permissions have not been verified. No read was performed."
+msgstr "Source access and permissions have not been verified. No read was performed."

@@ -1,4 +1,16 @@
 export const NL_MESSAGES: Record<string, string> = {
+  "Set up source monitor": "Bronmonitor instellen",
+  "Source monitor": "Bronmonitor",
+  "Saving a proposal does not start a routine or read the source.":
+    "Een voorstel opslaan start geen routine en leest de bron niet.",
+  "Source access and permissions have not been verified. No read was performed.":
+    "Toegang tot de bron en machtigingen zijn niet gecontroleerd. Er is niets gelezen.",
+  "Declared required fields:": "Als verplicht opgegeven velden:",
+  "Enter a valid JSON object up to 8 KB.": "Voer een geldig JSON-object van maximaal 8 KB in.",
+  "Use the integration settings for API keys and passwords. Pagination tokens can be entered here. Arguments are not validated against the operation schema here.":
+    "Gebruik de integratie-instellingen voor API-sleutels en wachtwoorden. Pagineringstokens kun je hier invoeren. Argumenten worden hier niet aan het bewerkingsschema getoetst.",
+  "When setup matches the routine, a source check attempts the selected operation with these arguments. Run status shows whether it succeeded. A test does not confirm notification delivery.":
+    "Als de instellingen overeenkomen met de routine, probeert een broncontrole de geselecteerde bewerking met deze argumenten uit te voeren. De uitvoeringsstatus toont of dit is gelukt. Een test bevestigt niet dat een melding is bezorgd.",
   "How other bots see it": "Hoe andere bots deze zien",
   "Share to": "Delen met",
   "{count} files": "{count} bestanden",
@@ -488,6 +500,12 @@ export const NL_MESSAGES: Record<string, string> = {
     "Gebruikt de eigen {source}-gegevens van deze server om toegang te krijgen tot {provider}.",
   "Connect API key": "API-sleutel koppelen",
   "Connect MCP server {name}": "MCP-server {name} koppelen",
+  "Assign MCP server {name}": "MCP-server {name} toewijzen",
+  "Approve assignment": "Toewijzing goedkeuren",
+  "Allow this bot to use the existing server. Sign-in and provider access are not verified here.":
+    "Geef deze bot toegang tot de bestaande server. Aanmelding en toegang tot de aanbieder worden hier niet gecontroleerd.",
+  "Assignment saved. Sign-in and provider access have not been verified.":
+    "Toewijzing opgeslagen. Aanmelding en toegang tot de aanbieder zijn niet gecontroleerd.",
   "Connected.": "Gekoppeld.",
   "Context limit": "Contextlimiet",
   "Could not connect this provider": "Deze aanbieder koppelen mislukt",

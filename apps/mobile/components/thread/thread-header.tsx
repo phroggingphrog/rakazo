@@ -105,6 +105,11 @@ export function useThreadHeader({
         onGroupSettings: () =>
           router.push({ pathname: "/group-settings", params: { groupId: groupId ?? "" } }),
         onBotActions: showBotActions,
+        onOpenRoutines: () =>
+          router.push({
+            pathname: "/routines",
+            params: { botId: botId ?? "", name: displayName ?? t("Bot") },
+          }),
         menuActions: botActions,
         computerLabel: t("Open computer"),
       }),

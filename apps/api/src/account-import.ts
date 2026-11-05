@@ -40,6 +40,7 @@ import { getLogger } from "@rakazo/logging";
 import { Unzip, UnzipInflate } from "fflate";
 import type { Hono } from "hono";
 import { cancelBody } from "./http-body.js";
+import { importSetupPlan } from "./setup-plan-import.js";
 import type { SpaceDeletionDeps } from "./space-deletion.js";
 import { deleteSpaceWithContent } from "./space-deletion.js";
 
@@ -643,6 +644,10 @@ class AccountImporter implements ArchiveSink {
             createdAt: new Date(record.createdAt),
           },
         });
+        return;
+      }
+      case "setup_plan": {
+        await importSetupPlan(prisma, { spaceId, userId }, newId(), record);
         return;
       }
       case "scratchpad_item": {
