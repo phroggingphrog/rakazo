@@ -39,6 +39,7 @@ import {
   sanitizeConnectorError,
 } from "./connector-safety.js";
 import { credentialDigest } from "./credential-digest.js";
+import { type DependencyClaim, DependencyRetry } from "./dependency-retry.js";
 import {
   CATALOG_EXECUTE,
   catalogEntries,
@@ -236,7 +237,17 @@ export type McpConnectorOptions = {
   credentialTempRoot?: string;
   /** How long a run waits for one server's tool list; 0 waits for the transport's own timeouts. */
   discoveryTimeoutMs?: number;
+  /**
+   * TASK-484: also gate discovery on the durable `dependency_retries` ledger, so every
+   * worker shares one retry budget per server revision. Off unless
+   * RAKAZO_DURABLE_DISCOVERY_RETRY=1. Ledger errors never hide a server's tools.
+   */
+  durableDiscoveryRetry?: boolean;
 };
+
+export function durableDiscoveryRetryFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.RAKAZO_DURABLE_DISCOVERY_RETRY?.trim() === "1";
+}
 
 function positiveInteger(value: string | undefined, allowZero = false): number | undefined {
   if (!value?.trim()) return undefined;
@@ -382,6 +393,23 @@ export class McpConnector implements ConnectorProvider {
   // catalog access. Each attempt needs its own executionId.
   private discoverySeq = 0;
   private readonly unsubscribe: () => void;
+  private durableRetryLedger?: DependencyRetry;
+  private get durableRetry(): DependencyRetry | undefined {
+    if (!this.options.durableDiscoveryRetry) return undefined;
+    this.durableRetryLedger ??= new DependencyRetry(this.prisma);
+    return this.durableRetryLedger;
+  }
+  private async completeDurableRetry(
+    claim: DependencyClaim | undefined,
+    outcome: "success" | "transient" | "excluded" | "intervention",
+  ): Promise<void> {
+    if (!claim) return;
+    await this.durableRetry?.complete(claim, outcome).catch((error) =>
+      getLogger().warn("mcp durable discovery retry completion failed", {
+        reason: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }
   constructor(
     private readonly prisma: PrismaClient,
     private readonly secrets: SecretStore,
@@ -549,6 +577,24 @@ export class McpConnector implements ConnectorProvider {
           !recoveredSince(server, backoff.since)
         )
           return [unavailableTool(server, backoff.reason)];
+        let durableClaim: DependencyClaim | undefined;
+        if (this.durableRetry && !live && !context.signal.aborted) {
+          try {
+            const admission = await this.durableRetry.claim({
+              serverId: server.id,
+              spaceId: context.spaceId,
+              userId: context.userId,
+              revision: server.revision,
+            });
+            if (!("claim" in admission)) return [unavailableTool(server, admission.reason)];
+            durableClaim = admission.claim;
+          } catch (error) {
+            // The ledger is advisory here: an unavailable ledger falls back to in-memory backoff.
+            getLogger().warn("mcp durable discovery retry claim failed", {
+              reason: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
         let entry: SessionEntry | undefined;
         // Past the deadline this run stops waiting for its own tools/list request only;
         // the session and other calls on it carry on.
@@ -565,6 +611,7 @@ export class McpConnector implements ConnectorProvider {
           );
           observations?.set(server.id, "ok");
           this.discoveryBackoff.delete(key);
+          await this.completeDurableRetry(durableClaim, "success");
           this.unavailable.delete(key);
           void this.recordHealth(assignment.server.id, {
             status: "ok",
@@ -640,6 +687,14 @@ export class McpConnector implements ConnectorProvider {
               reason,
             });
           }
+          await this.completeDurableRetry(
+            durableClaim,
+            context.signal.aborted || this.installing.has(key)
+              ? "excluded"
+              : expected === "reconnect"
+                ? "intervention"
+                : "transient",
+          );
           await this.recordDiscoveryFailure(
             assignment.server.slug,
             error,
@@ -917,6 +972,7 @@ export class McpConnector implements ConnectorProvider {
     context: AdapterContext,
     key: string,
   ): Promise<McpServerHealthUpdate> {
+    const recoveryObservedAt = new Date();
     let secrets: string[] = [];
     let update: McpServerHealthUpdate;
     // A process this one already runs (or is starting) answers; never launch a second.
@@ -947,6 +1003,22 @@ export class McpConnector implements ConnectorProvider {
       }
       this.unavailable.delete(key);
       this.discoveryBackoff.delete(key);
+      // A successful explicit check (Test connection) resets the shared retry budget.
+      await this.durableRetry
+        ?.recover(
+          {
+            serverId: server.id,
+            spaceId: context.spaceId,
+            userId: context.userId,
+            revision: server.revision,
+          },
+          recoveryObservedAt,
+        )
+        .catch((error) =>
+          getLogger().warn("mcp durable discovery retry recovery failed", {
+            reason: error instanceof Error ? error.message : String(error),
+          }),
+        );
       update = { status: "ok", message: null, toolCount };
     } catch (error) {
       // Like discovery: a shared session that cannot list its tools is dropped.
