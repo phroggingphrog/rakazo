@@ -20,11 +20,16 @@ const wake = (events: ProactiveEvent[]): Wake => ({
 });
 
 describe("routineSourceFromEnv", () => {
-  it("is off unless explicitly switched on", () => {
-    expect(routineSourceFromEnv({})).toBe(false);
-    expect(routineSourceFromEnv({ PROACTIVE_ROUTINE_SOURCE: "" })).toBe(false);
-    expect(routineSourceFromEnv({ PROACTIVE_ROUTINE_SOURCE: "0" })).toBe(false);
-    expect(routineSourceFromEnv({ PROACTIVE_ROUTINE_SOURCE: "no" })).toBe(false);
+  it("is on by default through the per-bot switch", () => {
+    expect(routineSourceFromEnv({})).toBe(true);
+  });
+
+  it("is off when the per-bot switch is off and the global flag is not on", () => {
+    const off = { RAKAZO_SELF_CONFIG_BOTS: "none" };
+    expect(routineSourceFromEnv(off)).toBe(false);
+    expect(routineSourceFromEnv({ ...off, PROACTIVE_ROUTINE_SOURCE: "" })).toBe(false);
+    expect(routineSourceFromEnv({ ...off, PROACTIVE_ROUTINE_SOURCE: "0" })).toBe(false);
+    expect(routineSourceFromEnv({ ...off, PROACTIVE_ROUTINE_SOURCE: "no" })).toBe(false);
   });
 
   it("accepts the usual ways of writing yes", () => {
