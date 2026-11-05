@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { Duplex } from "node:stream";
+import { connectExistingMcpFromTool } from "@rakazo/adapters";
 import { MessageBlock } from "@rakazo/contracts";
 import { createDb, LocalKeyProvider, runAsSystem, runAsTenant } from "@rakazo/db";
 import pg from "pg";
@@ -9,9 +10,9 @@ import {
   createMcpApprovalContinuation,
   resolveMcpApprovalCards,
   revertConnectedMcpApprovals,
-} from "../../../apps/api/src/mcp-approval.js";
-import type { ExecutorDeps } from "./executor-deps.js";
-import { connectExistingMcpFromTool } from "./mcp-server-tool.js";
+} from "./mcp-approval.js";
+
+type ExecutorDeps = Parameters<typeof connectExistingMcpFromTool>[0];
 
 const url = process.env.MCP_EXISTING_TEST_DATABASE_URL;
 const docker = process.env.MCP_EXISTING_TEST_DOCKER;
