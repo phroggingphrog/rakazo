@@ -1275,7 +1275,7 @@ export function createRunExecutor(executorDeps: ExecutorDeps) {
         // so it gets no connector tools either. The stage is off unless the deployment
         // enables it (RAKAZO_TOOL_SELECTION), so an unconfigured run gets exactly the
         // list the rules above authorized.
-        const toolSelection = toolSelectionEnabled()
+        const toolSelection = toolSelectionEnabled(process.env, bot.id)
           ? selectToolsForRun({
               builtins,
               connectorCandidates: run.trigger === "created" ? [] : exposedConnectorTools,

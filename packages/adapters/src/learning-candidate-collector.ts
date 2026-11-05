@@ -4,6 +4,7 @@ import {
   memoryCandidateFromCorrection,
   skillCandidateFromTaughtSession,
 } from "./learning-candidates.js";
+import { selfConfigBots, selfConfigEnabledForBot } from "./self-config-bots.js";
 
 /**
  * The collector writes rows, so it stays off until the owner turns it on. Unset means off: a
@@ -15,9 +16,14 @@ export const LEARNING_COLLECTOR_WINDOW_MINUTES = 24 * 60;
 /** One pass never stores more than this many candidates, so a burst cannot flood a review. */
 export const LEARNING_COLLECTOR_MAX_CANDIDATES = 25;
 
-export function learningCollectorEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+function learningCollectorGlobal(env: NodeJS.ProcessEnv): boolean {
   const raw = env[LEARNING_COLLECTOR_FLAG]?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+/** On for the deployment, or for at least one bot on the per-bot list. */
+export function learningCollectorEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return learningCollectorGlobal(env) || selfConfigBots(env).size > 0;
 }
 
 export type LearningCollectorDeps = {
@@ -115,8 +121,12 @@ export async function collectLearningCandidates(
     if (candidate) drafts.push(candidate);
   }
 
+  const env = deps.env ?? process.env;
+  const everyBot = learningCollectorGlobal(env);
   const seen = new Set<string>();
   const unique = drafts.filter((row) => {
+    // Only the global flag collects for every bot; the per-bot list collects for its bots.
+    if (!everyBot && !selfConfigEnabledForBot(row.botId, env)) return false;
     const key = `${row.botId}:${row.dedupeKey}`;
     if (seen.has(key)) return false;
     seen.add(key);

@@ -32,6 +32,7 @@ import {
   PgProactiveControls,
   type ProactiveHook,
 } from "./proactive-controls.js";
+import { selfConfigBots, selfConfigEnabledForBot } from "./self-config-bots.js";
 
 type ModelPin = { modelProvider: string; modelId: string; thinkingLevel: string | null };
 
@@ -68,8 +69,20 @@ export function routineWake(events: Wake["events"]): RoutineEventRaw | null {
  * every routine today and stays the path unless an operator turns the source on.
  */
 export function routineSourceFromEnv(env: Record<string, string | undefined>): boolean {
+  return routineSourceGlobal(env) || selfConfigBots(env).size > 0;
+}
+
+function routineSourceGlobal(env: Record<string, string | undefined>): boolean {
   const value = env.PROACTIVE_ROUTINE_SOURCE?.trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes";
+}
+
+/** Whether this bot's routines go through the pipeline: the global flag, or the per-bot list. */
+export function routineSourceEnabledForBot(
+  env: Record<string, string | undefined>,
+  botId: string,
+): boolean {
+  return routineSourceGlobal(env) || selfConfigEnabledForBot(botId, env);
 }
 
 /** Scope for everything a bot is woken for. Tenants never share a scope. */
@@ -283,19 +296,32 @@ export function createProactiveRuntime(deps: ProactiveRuntimeDeps) {
     transaction: (fn) => runAsSystem("mutate proactive controls", () => controlDb.transaction(fn)),
   });
   const apiKey = typesafeApiKey();
-  const judge = deps.judge ?? (apiKey && deps.enabledBots?.trim() ? new JevProactiveJudge({
-    provider: new HttpDecisionProvider("typesafe", { apiKey, endpoint: typesafeApiUrl() }),
-    model: DEFAULT_JEV_MODEL,
-    context: async (scope) => {
-      const botId = botIdFromScope(scope);
-      if (!botId) throw new Error("Invalid proactive bot scope");
-      const bot = await runAsSystem("resolve proactive judge owner", () =>
-        deps.prisma.bot.findUnique({ where: { id: botId, archivedAt: null }, select: { spaceId: true, userId: true } }),
-      );
-      if (!bot) throw new Error("Proactive judge bot not found");
-      return { ...bot, botId, operationId: "proactive-judge", traceId: randomUUID(), signal: new AbortController().signal };
-    },
-  }) : undefined);
+  const judge =
+    deps.judge ??
+    (apiKey && deps.enabledBots?.trim()
+      ? new JevProactiveJudge({
+          provider: new HttpDecisionProvider("typesafe", { apiKey, endpoint: typesafeApiUrl() }),
+          model: DEFAULT_JEV_MODEL,
+          context: async (scope) => {
+            const botId = botIdFromScope(scope);
+            if (!botId) throw new Error("Invalid proactive bot scope");
+            const bot = await runAsSystem("resolve proactive judge owner", () =>
+              deps.prisma.bot.findUnique({
+                where: { id: botId, archivedAt: null },
+                select: { spaceId: true, userId: true },
+              }),
+            );
+            if (!bot) throw new Error("Proactive judge bot not found");
+            return {
+              ...bot,
+              botId,
+              operationId: "proactive-judge",
+              traceId: randomUUID(),
+              signal: new AbortController().signal,
+            };
+          },
+        })
+      : undefined);
   const engine = new ProactiveEngine({
     store: new PgProactiveStore(
       prismaExecutor(deps.prisma),

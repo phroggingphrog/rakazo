@@ -2,6 +2,7 @@ import type { ConnectorTool } from "@rakazo/adapter-kit";
 import { isOwnerStartedRun } from "@rakazo/core";
 import { getLogger } from "@rakazo/logging";
 import { FIND_TOOL, USE_TOOL } from "./builtin-tool-bridge.js";
+import { selfConfigEnabledForBot } from "./self-config-bots.js";
 import type { ToolIndexSnapshot, ToolUsageCounts } from "./tool-index.js";
 
 /**
@@ -110,9 +111,11 @@ export interface ToolSelectionResult {
  */
 export function toolSelectionEnabled(
   env: Record<string, string | undefined> = process.env,
+  botId?: string | null,
 ): boolean {
   const value = (env.RAKAZO_TOOL_SELECTION ?? "").trim().toLowerCase();
-  return value === "1" || value === "true" || value === "yes" || value === "on";
+  if (value === "1" || value === "true" || value === "yes" || value === "on") return true;
+  return selfConfigEnabledForBot(botId, env);
 }
 
 /** Project a snapshot onto what the selector needs. */
