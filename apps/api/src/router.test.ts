@@ -1259,7 +1259,9 @@ describe("MCP server deletion", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ json: { ok: true } });
     expect(cancelContinuations).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ serverId: "server-1", status: "pending" }) }),
+      expect.objectContaining({
+        where: expect.objectContaining({ serverId: "server-1", status: "pending" }),
+      }),
     );
     expect(deleteServer).toHaveBeenCalledWith({ where: { id: "server-1" } });
     expect(deleteSecrets).toHaveBeenCalledWith({

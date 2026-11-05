@@ -36,6 +36,8 @@
     "mermaid": "11.17.2"
   },
   "devDependencies": {
+    "@types/pg": "8.23.1",
+    "pg": "8.23.1",
     "typescript": "7.0.2",
     "vitest": "4.1.12"
   }
