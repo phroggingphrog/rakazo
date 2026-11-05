@@ -37,7 +37,7 @@ describe("routine history", () => {
         userId: actor.userId,
         bot: { archivedAt: null },
       },
-      select: { botId: true },
+      select: { botId: true, notify: true, bot: { select: { notifyOnFinish: true } } },
     });
     expect(runs).not.toHaveBeenCalled();
     expect(messages).not.toHaveBeenCalled();
