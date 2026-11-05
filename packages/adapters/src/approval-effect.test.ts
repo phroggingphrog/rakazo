@@ -405,6 +405,17 @@ describe("replaceCompletedExternalEffectResult", () => {
 });
 
 describe("completeExternalEffect", () => {
+  it.each([{ isError: true }, { error: "permission denied" }])(
+    "does not label explicit tool errors completed: %j",
+    async (result) => {
+      const store = { externalEffect: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) } };
+      expect(await completeExternalEffect(store, "effect-1", "executing", result)).toBe(true);
+      expect(store.externalEffect.updateMany).toHaveBeenCalledWith({
+        where: { id: "effect-1", status: "executing" },
+        data: { status: "failed", result },
+      });
+    },
+  );
   it("does not let a stale worker overwrite a reconciled effect", async () => {
     const store = {
       externalEffect: {

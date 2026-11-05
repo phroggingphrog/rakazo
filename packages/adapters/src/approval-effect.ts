@@ -480,6 +480,19 @@ export async function claimIntendedEffect(
   return claimed.count === 1;
 }
 
+/** Explicit protocol failures are not evidence of successful external execution. */
+export function explicitToolFailure(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  const value = result as { isError?: unknown; error?: unknown };
+  return (
+    value.isError === true ||
+    (value.error !== undefined &&
+      value.error !== null &&
+      value.error !== false &&
+      value.error !== "")
+  );
+}
+
 export async function completeExternalEffect(
   store: {
     externalEffect: {
@@ -495,7 +508,7 @@ export async function completeExternalEffect(
 ): Promise<boolean> {
   const completed = await store.externalEffect.updateMany({
     where: { id: effectId, status: expectedStatus },
-    data: { status: "completed", result: result as never },
+    data: { status: explicitToolFailure(result) ? "failed" : "completed", result: result as never },
   });
   return completed.count === 1;
 }
