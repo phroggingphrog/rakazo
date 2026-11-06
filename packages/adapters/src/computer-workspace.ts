@@ -49,6 +49,8 @@ async function homeIsMounted(
   if (mountsServerHome(computer.kind)) return true;
   // Object-backed homes must hydrate and export even when a claim was configured.
   if (home.describe().id !== "local-fs") return false;
+  if (computer.kind === "desktop" && (await sandbox.environment?.(computer, context))?.nativeHost)
+    return true;
   return (
     computer.kind === "kubernetes" && (await sandbox.hasMountedHome?.(computer, context)) === true
   );
