@@ -157,7 +157,12 @@ export class DesktopSandboxProvider implements SandboxProvider {
   }
 
   constructor(
-    private readonly opts: { root?: string; hostRoots?: string[]; maxFileBytes?: number } = {},
+    private readonly opts: {
+      root?: string;
+      hostRoots?: string[];
+      maxFileBytes?: number;
+      nativeHost?: boolean;
+    } = {},
   ) {}
 
   describe() {
@@ -357,6 +362,21 @@ export class DesktopSandboxProvider implements SandboxProvider {
     _context: AdapterContext,
   ): Promise<ComputerFileEntry[]> {
     const box = this.requiredBox(computer);
+    if (this.opts.nativeHost) {
+      const target = path.resolve(box.home, directory);
+      const entries = await readdir(target, { withFileTypes: true });
+      return Promise.all(
+        entries.map(async (entry) => {
+          const child = path.join(target, entry.name);
+          const info = await stat(child);
+          return {
+            path: path.isAbsolute(directory) ? child : path.join(directory, entry.name),
+            kind: info.isDirectory() ? ("dir" as const) : ("file" as const),
+            size: info.size,
+          };
+        }),
+      );
+    }
     const relative = normalizeWorkspacePath(directory);
     const target = await localWorkspaceTarget(box.home, relative, true);
     const entries = await readdir(target, { withFileTypes: true });
@@ -388,7 +408,9 @@ export class DesktopSandboxProvider implements SandboxProvider {
     options?: { maxBytes?: number },
   ) {
     const box = this.requiredBox(computer);
-    const target = await localWorkspaceTarget(box.home, filePath, true);
+    const target = this.opts.nativeHost
+      ? path.resolve(box.home, filePath)
+      : await localWorkspaceTarget(box.home, filePath, true);
     const info = await stat(target);
     if (options?.maxBytes !== undefined && info.size > options.maxBytes) {
       throw new Error(`computer file exceeds ${options.maxBytes} bytes`);
@@ -398,6 +420,12 @@ export class DesktopSandboxProvider implements SandboxProvider {
 
   async writeFile(computer: ComputerRef, file: PortableFile) {
     const box = this.requiredBox(computer);
+    if (this.opts.nativeHost) {
+      const target = path.resolve(box.home, file.path);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, file.content, { mode: file.executable ? 0o700 : 0o600 });
+      return;
+    }
     const target = await localWorkspaceTarget(box.home, file.path, false);
     const handle = await openContainedWorkspaceFile(
       box.home,

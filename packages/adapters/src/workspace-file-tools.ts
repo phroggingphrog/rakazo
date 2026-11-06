@@ -25,6 +25,7 @@ export type RunWorkspace = {
   markDirty: () => void;
   context: AdapterContext;
   runSecrets: string[];
+  nativeHost?: boolean;
 };
 
 const MAX_MODEL_FILE_BYTES = 250_000;
@@ -38,7 +39,7 @@ export async function listFilesFromTool(
   const requestedPath = String(args.path ?? "");
   const entries = await sandbox.listFiles(
     await computer(),
-    resolveBotWorkspacePath(computerMode, botId, requestedPath),
+    resolveBotWorkspacePath(computerMode, botId, requestedPath, workspace.nativeHost),
     context,
   );
   return {
@@ -47,7 +48,9 @@ export async function listFilesFromTool(
       ...entry,
       // A file name can carry a value an earlier command or page wrote.
       path: redactSecrets(
-        displayBotWorkspacePath(computerMode, botId, requestedPath, entry.path),
+        workspace.nativeHost && requestedPath.startsWith("/")
+          ? entry.path
+          : displayBotWorkspacePath(computerMode, botId, requestedPath, entry.path),
         runSecrets,
       ),
     })),
@@ -61,7 +64,7 @@ export async function readFileFromTool(
 ) {
   const { botId, computerMode, computer, context, runSecrets } = workspace;
   const filePath = String(args.path ?? "");
-  const storedPath = resolveBotWorkspacePath(computerMode, botId, filePath);
+  const storedPath = resolveBotWorkspacePath(computerMode, botId, filePath, workspace.nativeHost);
   let bytes: Uint8Array;
   try {
     bytes = await sandbox.readFile(await computer(), storedPath, context, {

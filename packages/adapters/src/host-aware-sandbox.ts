@@ -31,6 +31,13 @@ export async function createRunSandbox(
   kind: string,
   opts: SandboxProviderOptions & { prisma?: PrismaClient },
 ): Promise<SandboxProvider> {
+  // An explicit deployment-wide host provider applies to every run and future bot.
+  // Never construct an isolated fallback for this mode.
+  if (kind === "host") {
+    if (!opts.hostComputerUrl || !opts.hostComputerToken)
+      throw new Error("Native host execution requires SANDBOX_HOST_URL and SANDBOX_HOST_TOKEN");
+    return new HostComputerSandbox(opts.hostComputerUrl, opts.hostComputerToken);
+  }
   if (kind === "desktop") {
     assertHostCommandsAllowed();
     return new DesktopSandboxProvider({

@@ -62,6 +62,9 @@ export async function restoreComputerWorkspace(
   context: AdapterContext,
 ): Promise<void> {
   if (await homeIsMounted(home, sandbox, computer, context)) return;
+  // An operator can bind the existing home on the native host. Do not replay a
+  // checkpoint over that authoritative live directory during provider migration.
+  if ((await sandbox.environment?.(computer, context))?.nativeHost && !computer.fresh) return;
   await sandbox.importWorkspace(computer, home.exportHome(homeKey, context), context);
 }
 

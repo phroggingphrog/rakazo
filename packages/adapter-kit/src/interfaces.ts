@@ -108,7 +108,10 @@ export interface SandboxProvider {
   environment?(
     computer: ComputerRef,
     context: AdapterContext,
-  ): Promise<{ platform: string; home: string; shell: string } | undefined>;
+  ): Promise<
+    | { platform: string; home: string; shell: string; cwd?: string; nativeHost?: boolean }
+    | undefined
+  >;
   /** Optional live browser on the same leased screen as observe/act. */
   pageBrowser?(
     computer: ComputerRef,

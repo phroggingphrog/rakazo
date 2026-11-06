@@ -36,7 +36,7 @@ describe("host-aware sandbox", () => {
       } as unknown as PrismaClient,
     });
     await expect(sandbox.provision({ botId: "host", homePath: "/unused" }, ctx)).rejects.toThrow(
-      "requires the desktop app",
+      "Native host execution unavailable",
     );
     expect(provision).not.toHaveBeenCalled();
   });

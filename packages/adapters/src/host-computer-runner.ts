@@ -34,7 +34,11 @@ export interface HostComputerCall {
  * Runs host computer requests from any transport: the local HTTP listener and the outbound
  * device socket share validation, limits, cancellation, and error sanitizing.
  */
-export function createHostComputerRunner(options: { root: string; screen?: HostScreen }) {
+export function createHostComputerRunner(options: {
+  root: string;
+  screen?: HostScreen;
+  nativeHost?: boolean;
+}) {
   let enabled = false;
   const active = new Map<
     AbortController,
@@ -42,13 +46,17 @@ export function createHostComputerRunner(options: { root: string; screen?: HostS
   >();
   const provider = new DesktopSandboxProvider({
     root: options.root,
-    hostRoots: [homedir()],
+    hostRoots: options.nativeHost ? [path.parse(homedir()).root] : [homedir()],
+    nativeHost: options.nativeHost,
     maxFileBytes: HOST_COMPUTER_MAX_FILE_BYTES,
   });
 
   // Reconstruct only our own workspace path. Never trust a caller's providerRef or filesystem root.
   function ref(botId: string): ComputerRef {
-    const key = createHash("sha256").update(botId).digest("hex");
+    const key =
+      options.nativeHost && /^[a-zA-Z0-9_-]+$/.test(botId)
+        ? botId
+        : createHash("sha256").update(botId).digest("hex");
     return {
       id: `desktop-${key}`,
       botId: key,
@@ -77,7 +85,10 @@ export function createHostComputerRunner(options: { root: string; screen?: HostS
         yield await screen().act(scope, input.app, input.actions);
         break;
       case "environment":
-        yield await provider.environment();
+        yield {
+          ...(await provider.environment()),
+          ...(options.nativeHost ? { nativeHost: true, cwd: computer.providerRef } : {}),
+        };
         break;
       case "provision": {
         const result = await provider.provision({ botId: computer.botId, homePath: "" }, context);

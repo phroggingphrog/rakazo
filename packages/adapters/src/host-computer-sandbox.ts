@@ -32,9 +32,15 @@ export class HostComputerSandbox implements SandboxProvider {
     return describeDesktopSandbox();
   }
 
+  async provisionKind() {
+    return "desktop" as const;
+  }
+
   private async *request<T>(input: HostComputerRequest, context: AdapterContext): AsyncIterable<T> {
     if (!this.url || !this.token)
-      throw new Error("Local computer access requires the desktop app. Enable it in the app menu.");
+      throw new Error(
+        "Native host execution unavailable: host endpoint or credential is missing; no sandbox fallback.",
+      );
     const body = JSON.stringify({ ...input, runId: context.runId });
     if (Buffer.byteLength(body) > HOST_COMPUTER_MAX_BYTES)
       throw new Error("Local computer request is too large");
@@ -52,7 +58,7 @@ export class HostComputerSandbox implements SandboxProvider {
     if (!response.ok || !response.body) {
       await response.body?.cancel();
       throw new Error(
-        "Local computer unavailable. Open the desktop app and enable local computer access.",
+        "Native host execution unavailable; check the authenticated host service. No sandbox fallback.",
       );
     }
     const reader = response.body.getReader();

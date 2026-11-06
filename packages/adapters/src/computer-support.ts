@@ -84,7 +84,9 @@ export function resolveBotWorkspacePath(
   scope: ComputerMode,
   botId: string,
   rawPath: string,
+  nativeHost = false,
 ): string {
+  if (nativeHost && path.isAbsolute(rawPath)) return rawPath;
   const requestedPath = expandHomePrefix(rawPath);
   if (scope !== "team") return requestedPath;
   const explicitRootPath = stripVirtualWorkspaceRoot(requestedPath);

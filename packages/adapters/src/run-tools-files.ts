@@ -21,6 +21,7 @@ function runWorkspace(ctx: RunContext, call: ToolCall): RunWorkspace {
     markDirty: () => ctx.computer.checkpoint.markDirty(),
     context: ctx.context,
     runSecrets: ctx.secrets,
+    nativeHost: ctx.computer.hostEnvironment?.nativeHost,
   };
 }
 
@@ -128,7 +129,15 @@ export const fileTools: ToolHandlers = {
     try {
       await deps.sandbox.writeFile(
         await ctx.computer.get("tool", name),
-        { path: resolveBotWorkspacePath(ctx.computer.mode, bot.id, filePath), content },
+        {
+          path: resolveBotWorkspacePath(
+            ctx.computer.mode,
+            bot.id,
+            filePath,
+            ctx.computer.hostEnvironment?.nativeHost,
+          ),
+          content,
+        },
         context,
       );
     } catch (error) {

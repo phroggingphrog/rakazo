@@ -66,6 +66,8 @@ export interface HostComputerEnvironment {
   platform: string;
   home: string;
   shell: string;
+  cwd?: string;
+  nativeHost?: boolean;
 }
 export type HostComputerFrame<T> =
   | { value: T }
