@@ -743,6 +743,7 @@ model Bot {
   ticketComments          TicketComment[]   @relation("TicketCommentAuthorBot")
 
   externalConversations    ExternalConversation[]
+  privateSkills AgentSkill[]
   runtimeProfile           BotRuntimeProfile?
   learningCandidates       LearningCandidate[]
   learningReviews          LearningReview[]
@@ -1383,9 +1384,14 @@ model AgentImport {
   @@map("agent_imports")
 }
 
-/// Claude Agent Skills: SKILL.md recipes shared across assistants (not per-bot).
+/// SKILL.md recipes: shared library plus bot-private lessons.
 /// Distinct from TaughtSkill (demo/record playbooks).
 model AgentSkill {
+  /// Private lessons belong to one bot; null retains the shared library.
+  ownerBotId String?
+  ownerBot Bot? @relation(fields: [ownerBotId], references: [id], onDelete: Cascade)
+  revision Int @default(1)
+  history Json @default("[]")
   id          String             @id @default(cuid())
   spaceId     String
   space       Space              @relation(fields: [spaceId], references: [id], onDelete: Cascade)

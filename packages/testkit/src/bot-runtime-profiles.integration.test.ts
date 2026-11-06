@@ -49,6 +49,96 @@ describePostgres("bot runtime profiles (PostgreSQL)", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("persists isolated skill catalogs and private lesson rollback across DB clients", async () => {
+    const cookie = await signup(app, `skill-owner-${stamp}@rakazo.test`, "Owner");
+    const owner = await rpc<{ userId: string; spaceId: string }>(app, cookie, "me");
+    users.push(owner.userId);
+    const first = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Skill first",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const second = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Skill second",
+      description: "",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    bots.push(first.id, second.id);
+    const { skillCreateFromTool, skillReadFromTool, skillUpdateFromTool } = await import(
+      "@rakazo/adapters"
+    );
+    const row = await db.bot.findUniqueOrThrow({ where: { id: first.id } });
+    const scope = { userId: owner.userId, spaceId: row.spaceId, botId: first.id };
+    const tenant = { userId: scope.userId, spaceId: scope.spaceId };
+    const invoke = <T>(fn: () => Promise<T>) => runAsTenant(tenant, fn);
+    const catalog = () =>
+      rpc<{ skills: Array<{ id: string; enabled: boolean; content?: string }> }>(
+        app,
+        cookie,
+        "bots/skillCatalog",
+        { botId: first.id },
+      );
+    const baseline = await catalog();
+    const selected = baseline.skills[0]!;
+    await rpc(app, cookie, "bots/skillSelect", {
+      botId: first.id,
+      skillId: selected.id,
+      enabled: false,
+    });
+    expect((await catalog()).skills.some((s) => s.id === selected.id)).toBe(false);
+    const discovered = await rpc<typeof baseline>(app, cookie, "bots/skillCatalog", {
+      botId: first.id,
+      discover: true,
+    });
+    expect(discovered.skills.find((s) => s.id === selected.id)).toMatchObject({ enabled: false });
+    expect(discovered.skills.every((s) => s.content === undefined)).toBe(true);
+    expect(
+      (
+        await rpc<typeof baseline>(app, cookie, "bots/skillCatalog", { botId: second.id })
+      ).skills.some((s) => s.id === selected.id),
+    ).toBe(true);
+    const created = await invoke(() =>
+      skillCreateFromTool(runtimeDb, scope, {
+        name: "Private check",
+        description: "Repeatable checks",
+        body: "Original",
+      }),
+    );
+    expect(created.ok).toBe(true);
+    const lesson = { skillId: String(created.id) };
+    expect(
+      await invoke(() => skillUpdateFromTool(runtimeDb, scope, { ...lesson, body: "Improved" })),
+    ).toHaveProperty("ok", true);
+    expect(
+      await invoke(() => skillReadFromTool(runtimeDb, { ...scope, botId: second.id }, lesson)),
+    ).toHaveProperty("error");
+    expect(
+      await invoke(() => skillUpdateFromTool(runtimeDb, scope, { ...lesson, rollbackRevision: 1 })),
+    ).toHaveProperty("ok", true);
+    const { createDb } = await import("@rakazo/db");
+    const reopened = createDb(process.env.DATABASE_URL!);
+    try {
+      expect(await invoke(() => skillReadFromTool(reopened.prisma, scope, lesson))).toHaveProperty(
+        "content",
+        expect.stringContaining("Original"),
+      );
+      expect(
+        await invoke(() => skillReadFromTool(reopened.prisma, scope, { skillId: selected.id })),
+      ).toHaveProperty("error");
+    } finally {
+      await reopened.prisma.$disconnect();
+      await reopened.pool.end();
+    }
+    await rpc(app, cookie, "bots/skillSelect", {
+      botId: first.id,
+      skillId: selected.id,
+      enabled: true,
+    });
+    expect((await catalog()).skills.some((s) => s.id === selected.id)).toBe(true);
+  });
+
   it("uses authenticated RPC revisions and keeps persona separate from instructions", async () => {
     const ownerCookie = await signup(app, `profile-api-owner-${stamp}@rakazo.test`, "Owner");
     const otherCookie = await signup(app, `profile-api-other-${stamp}@rakazo.test`, "Other");
@@ -87,9 +177,9 @@ describePostgres("bot runtime profiles (PostgreSQL)", () => {
     await expect(
       rpc(app, ownerCookie, "bots/runtimeProfileUpdate", {
         botId: bot.id,
-        expectedRevision: 1,
+        expectedRevision: 0,
         settings: { skills: { mode: "explicit", skillIds: ["skill-one"] } },
-        reason: "Enable explicit skills",
+        reason: "Reject stale selection write",
       }),
     ).rejects.toThrow();
     await expect(

@@ -509,12 +509,15 @@ export const appContract = {
     get: oc.input(z.object({ id: Id }).strict()).output(SetupPlanSchema),
     /** Historical request metadata only; it does not establish current access or success. */
     latestTest: oc.input(z.object({ id: Id }).strict()).output(
-      z.object({
-        runId: Id,
-        planRevision: SetupPlanRevisionSchema,
-        configuredFromRevision: SetupPlanRevisionSchema,
-        createdAt: z.string(),
-      }).strict().nullable(),
+      z
+        .object({
+          runId: Id,
+          planRevision: SetupPlanRevisionSchema,
+          configuredFromRevision: SetupPlanRevisionSchema,
+          createdAt: z.string(),
+        })
+        .strict()
+        .nullable(),
     ),
     prerequisites: oc
       .input(z.object({ id: Id, expectedRevision: SetupPlanRevisionSchema }).strict())
@@ -552,7 +555,9 @@ export const appContract = {
       .output(SetupPlanSchema),
     testRun: oc
       .input(
-        z.object({ id: Id, expectedRevision: SetupPlanRevisionSchema, requestKey: z.uuid() }).strict(),
+        z
+          .object({ id: Id, expectedRevision: SetupPlanRevisionSchema, requestKey: z.uuid() })
+          .strict(),
       )
       .output(z.object({ runId: Id })),
   },
@@ -583,6 +588,32 @@ export const appContract = {
         }),
       )
       .output(z.object({ updated: z.boolean() })),
+    skillCatalog: oc
+      .input(
+        z
+          .object({
+            botId: Id,
+            discover: z.boolean().default(false),
+            query: z.string().max(200).optional(),
+          })
+          .strict(),
+      )
+      .output(
+        z.object({
+          skills: z.array(
+            z.object({
+              id: Id,
+              name: z.string(),
+              description: z.string(),
+              source: z.string(),
+              enabled: z.boolean(),
+            }),
+          ),
+        }),
+      ),
+    skillSelect: oc
+      .input(z.object({ botId: Id, skillId: Id, enabled: z.boolean() }).strict())
+      .output(z.object({ ok: z.literal(true) })),
     runtimeProfileGet: oc.input(botId).output(BotRuntimeProfileResponse),
     runtimeProfileValidate: oc
       .input(BotRuntimeProfileValidationInput)

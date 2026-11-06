@@ -1,4 +1,5 @@
 import { ORPCError } from "@orpc/server";
+import { skillReadFromTool, skillUpdateFromTool } from "@rakazo/adapters";
 import { BotRuntimeProfile } from "@rakazo/contracts";
 import {
   BotRuntimeProfileConflictError,
@@ -62,6 +63,33 @@ function response(botId: string, row: { revision: number; settings: unknown } | 
 export function botRuntimeProfileRouteEntries(ctx: RouterContext) {
   const { deps, authed } = ctx;
   return {
+    skillCatalog: authed.bots.skillCatalog.handler(async ({ context, input }) => {
+      const result = await skillReadFromTool(
+        deps.prisma,
+        { ...context.actor, botId: input.botId },
+        { discover: true, query: input.query },
+      );
+      if (!Array.isArray(result.skills)) throw new ORPCError("NOT_FOUND");
+      return { skills: result.skills.filter((s) => input.discover || s.enabled) } as {
+        skills: Array<{
+          id: string;
+          name: string;
+          description: string;
+          source: string;
+          enabled: boolean;
+        }>;
+      };
+    }),
+    skillSelect: authed.bots.skillSelect.handler(async ({ context, input }) => {
+      const result = await skillUpdateFromTool(
+        deps.prisma,
+        { ...context.actor, botId: input.botId },
+        { skillId: input.skillId, enabled: input.enabled },
+      );
+      if (!result.ok)
+        throw new ORPCError("BAD_REQUEST", { message: "Skill selection unavailable." });
+      return { ok: true as const };
+    }),
     runtimeProfileGet: authed.bots.runtimeProfileGet.handler(async ({ context, input }) => {
       try {
         const row = await readBotRuntimeProfile(deps.prisma, {

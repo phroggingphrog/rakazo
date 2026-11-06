@@ -1385,23 +1385,26 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "skill_read",
     description:
-      "Load a Claude Agent Skill (SKILL.md recipe) by exact name. Call this when a catalog skill matches the user's request, then follow it immediately. When the result lists files, read one by calling again with its path in file.",
+      "Load an enabled skill by exact name. Use discover=true with optional query to search available shared and own private skills (metadata only); enable a discovered skill with skill_update before reading. Use history=true for own lesson revisions. Call this when a catalog skill matches the user's request, then follow it immediately. When the result lists files, read one by calling again with its path in file.",
     inputSchema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Exact skill name from the catalog." },
+        skillId: { type: "string" },
+        discover: { type: "boolean" },
+        query: { type: "string", maxLength: 200 },
+        history: { type: "boolean" },
         file: {
           type: "string",
           description: "Optional path of one of the skill's files, e.g. references/billing.md.",
         },
       },
-      required: ["name"],
     },
   },
   {
     name: "skill_create",
     description:
-      "Create a reusable Claude Agent Skill (generic how-to SKILL.md) shared across assistants. The Pi runtime already understands this format; we persist and inject them. Use when a multi-step task is worth repeating or the user asks to save a skill. Do not include account names, channels, or inboxes — those belong in a routine.",
+      "Create a reusable SKILL.md lesson private to this bot and enabled immediately. The Pi runtime already understands this format; we persist and inject them. Use when a multi-step task is worth repeating or the user asks to save a skill. Do not include account names, channels, or inboxes — those belong in a routine.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1425,13 +1428,15 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "skill_update",
     description:
-      "Update a user-created skill by name or id. Builtin and plugin skills are read-only.",
+      "Improve only your own private lesson by name or id; shared, builtin and plugin recipes are read-only. Use enabled to persistently toggle your own skill selection, separately from editing. Use rollbackRevision to restore a prior lesson revision. Skills are procedures, not permission grants; they never change roles, credentials or tool authorization.",
     inputSchema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Current exact skill name." },
         skillId: { type: "string" },
         newName: { type: "string" },
+        enabled: { type: "boolean" },
+        rollbackRevision: { type: "integer", minimum: 1 },
         description: { type: "string" },
         body: { type: "string" },
         content: { type: "string", description: "Optional full replacement SKILL.md." },

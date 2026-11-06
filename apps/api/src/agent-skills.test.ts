@@ -20,6 +20,7 @@ function savedSkill(name: string, source = "user") {
     description: "Saved review recipe",
     content: buildSkillMd({ name, description: "Saved review recipe", body: "Saved steps" }),
     source,
+    ownerBotId: null,
     createdAt: new Date(0),
     updatedAt: new Date(0),
   };

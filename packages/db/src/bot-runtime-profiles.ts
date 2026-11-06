@@ -119,37 +119,48 @@ export async function writeBotRuntimeProfile(
 ) {
   validateProfileWrite(input);
 
-  return prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+  return prisma.$transaction((tx) => writeBotRuntimeProfileInTransaction(tx, input));
+}
+
+/** Reuse within an existing transaction; retains ownership lock and revision checks. */
+export async function writeBotRuntimeProfileInTransaction(
+  tx: Prisma.TransactionClient,
+  input: BotRuntimeProfileScope & {
+    expectedRevision: number;
+    settings: Prisma.InputJsonValue;
+    reason: string;
+  },
+) {
+  validateProfileWrite(input);
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM bots
       WHERE id = ${input.botId} AND "spaceId" = ${input.spaceId} AND "userId" = ${input.userId}
       FOR UPDATE
     `;
-    if (rows.length === 0) throw new IsolationError();
+  if (rows.length === 0) throw new IsolationError();
 
-    const current = await tx.botRuntimeProfile.findUnique({ where: { botId: input.botId } });
-    const revision = current?.revision ?? 0;
-    if (revision !== input.expectedRevision) throw new BotRuntimeProfileConflictError();
+  const current = await tx.botRuntimeProfile.findUnique({ where: { botId: input.botId } });
+  const revision = current?.revision ?? 0;
+  if (revision !== input.expectedRevision) throw new BotRuntimeProfileConflictError();
 
-    const nextRevision = revision + 1;
-    const profile = current
-      ? await tx.botRuntimeProfile.update({
-          where: { botId: input.botId },
-          data: { revision: nextRevision, settings: input.settings },
-        })
-      : await tx.botRuntimeProfile.create({
-          data: { botId: input.botId, revision: nextRevision, settings: input.settings },
-        });
+  const nextRevision = revision + 1;
+  const profile = current
+    ? await tx.botRuntimeProfile.update({
+        where: { botId: input.botId },
+        data: { revision: nextRevision, settings: input.settings },
+      })
+    : await tx.botRuntimeProfile.create({
+        data: { botId: input.botId, revision: nextRevision, settings: input.settings },
+      });
 
-    await tx.botRuntimeProfileRevision.create({
-      data: {
-        botId: input.botId,
-        revision: nextRevision,
-        settings: input.settings,
-        actorUserId: input.userId,
-        reason: input.reason,
-      },
-    });
-    return profile;
+  await tx.botRuntimeProfileRevision.create({
+    data: {
+      botId: input.botId,
+      revision: nextRevision,
+      settings: input.settings,
+      actorUserId: input.userId,
+      reason: input.reason,
+    },
   });
+  return profile;
 }

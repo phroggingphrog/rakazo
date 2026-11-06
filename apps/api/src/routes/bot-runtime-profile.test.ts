@@ -12,6 +12,11 @@ const digest = `sha256:${"a".repeat(64)}`;
 const defaults = () => BotRuntimeProfile.parse({});
 
 describe("partial bot runtime profile API guard", () => {
+  it("exposes a per-bot catalog contract without recipe content", async () => {
+    const { appContract } = await import("@rakazo/contracts");
+    expect((appContract.bots as unknown as Record<string, unknown>).skillCatalog).toBeDefined();
+  });
+
   it("accepts inert settings for persistence", () => {
     expect(botProfileDraftOnlyProblem(defaults())).toBeUndefined();
     expect(validateBotRuntimeProfileDraft({ settings: defaults() })).toEqual({

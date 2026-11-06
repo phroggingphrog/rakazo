@@ -131,7 +131,7 @@ export function formatSkillsCatalogInstruction(entries: SkillCatalogEntry[]): st
     "When a skill matches the user's request, call skill_read for that name and follow it immediately. Prefer matching skills over improvising multi-step recipes.",
     "Users can force a skill with /Name in the composer. Routines may mention a skill as @Name — that loads the skill at fire time.",
     "Create a skill with skill_create when a multi-step task is worth repeating (or when asked). After creating one, mention /Name so the user can open it.",
-    "Only skill_update / skill_delete user-created skills (not builtin or plugin).",
+    "Use skill_read discover=true to find available recipes, then skill_update enabled=true/false to change only your own catalog. Improve your own private lessons with skill_update, inspect history with skill_read history=true and restore with rollbackRevision. Shared recipes are read-only; skills do not grant permissions or change your role.",
   ].join("\n");
 }
 

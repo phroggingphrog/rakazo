@@ -132,7 +132,7 @@ export function resolveSkillContent(input: {
 export function createAgentSkillsService(prisma: PrismaClient) {
   async function owned(actor: Actor, skillId: string) {
     const row = await prisma.agentSkill.findFirst({
-      where: { id: skillId, ...availableInSpace(actor) },
+      where: { id: skillId, ...availableInSpace(actor), ownerBotId: null },
       include: { availableIn: AVAILABILITY_SELECT },
     });
     if (!row) throw new IsolationError();
@@ -142,7 +142,7 @@ export function createAgentSkillsService(prisma: PrismaClient) {
   return {
     async list(actor: Actor): Promise<Omit<AgentSkill, "content">[]> {
       const rows = await prisma.agentSkill.findMany({
-        where: availableInSpace(actor),
+        where: { ...availableInSpace(actor), ownerBotId: null },
         omit: { files: true },
         include: { availableIn: AVAILABILITY_SELECT },
         orderBy: [{ name: "asc" }, { id: "asc" }],
@@ -154,7 +154,7 @@ export function createAgentSkillsService(prisma: PrismaClient) {
 
     async listWithContent(actor: Actor): Promise<AgentSkill[]> {
       const rows = await prisma.agentSkill.findMany({
-        where: availableInSpace(actor),
+        where: { ...availableInSpace(actor), ownerBotId: null },
         omit: { files: true },
         include: { availableIn: AVAILABILITY_SELECT },
         orderBy: [{ name: "asc" }, { id: "asc" }],
@@ -173,7 +173,7 @@ export function createAgentSkillsService(prisma: PrismaClient) {
       }
       const name = input.name?.trim() ?? "";
       const rows = await prisma.agentSkill.findMany({
-        where: availableInSpace(actor),
+        where: { ...availableInSpace(actor), ownerBotId: null },
         include: { availableIn: AVAILABILITY_SELECT },
         orderBy: [{ name: "asc" }, { id: "asc" }],
       });
@@ -261,7 +261,12 @@ export function createAgentSkillsService(prisma: PrismaClient) {
               existing.id,
             );
           return tx.agentSkill.updateMany({
-            where: { id: existing.id, ...availableInSpace(actor), source: "user" },
+            where: {
+              id: existing.id,
+              ...availableInSpace(actor),
+              ownerBotId: null,
+              source: "user",
+            },
             data: {
               name: resolved.name,
               description: resolved.description,
@@ -290,7 +295,7 @@ export function createAgentSkillsService(prisma: PrismaClient) {
         throw new ORPCError("BAD_REQUEST", { message: "Builtin and plugin skills are read-only." });
       }
       const deleted = await prisma.agentSkill.deleteMany({
-        where: { id: existing.id, ...availableInSpace(actor), source: "user" },
+        where: { id: existing.id, ...availableInSpace(actor), ownerBotId: null, source: "user" },
       });
       if (deleted.count !== 1) throw new IsolationError();
       return { ok: true };

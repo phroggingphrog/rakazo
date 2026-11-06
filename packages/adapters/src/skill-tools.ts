@@ -7,8 +7,12 @@ import {
   mergeBuiltinSkills,
   parseSkillMd,
 } from "@rakazo/core";
-import type { PrismaClient } from "@rakazo/db";
-import { availableInSpace, readBotRuntimeProfile } from "@rakazo/db";
+import type { Prisma, PrismaClient } from "@rakazo/db";
+import {
+  availableInSpace,
+  readBotRuntimeProfile,
+  writeBotRuntimeProfileInTransaction,
+} from "@rakazo/db";
 import { BUILTIN_AGENT_SKILLS } from "./builtin-skills.js";
 
 export const SKILL_TOOL_NAMES = new Set([
@@ -89,6 +93,9 @@ type AgentSkillRow = {
   description: string;
   content: string;
   source: string;
+  ownerBotId?: string | null;
+  revision?: number;
+  history?: unknown;
 };
 
 function asSource(value: string): SkillSource {
@@ -148,6 +155,7 @@ function onlyInSpace(owner: SkillOwner) {
     userId: owner.userId,
     allSpaces: false,
     availableIn: { none: {} },
+    ownerBotId: owner.botId ?? null,
   };
 }
 
@@ -162,10 +170,13 @@ async function listAgentSkillRecordsInternal(
   const rows = await prisma.agentSkill.findMany({
     where: availableInSpace(owner),
     // Reference files are read one at a time through skill_read, never with the catalog.
-    omit: { files: true },
+    omit: { files: true, history: true },
     orderBy: [{ name: "asc" }, { id: "asc" }],
   });
-  const records = mergeBuiltinSkills(builtinRecords(), rows.map(toRecord));
+  const records = mergeBuiltinSkills(
+    builtinRecords(),
+    rows.filter((row) => !row.ownerBotId || row.ownerBotId === owner.botId).map(toRecord),
+  );
   return selection ? records.filter((skill) => includesSelection(selection, skill.id)) : records;
 }
 
@@ -193,20 +204,64 @@ export function skillFiles(value: unknown): Record<string, string> {
   );
 }
 
+async function saveSkillSelection(
+  prisma: PrismaClient,
+  owner: SkillOwner & { botId: string },
+  skillIds: string[],
+) {
+  const current = await prisma.botRuntimeProfile.findUnique({ where: { botId: owner.botId } });
+  const settings = BotRuntimeProfile.parse(current?.settings ?? {});
+  settings.skills = { mode: "explicit", skillIds };
+  // The caller already holds the bot lock and transaction. Reuse the profile revision writer.
+  await writeBotRuntimeProfileInTransaction(prisma, {
+    ...owner,
+    expectedRevision: current?.revision ?? 0,
+    settings: settings as Prisma.InputJsonValue,
+    reason: "Bot skill selection",
+  });
+}
+
 async function skillReadFromToolInternal(
   prisma: PrismaClient,
   owner: SkillOwner,
-  input: { name?: string; skillId?: string; file?: string },
+  input: {
+    name?: string;
+    skillId?: string;
+    file?: string;
+    discover?: boolean;
+    query?: string;
+    history?: boolean;
+  },
   selection?: SkillSelection,
 ): Promise<Record<string, unknown>> {
+  if (input.discover) {
+    const records = await listAgentSkillRecordsInternal(prisma, owner);
+    const query = (input.query ?? "").trim().toLowerCase();
+    return {
+      skills: records
+        .filter((s) => !query || `${s.name} ${s.description}`.toLowerCase().includes(query))
+        .map(({ id, name, description, source }) => ({
+          id,
+          name,
+          description,
+          source,
+          enabled: !selection || includesSelection(selection, id),
+        })),
+    };
+  }
   const skill = await findOwnedSkill(prisma, owner, input, selection);
   if (!skill) return { error: "Skill not found." };
   const row = skill.id.startsWith("builtin:")
     ? null
     : await prisma.agentSkill.findFirst({
         where: { id: skill.id, ...availableInSpace(owner) },
-        select: { files: true },
+        select: { files: true, revision: true, history: true, ownerBotId: true },
       });
+  if (input.history) {
+    if (!row || row.ownerBotId !== owner.botId)
+      return { error: "Only private lesson history is available." };
+    return { revision: row.revision, revisions: row.history };
+  }
   const files = skillFiles(row?.files);
   const paths = Object.keys(files).sort();
   const wanted = input.file?.trim().replace(/^\.\//, "");
@@ -230,7 +285,7 @@ async function skillCreateFromToolInternal(
   prisma: PrismaClient,
   owner: SkillOwner,
   input: { name?: string; description?: string; body?: string; content?: string },
-  _selection?: SkillSelection,
+  selection?: SkillSelection,
 ): Promise<Record<string, unknown>> {
   let name = "";
   let description = "";
@@ -261,27 +316,30 @@ async function skillCreateFromToolInternal(
   const existing = await findOwnedSkill(prisma, owner, { name });
   if (existing) return { error: `A skill named "${existing.name}" already exists.` };
 
-  try {
-    const row = await prisma.agentSkill.create({
-      data: {
-        spaceId: owner.spaceId,
-        userId: owner.userId,
-        name,
-        description,
-        content,
-        source: "user",
-      },
-    });
-    return {
-      ok: true,
-      id: row.id,
-      name: row.name,
-      description: row.description,
-      hint: `Created skill. Mention /${row.name} so the user can open it.`,
-    };
-  } catch {
-    return { error: "Could not create skill (name may already exist)." };
+  const row = await prisma.agentSkill.create({
+    data: {
+      spaceId: owner.spaceId,
+      userId: owner.userId,
+      name,
+      description,
+      content,
+      source: "user",
+      ownerBotId: owner.botId ?? null,
+    },
+  });
+  if (owner.botId && selection?.mode === "explicit") {
+    await saveSkillSelection(prisma, { ...owner, botId: owner.botId }, [
+      ...selection.skillIds,
+      row.id,
+    ]);
   }
+  return {
+    ok: true,
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    hint: `Created skill. Mention /${row.name} so the user can open it.`,
+  };
 }
 
 async function skillUpdateFromToolInternal(
@@ -294,9 +352,34 @@ async function skillUpdateFromToolInternal(
     description?: string;
     body?: string;
     content?: string;
+    enabled?: boolean;
+    rollbackRevision?: number;
   },
   selection?: SkillSelection,
 ): Promise<Record<string, unknown>> {
+  if (input.enabled !== undefined) {
+    if (!owner.botId || !selection)
+      return { error: "A bot is required to change skill selection." };
+    if (
+      [input.newName, input.description, input.body, input.content, input.rollbackRevision].some(
+        (v) => v !== undefined,
+      )
+    )
+      return { error: "Change selection separately from content." };
+    const records = await listAgentSkillRecordsInternal(prisma, owner);
+    const target = input.skillId
+      ? records.find((s) => s.id === input.skillId)
+      : findSkillByName(records, input.name ?? "");
+    if (!target) return { error: "Skill not found." };
+    const ids =
+      selection.mode === "explicit"
+        ? new Set(selection.skillIds)
+        : new Set(records.map((s) => s.id));
+    if (input.enabled) ids.add(target.id);
+    else ids.delete(target.id);
+    await saveSkillSelection(prisma, owner as SkillOwner & { botId: string }, [...ids]);
+    return { ok: true, id: target.id, enabled: input.enabled };
+  }
   const existing = await findOwnedSkill(
     prisma,
     owner,
@@ -307,10 +390,40 @@ async function skillUpdateFromToolInternal(
     selection,
   );
   if (!existing) return { error: "Skill not found." };
+  if (owner.botId) {
+    const row = await prisma.agentSkill.findFirst({
+      where: { id: existing.id, ...availableInSpace(owner) },
+    });
+    if (!row || row.ownerBotId !== owner.botId)
+      return { error: "Shared skills are read-only. Create a private lesson instead." };
+  }
   if (existing.readOnly || existing.source !== "user" || existing.id.startsWith("builtin:")) {
     return { error: "Builtin and plugin skills are read-only." };
   }
 
+  const stored = await prisma.agentSkill.findFirst({
+    where: { id: existing.id, ...availableInSpace(owner) },
+  });
+  if (!stored) return { error: "Skill not found." };
+  const snapshots = Array.isArray(stored.history) ? stored.history : [];
+  if (input.rollbackRevision !== undefined) {
+    if (!Number.isSafeInteger(input.rollbackRevision) || input.rollbackRevision < 1)
+      return { error: "Invalid revision." };
+    const snapshot = snapshots.find(
+      (s) =>
+        s && typeof s === "object" && !Array.isArray(s) && s.revision === input.rollbackRevision,
+    );
+    if (
+      !snapshot ||
+      typeof snapshot !== "object" ||
+      Array.isArray(snapshot) ||
+      typeof snapshot.content !== "string"
+    )
+      return { error: "Revision not found." };
+    if ([input.newName, input.description, input.body, input.content].some((v) => v !== undefined))
+      return { error: "Rollback separately from editing." };
+    input = { ...input, content: snapshot.content };
+  }
   let nextContent = existing.content;
   let nextName = existing.name;
   let nextDescription = existing.description;
@@ -354,11 +467,16 @@ async function skillUpdateFromToolInternal(
   try {
     // Re-scope mutate to owner + user source so a stale id cannot cross tenants.
     const updated = await prisma.agentSkill.updateMany({
-      where: { id: existing.id, ...onlyInSpace(owner), source: "user" },
+      where: { id: existing.id, ...onlyInSpace(owner), source: "user", revision: stored.revision },
       data: {
         name: nextName,
         description: nextDescription,
         content: nextContent,
+        revision: (stored.revision ?? 1) + 1,
+        history: [
+          ...snapshots,
+          { revision: stored.revision ?? 1, content: existing.content },
+        ] as Prisma.InputJsonValue,
       },
     });
     if (updated.count !== 1) return { error: SHARED_SKILL_ERROR };
@@ -376,6 +494,13 @@ async function skillDeleteFromToolInternal(
 ): Promise<Record<string, unknown>> {
   const existing = await findOwnedSkill(prisma, owner, input, selection);
   if (!existing) return { error: "Skill not found." };
+  if (owner.botId) {
+    const row = await prisma.agentSkill.findFirst({
+      where: { id: existing.id, ...availableInSpace(owner) },
+    });
+    if (!row || row.ownerBotId !== owner.botId)
+      return { error: "Shared skills are read-only. Create a private lesson instead." };
+  }
   if (existing.readOnly || existing.source !== "user" || existing.id.startsWith("builtin:")) {
     return { error: "Builtin and plugin skills are read-only." };
   }
@@ -399,7 +524,14 @@ export async function listAgentSkillRecords(
 export async function skillReadFromTool(
   prisma: PrismaClient,
   owner: SkillOwner,
-  input: { name?: string; skillId?: string; file?: string },
+  input: {
+    name?: string;
+    skillId?: string;
+    file?: string;
+    discover?: boolean;
+    query?: string;
+    history?: boolean;
+  },
 ): Promise<Record<string, unknown>> {
   const result = await withSkillPolicy(prisma, owner, (tx, selection) =>
     skillReadFromToolInternal(tx, owner, input, selection),
@@ -412,10 +544,14 @@ export async function skillCreateFromTool(
   owner: SkillOwner,
   input: { name?: string; description?: string; body?: string; content?: string },
 ): Promise<Record<string, unknown>> {
-  const result = await withSkillPolicy(prisma, owner, (tx, selection) =>
-    skillCreateFromToolInternal(tx, owner, input, selection),
-  );
-  return result.ok ? result.value : { error: INVALID_PROFILE_ERROR };
+  try {
+    const result = await withSkillPolicy(prisma, owner, (tx, selection) =>
+      skillCreateFromToolInternal(tx, owner, input, selection),
+    );
+    return result.ok ? result.value : { error: INVALID_PROFILE_ERROR };
+  } catch {
+    return { error: "Could not create skill (name or selection may conflict)." };
+  }
 }
 
 export async function skillUpdateFromTool(

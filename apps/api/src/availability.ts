@@ -227,7 +227,7 @@ export async function setAvailability(
     // A plugin's own skills and connectors are placed through the plugin.
     const item: (Joined & { id: string }) | null =
       input.kind === "skill"
-        ? await tx.agentSkill.findFirst({ where: { ...visible, source: "user" } })
+        ? await tx.agentSkill.findFirst({ where: { ...visible, source: "user", ownerBotId: null } })
         : input.kind === "mcpServer"
           ? await tx.mcpServer.findFirst({ where: { ...visible, installId: null } })
           : await tx.capabilityInstall.findFirst({ where: visible });
@@ -244,7 +244,7 @@ async function ownItems(tx: Prisma.TransactionClient, actor: Actor): Promise<Own
     const include = { availableIn: AVAILABILITY_SELECT };
     const [skills, servers, installs] = await Promise.all([
       tx.agentSkill.findMany({
-        where: { userId: actor.userId, source: "user" },
+        where: { userId: actor.userId, source: "user", ownerBotId: null },
         include,
         orderBy: { name: "asc" },
       }),
