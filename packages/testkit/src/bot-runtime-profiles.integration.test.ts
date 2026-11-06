@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Bot } from "@rakazo/contracts";
@@ -118,6 +118,44 @@ describePostgres("bot runtime profiles (PostgreSQL)", () => {
       await invoke(() => skillUpdateFromTool(runtimeDb, scope, { ...lesson, rollbackRevision: 1 })),
     ).toHaveProperty("ok", true);
     const { createDb } = await import("@rakazo/db");
+    const maintenance = createDb(process.env.DATABASE_MIGRATION_URL!);
+    try {
+      // Exercise the exact operator scripts, including revision bodies and reference files.
+      await db.agentSkill.update({
+        where: { id: lesson.skillId },
+        data: { files: { "references/check.md": "reference" } },
+      });
+      await db.agentSkillSpace.create({ data: { skillId: lesson.skillId, ...tenant } });
+      const before = await db.agentSkill.findUniqueOrThrow({ where: { id: lesson.skillId } });
+      const sql = (file: string) => readFileSync(path.resolve("scripts", file), "utf8");
+      await maintenance.pool.query(sql("quarantine-private-skills.sql"));
+      // This is the old, ownership-unaware resolver's predicate.
+      expect(await db.agentSkill.findMany({ where: { ...tenant, id: lesson.skillId } })).toEqual(
+        [],
+      );
+      expect(
+        (
+          await maintenance.pool.query(
+            "SELECT count(*)::int AS n FROM skill_rollback.agent_skills WHERE id = $1",
+            [lesson.skillId],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+      // Runtime login must not be able to inspect the archive.
+      await expect(
+        runtimeDb.$queryRawUnsafe("SELECT * FROM skill_rollback.agent_skills"),
+      ).rejects.toThrow();
+      await maintenance.pool.query(sql("quarantine-private-skills.sql"));
+      await maintenance.pool.query(sql("restore-private-skills.sql"));
+      expect(await db.agentSkill.findUniqueOrThrow({ where: { id: lesson.skillId } })).toEqual(
+        before,
+      );
+      expect(await db.agentSkillSpace.count({ where: { skillId: lesson.skillId } })).toBe(1);
+      await maintenance.pool.query(sql("restore-private-skills.sql"));
+    } finally {
+      await maintenance.prisma.$disconnect();
+      await maintenance.pool.end();
+    }
     const reopened = createDb(process.env.DATABASE_URL!);
     try {
       expect(await invoke(() => skillReadFromTool(reopened.prisma, scope, lesson))).toHaveProperty(
