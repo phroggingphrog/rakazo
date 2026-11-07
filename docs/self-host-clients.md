@@ -27,6 +27,13 @@ then enter `http://<LAN-IP>:5173` in the app's **Use a custom server** field.
 This exposes plain-HTTP sign-in to everyone on the local network. Tailscale or an HTTPS
 reverse proxy is the safer option.
 
+The Android app permits plain HTTP only for hosts it can vouch for: `localhost`, the emulator's
+`10.0.2.2`, any `.local` name, and any address named by the `with-lan-cleartext` plugin's `hosts`
+option or `extra.lanCleartextHosts`. A store build therefore reaches a LAN server by its mDNS
+name, for example `http://myserver.local:5173`. Reaching a bare address such as
+`http://192.168.1.20:5173` needs a build that lists that address, because Android cannot express
+"any private address" as a cleartext rule.
+
 ## Mobile push notifications
 
 The API and worker send iOS and Android notifications through Expo's push service. If the Expo
