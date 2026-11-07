@@ -8,7 +8,7 @@ This is a planning-only change for upstream `elie222/rakazo` at `296fe50786197a6
 
 The product direction is a Rakazo fork with individually configurable persistent bots across web and mobile, Pi-backed profiles/extensions, governed learning and bounded initiative. Pots is a design reference. Hermes supplies learning/curation patterns. `oratis/LISA` supplies reflection and explicit goal/initiative patterns. Pi Pocket remains a separate application and deployment.
 
-The research reports at `/home/phroggingphrog/projects/pi-bot/architecture-comparison.md` and `/home/phroggingphrog/projects/pi-bot/research_notes/Rakazo Jev memory backend/` used an older Rakazo baseline. They are supporting analysis, not a compatibility certificate. The current source overrides stale claims, including the earlier claim that Rakazo lacked Jev support.
+The research reports at `~/projects/pi-bot/architecture-comparison.md` and `~/projects/pi-bot/research_notes/Rakazo Jev memory backend/` used an older Rakazo baseline. They are supporting analysis, not a compatibility certificate. The current source overrides stale claims, including the earlier claim that Rakazo lacked Jev support.
 
 ### Checked current source
 
