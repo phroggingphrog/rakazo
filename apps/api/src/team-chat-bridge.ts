@@ -8,7 +8,12 @@ import type {
 import { runContinueJob } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
 import { ATTACHMENT_MAX_COUNT, AutomatedSenderPoliciesSchema } from "@rakazo/contracts";
-import { botMessageMaxHops, messageBlockForArtifact, promptTextForAttachments } from "@rakazo/core";
+import {
+  botMessageMaxHops,
+  messageBlockForArtifact,
+  promptTextForAttachments,
+  sanitizeMessagingLabel,
+} from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import { clearEndedRunState } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
@@ -758,7 +763,7 @@ export class TeamChatBridge {
         index >= fileLimit ||
         (downloadDeadline !== undefined && Date.now() >= downloadDeadline)
       ) {
-        unavailable.push(`[file: ${attachment.name} (unavailable)]`);
+        unavailable.push(`[file: ${sanitizeMessagingLabel(attachment.name)} (unavailable)]`);
         continue;
       }
       try {
@@ -776,7 +781,7 @@ export class TeamChatBridge {
         getLogger().warn("team chat attachment was not stored", {
           reason: error instanceof Error ? error.message : String(error),
         });
-        unavailable.push(`[file: ${attachment.name} (unavailable)]`);
+        unavailable.push(`[file: ${sanitizeMessagingLabel(attachment.name)} (unavailable)]`);
       }
     }
     return { artifacts, unavailable };
