@@ -22,17 +22,25 @@ function permanentRedirect(location: string): Response {
   });
 }
 
+// A path of `//host` or `/\host` is protocol-relative, so `new URL(path, APEX_ORIGIN)` would
+// resolve it to a different origin. Assigning the path keeps the apex origin and only normalizes
+// the slash run.
+function apexUrl(pathname: string, search: string): URL {
+  const destination = new URL(APEX_ORIGIN);
+  destination.pathname = pathname.replace(/^[\\/]+/, "/");
+  destination.search = search;
+  return destination;
+}
+
 export default function middleware(request: Request): Response {
   const url = new URL(request.url);
 
   if (url.hostname.toLowerCase() === WWW_HOST) {
-    const destination = new URL(`${url.pathname}${url.search}`, APEX_ORIGIN);
-    return permanentRedirect(destination.toString());
+    return permanentRedirect(apexUrl(url.pathname, url.search).toString());
   }
 
   if (url.pathname === "/sitemap.xml") {
-    const destination = new URL(`/sitemap-index.xml${url.search}`, APEX_ORIGIN);
-    return permanentRedirect(destination.toString());
+    return permanentRedirect(apexUrl("/sitemap-index.xml", url.search).toString());
   }
 
   if (request.method !== "GET" && request.method !== "HEAD") return next();
