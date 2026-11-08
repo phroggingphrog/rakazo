@@ -26,6 +26,7 @@ export type RunWorkspace = {
   context: AdapterContext;
   runSecrets: string[];
   nativeHost?: boolean;
+  acceptsImages?: boolean;
 };
 
 const MAX_MODEL_FILE_BYTES = 250_000;
@@ -65,6 +66,41 @@ export async function readFileFromTool(
   const { botId, computerMode, computer, context, runSecrets } = workspace;
   const filePath = String(args.path ?? "");
   const storedPath = resolveBotWorkspacePath(computerMode, botId, filePath, workspace.nativeHost);
+  // File vision does not require a graphical desktop. Read through the same
+  // authenticated sandbox boundary as text; never publish private media URLs.
+  if (/\.(png|jpe?g|webp|gif|avif)$/i.test(filePath)) {
+    if (!workspace.acceptsImages)
+      return { error: "This bot's model cannot see; pick a vision-capable model.", path: filePath };
+    try {
+      const bytes = await sandbox.readFile(await computer(), storedPath, context, {
+        maxBytes: 20_000_000,
+      });
+      if (bytes.byteLength > 20_000_000) throw new Error("image exceeds 20000000 bytes");
+      const { default: sharp } = await import("sharp");
+      const image = await sharp(bytes, { limitInputPixels: 40_000_000, animated: false })
+        .rotate()
+        .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+      const details = {
+        path: filePath,
+        note: "Image pixels supplied to the model. Animated files show the first frame; inspect carousel slides separately and extract video frames with shell first.",
+      };
+      return {
+        kind: "agent_tool_result" as const,
+        content: [
+          { type: "text" as const, text: JSON.stringify(details) },
+          { type: "image" as const, mimeType: "image/jpeg", data: image.toString("base64") },
+        ],
+        details,
+      };
+    } catch (error) {
+      return {
+        error: redactSecrets(error instanceof Error ? error.message : String(error), runSecrets),
+        path: filePath,
+      };
+    }
+  }
   let bytes: Uint8Array;
   try {
     bytes = await sandbox.readFile(await computer(), storedPath, context, {

@@ -22,6 +22,7 @@ function runWorkspace(ctx: RunContext, call: ToolCall): RunWorkspace {
     context: ctx.context,
     runSecrets: ctx.secrets,
     nativeHost: ctx.computer.hostEnvironment?.nativeHost,
+    acceptsImages: ctx.computer.acceptsImages,
   };
 }
 

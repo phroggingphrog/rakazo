@@ -403,7 +403,7 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "read_file",
     description:
-      "Read a UTF-8 text file from this bot's home. On a Team Computer, relative paths use the bot folder and shared/... accesses shared work. Open visual or binary files with open_path instead.",
+      "Read a UTF-8 text file or visually inspect a local PNG/JPEG/WebP/GIF/AVIF image (requires a vision-capable model), including on headless native hosts. On a Team Computer, relative paths use the bot folder and shared/... accesses shared work. Inspect each carousel slide separately. For videos, use shell/ffmpeg to extract representative JPEG frames, then read_file each frame. Images are resized to 1600px; animated images show only the first frame. Never claim visual inspection from captions alone.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },
