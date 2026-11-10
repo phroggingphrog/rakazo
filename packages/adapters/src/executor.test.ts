@@ -20,6 +20,7 @@ import {
   modelAcceptsImageInput,
 } from "./model-vision.js";
 import { PRIVATE_MODEL_ENDPOINT_MESSAGE } from "./openai-compatible-url.js";
+import type { CodexCatalogModel } from "./pi-codex-catalog.js";
 import { RetiredModelCredentialError, serializeModelSecret } from "./pi-oauth.js";
 import { modelsForRequest, resolveRuntimeModel } from "./pi-runtime-models.js";
 import {
@@ -3825,14 +3826,16 @@ description: Prepare standup notes
           findUnique: vi.fn(async () => null),
         },
       } as unknown as PrismaClient;
-      const read = vi.fn(async () => [
-        {
-          slug: modelId,
-          reasoningEfforts: ["low"],
-          supportsImages,
-          supportsFastTier: false,
-        },
-      ]);
+      const read = vi.fn(
+        async (): Promise<CodexCatalogModel[] | undefined> => [
+          {
+            slug: modelId,
+            reasoningEfforts: ["low"],
+            supportsImages,
+            supportsFastTier: false,
+          },
+        ],
+      );
       const executor = createRunExecutor({
         prisma,
         secretStore: { load: vi.fn(() => plaintext), put: vi.fn() },
@@ -3843,6 +3846,35 @@ description: Prepare standup notes
         userId: "user-1",
         spaceId: "ws-1",
         botId: "bot-1",
+      });
+
+      // A temporary catalogue outage must not silently turn a live-only model
+      // into text-only (and make read_file falsely report that it cannot see).
+      const scope = { userId: "user-1", spaceId: "ws-1", botId: "bot-1" };
+      const unavailable = /image capabilities.*temporarily unavailable/i;
+      read.mockResolvedValueOnce(undefined);
+      await expect(executor.resolveModel(scope)).rejects.toThrow(unavailable);
+      read.mockRejectedValueOnce(new Error("catalog transport failed"));
+      await expect(executor.resolveModel(scope)).rejects.toThrow(unavailable);
+      read.mockResolvedValueOnce([]);
+      await expect(executor.resolveModel(scope)).rejects.toThrow(unavailable);
+      read.mockResolvedValueOnce([
+        { slug: modelId, reasoningEfforts: [], supportsFastTier: false },
+      ]);
+      await expect(executor.resolveModel(scope)).rejects.toThrow(unavailable);
+      // Missing dependency is also unknown, not evidence of a text-only model.
+      const withoutCatalog = createRunExecutor({
+        prisma,
+        secretStore: { load: vi.fn(() => plaintext), put: vi.fn() },
+      } as unknown as Parameters<typeof createRunExecutor>[0]);
+      await expect(withoutCatalog.resolveModel(scope)).rejects.toThrow(unavailable);
+      expect(
+        isTerminalModelSetupError(
+          new Error("Model image capabilities are temporarily unavailable"),
+        ),
+      ).toBe(false);
+      await expect(executor.resolveModel(scope)).resolves.toMatchObject({
+        acceptsImages: supportsImages,
       });
 
       expect(model).toMatchObject({ provider, id: modelId, acceptsImages: supportsImages });

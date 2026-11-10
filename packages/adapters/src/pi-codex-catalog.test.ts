@@ -364,6 +364,36 @@ describe("CodexCatalogCache", () => {
     );
   }
 
+  it("retains a live-only model's explicit vision answer during transient refresh failure", async () => {
+    let now = 1_000_000;
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        okResponse(
+          catalogPayload([
+            {
+              slug: "gpt-6.1-terra",
+              visibility: "list",
+              supported_in_api: true,
+              input_modalities: ["text", "image"],
+            },
+          ]),
+        ),
+      )
+      .mockRejectedValue(new Error("temporary transport failure"));
+    const cache = new CodexCatalogCache({ enabled: true, fetch: fetchImpl, now: () => now });
+    const first = await cache.read("user-1", account());
+    expect(first?.[0]).toMatchObject({ slug: "gpt-6.1-terra", supportsImages: true });
+    now += 16 * 60_000;
+    expect(await cache.read("user-1", account())).toEqual(first);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    expect(await cache.read("user-1", account())).toEqual(first);
+    // Evidence cannot be reused for a different account, or indefinitely.
+    expect(await cache.read("user-2", account())).toBeUndefined();
+    now += 4 * 60 * 60_000;
+    expect(await cache.read("user-1", account())).toBeUndefined();
+  });
+
   it("serves a fresh entry without refetching inside the TTL", async () => {
     let now = 1_000_000;
     const fetchImpl = listFetch();

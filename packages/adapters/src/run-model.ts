@@ -30,7 +30,7 @@ import {
   validateConnectedModelChoice,
   validateModelAuthAvailability,
 } from "./model-selection.js";
-import { modelIdSupportsImages } from "./model-vision.js";
+import { knownModelImageInput, modelIdSupportsImages } from "./model-vision.js";
 import { assertAllowedOpenAiCompatibleUrl } from "./openai-compatible-url.js";
 import { codexLiveModel } from "./pi-codex-catalog.js";
 import { toOAuthCredential } from "./pi-credentials.js";
@@ -282,6 +282,19 @@ async function resolveModelKeyMaterial(
         liveCodex = await codexLiveModel(deps.codexCatalog, userId, resolved.secret, modelId, {
           waitMs: CODEX_LIVE_RUN_WAIT_MS,
         });
+      }
+      // A live-only model has no static modality evidence. Do not launch it
+      // with guessed text-only capabilities during a catalogue outage: that
+      // would strip image tools and turn read_file into a false "cannot see".
+      // The account cache already serves bounded last-good answers; on a cold
+      // miss leave setup retryable rather than asserting support or non-support.
+      if (
+        provider === CHATGPT_OAUTH_PROVIDER &&
+        resolved.secret.kind === "oauth" &&
+        liveCodex?.supportsImages === undefined &&
+        knownModelImageInput(provider, modelId) === undefined
+      ) {
+        throw new Error("Model image capabilities are temporarily unavailable; retry this run.");
       }
       assertCompatibleModelEnabled(credential, resolved.secret, modelId);
       const oauth = resolved.secret.kind === "oauth" ? resolved.secret.credential : undefined;
